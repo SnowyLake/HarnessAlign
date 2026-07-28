@@ -1,0 +1,21 @@
+{
+  "name": "harness-config-synchro",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "hcs": "dist/src/hcs.js"
+  },
+  "engines": { "node": ">=24 <25" },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/tests/hcs.test.js",
+    "verify": "npm run typecheck && npm test"
+  },
+  "dependencies": { "yaml": "2.9.0" },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "smol-toml": "1.7.1",
+    "typescript": "7.0.2"
+  }
+}
