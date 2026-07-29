@@ -1,15 +1,15 @@
 {
-  "name": "harness-config-synchro",
+  "name": "harness-align",
   "private": true,
   "type": "module",
   "bin": {
-    "hcs": "dist/src/hcs.js"
+    "halign": "dist/src/halign.js"
   },
   "engines": { "node": ">=24 <25" },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/tests/hcs.test.js",
+    "test": "npm run build && node --test dist/tests/halign.test.js",
     "verify": "npm run typecheck && npm test"
   },
   "dependencies": { "yaml": "2.9.0" },

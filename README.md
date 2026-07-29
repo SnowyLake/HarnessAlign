@@ -1,4 +1,4 @@
-# Harness Config Synchro
+# Harness Align
 
 ## 目录
 
@@ -16,16 +16,16 @@
 
 ## 项目简介
 
-Harness Config Synchro 是一个使用 TypeScript 编写的本地 CLI. 它从统一的 `.hcs` 配置生成 Codex, Cursor 和 OpenCode 所需的 `AGENTS.md` 与 Subagent 文件, 并能检查生成结果或部署到当前用户的 Harness 配置目录.
+Harness Align 是一个使用 TypeScript 编写的本地 CLI. 它从统一的 `.halign` 配置生成 Codex, Cursor 和 OpenCode 所需的 `AGENTS.md` 与 Subagent 文件, 并能检查生成结果或部署到当前用户的 Harness 配置目录.
 
-CLI 命令名是 `hcs`. 工具成功时会输出简短摘要, 失败时返回非零退出码并给出错误原因.
+CLI 命令名是 `halign`. 工具成功时会输出简短摘要, 失败时返回非零退出码并给出错误原因.
 
 ## 工程与配置分离
 
 工具工程与用户配置目录相互独立:
 
 ```text
-D:\Workspace\AI\harness-config-synchro\
+D:\Workspace\AI\harness-align\
 ├─ src\
 ├─ tests\
 ├─ dist\
@@ -36,14 +36,14 @@ D:\Workspace\AI\harness-config-synchro\
 ├─ package-lock.json
 └─ tsconfig.json
 
-C:\Users\fengh\OneDrive\Configs\AI\HarnessConfigSynchro\
+C:\Users\fengh\OneDrive\Configs\AI\HarnessAlign\
 ├─ .agent-sessions\
-├─ .hcs\
+├─ .halign\
 ├─ generate.cmd
 └─ setup.cmd
 ```
 
-`hcs` 始终把执行命令时的当前工作目录作为配置根目录. 因此可以全局安装一份工具, 再从任意包含 `.hcs` 的目录调用它.
+`halign` 始终把执行命令时的当前工作目录作为配置根目录. 因此可以全局安装一份工具, 再从任意包含 `.halign` 的目录调用它.
 
 ## 环境要求
 
@@ -56,56 +56,56 @@ C:\Users\fengh\OneDrive\Configs\AI\HarnessConfigSynchro\
 首次安装或依赖变化后, 在工具工程目录执行:
 
 ```powershell
-cd D:\Workspace\AI\harness-config-synchro
+cd D:\Workspace\AI\harness-align
 npm ci
 npm run build
 npm link
 ```
 
-`npm ci` 根据 `package-lock.json` 安装本地依赖. `npm run build` 将 TypeScript 编译到 `dist/`. `npm link` 根据 `package.json` 的 `bin` 字段创建全局 `hcs` 命令, 但实际代码仍保留在本工具目录.
+`npm ci` 根据 `package-lock.json` 安装本地依赖. `npm run build` 将 TypeScript 编译到 `dist/`. `npm link` 根据 `package.json` 的 `bin` 字段创建全局 `halign` 命令, 但实际代码仍保留在本工具目录.
 
 验证全局命令:
 
 ```powershell
-hcs --help
+halign --help
 ```
 
 ## 使用方式
 
-进入包含 `.hcs` 的配置目录后执行:
+进入包含 `.halign` 的配置目录后执行:
 
 ```powershell
-cd C:\Users\fengh\OneDrive\Configs\AI\HarnessConfigSynchro
-hcs generate
-hcs check
-hcs setup
+cd C:\Users\fengh\OneDrive\Configs\AI\HarnessAlign
+halign generate
+halign check
+halign setup
 ```
 
 | 命令 | 功能 | 成功退出码 |
 | --- | --- | --- |
-| `hcs generate` | 验证配置并更新 `.hcs/generated/` | `0` |
-| `hcs check` | 检查生成目录是否与当前配置一致 | `0` |
-| `hcs setup` | 先生成, 再部署到当前用户已经启用的 Harness | `0` |
-| `hcs --help` | 显示命令用法 | `0` |
+| `halign generate` | 验证配置并更新 `.halign/generated/` | `0` |
+| `halign check` | 检查生成目录是否与当前配置一致 | `0` |
+| `halign setup` | 先生成, 再部署到当前用户已经启用的 Harness | `0` |
+| `halign --help` | 显示命令用法 | `0` |
 
 三个业务命令都支持选择 Profile:
 
 ```powershell
-hcs generate --profile kei
-hcs check --profile=kei
-hcs setup --profile kei
+halign generate --profile kei
+halign check --profile=kei
+halign setup --profile kei
 ```
 
 `check` 发现缺失, 修改或额外文件时会列出差异并返回 `1`. 无效命令或参数返回 `2`.
 
-配套配置目录中的 `generate.cmd` 和 `setup.cmd` 是便捷封装. 它们会切换到自身所在目录, 调用全局 `hcs`, 保留退出码, 并通过 `pause` 防止窗口执行后立即关闭.
+配套配置目录中的 `generate.cmd` 和 `setup.cmd` 是便捷封装. 它们会切换到自身所在目录, 调用全局 `halign`, 保留退出码, 并通过 `pause` 防止窗口执行后立即关闭.
 
 ## 配置目录
 
 一个配置目录的核心结构如下:
 
 ```text
-.hcs\
+.halign\
 ├─ config.json
 ├─ rules\
 │  └─ shared\
@@ -115,18 +115,18 @@ hcs setup --profile kei
 └─ generated\
 ```
 
-- `.hcs/config.json` 定义格式版本, 输出标题, 默认 Profile, 可用 Profile 和 Harness 列表.
-- `.hcs/rules/` 保存参与各 Harness `AGENTS.md` 的公共 Rule.
-- `.hcs/domains/<profile>/rules/` 保存 Profile 专属 Rule.
-- `.hcs/rules/shared/` 保存独立部署到 `%USERPROFILE%\.agents\shared-rules` 的共享规则.
-- `.hcs/agents/` 保存 Subagent 的共享正文与各 Harness 原生 metadata.
-- `.hcs/generated/` 保存生成结果和所有权 manifest, 不应手工编辑.
+- `.halign/config.json` 定义格式版本, 输出标题, 默认 Profile, 可用 Profile 和 Harness 列表.
+- `.halign/rules/` 保存参与各 Harness `AGENTS.md` 的公共 Rule.
+- `.halign/domains/<profile>/rules/` 保存 Profile 专属 Rule.
+- `.halign/rules/shared/` 保存独立部署到 `%USERPROFILE%\.agents\shared-rules` 的共享规则.
+- `.halign/agents/` 保存 Subagent 的共享正文与各 Harness 原生 metadata.
+- `.halign/generated/` 保存生成结果和所有权 manifest, 不应手工编辑.
 
 ## 运行原理
 
-1. npm 通过全局 shim 启动 `dist/src/hcs.js`.
+1. npm 通过全局 shim 启动 `dist/src/halign.js`.
 2. CLI 使用 `process.cwd()` 确定当前配置根目录.
-3. 读取并验证 `.hcs/config.json`, Rule frontmatter, Profile 和 Subagent metadata.
+3. 读取并验证 `.halign/config.json`, Rule frontmatter, Profile 和 Subagent metadata.
 4. 为 Codex, Cursor 和 OpenCode 构建确定性的内存输出.
 5. `generate` 在完整预检后原子写入变化文件, 清理 manifest 管理的过期文件, 最后提交新 manifest.
 6. `check` 重新构建期望输出并按字节比较实际生成目录.
@@ -136,10 +136,10 @@ hcs setup --profile kei
 
 ## 工程目录
 
-- `src/hcs.ts` 保存完整生产实现与面向 TypeScript 初学者的中文教学注释.
-- `tests/hcs.test.ts` 使用 Node 内置 `node:test`, 当前覆盖 6 个顶层测试场景.
-- `dist/src/hcs.js` 是全局 `hcs` 实际执行的编译结果.
-- `dist/tests/hcs.test.js` 是测试编译结果.
+- `src/halign.ts` 保存完整生产实现与面向 TypeScript 初学者的中文教学注释.
+- `tests/halign.test.ts` 使用 Node 内置 `node:test`, 当前覆盖 6 个顶层测试场景.
+- `dist/src/halign.js` 是全局 `halign` 实际执行的编译结果.
+- `dist/tests/halign.test.js` 是测试编译结果.
 - `node_modules/` 保存项目本地依赖.
 - `package.json` 定义 scripts, Node 版本, 依赖和全局命令入口.
 - `package-lock.json` 锁定完整依赖树.
@@ -172,7 +172,7 @@ npm test
 npm run verify
 ```
 
-`npm run verify` 依次执行类型检查和测试. `npm test` 会先编译 `src/` 与 `tests/`, 再运行 `dist/tests/hcs.test.js`.
+`npm run verify` 依次执行类型检查和测试. `npm test` 会先编译 `src/` 与 `tests/`, 再运行 `dist/tests/halign.test.js`.
 
 修改 `package.json` 的 `bin` 路径或移动 CLI 入口后, 必须重新执行:
 
@@ -180,7 +180,7 @@ npm run verify
 npm link
 ```
 
-然后从外部配置目录运行 `hcs generate` 和 `hcs check`, 确认全局 shim 指向最新编译结果.
+然后从外部配置目录运行 `halign generate` 和 `halign check`, 确认全局 shim 指向最新编译结果.
 
 ## 依赖说明
 
@@ -198,7 +198,7 @@ npm link
 
 ## 安全边界
 
-- 不要手工修改 `.hcs/generated/` 或 `dist/`.
+- 不要手工修改 `.halign/generated/` 或 `dist/`.
 - `generate` 只删除 manifest 明确管理的过期文件, 不删除未知文件.
 - `generate` 和 `setup` 会拒绝路径逃逸, symlink, junction 和其他 reparse point 风险.
 - `setup` 会修改真实用户配置. 日常开发测试必须使用临时 `USERPROFILE`, 不得直接覆盖真实配置.
