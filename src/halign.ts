@@ -33,9 +33,9 @@ const RULE_FIELDS = new Set(["priority", "targets"]);
 const AGENT_FIELDS = new Set(["name", "description", "harnesses"]);
 const AGENT_METADATA =
 {
-  codex: ["model", "model_reasoning_effort", "sandbox_mode", "web_search"],
-  cursor: ["model", "readonly"],
-  opencode: ["model", "variant", "mode", "permission"],
+    codex: ["model", "model_reasoning_effort", "sandbox_mode", "web_search"],
+    cursor: ["model", "readonly"],
+    opencode: ["model", "variant", "mode", "permission"],
 } as const;
 
 // `as const` 将数组元素保留为三个 literal, 而不是宽泛的 `string`. `typeof HARNESSES[number]` 因此得到封闭 union.
@@ -48,29 +48,29 @@ type Metadata = Record<string, unknown>;
 // interface 只描述编译期形状, 不生成构造函数或反射元数据. 这里的字段来自 `validateConfig()`, 不是 parser 自动保证的.
 export interface Config
 {
-  version: 1;
-  name: string;
-  defaultProfile: string;
-  profiles: string[];
-  harnesses: Harness[];
+    version: 1;
+    name: string;
+    defaultProfile: string;
+    profiles: string[];
+    harnesses: Harness[];
 }
 
 // 以下 interface/type alias 都是内部已验证数据. 它们把文件格式与 renderer 隔开, 让 renderer 不再处理 `unknown`.
 interface Rule
 {
-  path: string;
-  priority: number;
-  targets: Harness[];
-  body: string;
+    path: string;
+    priority: number;
+    targets: Harness[];
+    body: string;
 }
 
 interface Agent
 {
-  path: string;
-  name: string;
-  description: string;
-  harnesses: Partial<Record<Harness, Metadata>>;
-  body: string;
+    path: string;
+    name: string;
+    description: string;
+    harnesses: Partial<Record<Harness, Metadata>>;
+    body: string;
 }
 
 // `Map` 保留插入顺序且键不被隐式转换, 用于把稳定的输出顺序同时传递给写入和 manifest.
@@ -81,265 +81,265 @@ export type OutputMap = Map<string, Buffer>;
 // 未预期异常仍向上抛出, 避免把编程错误伪装成用户配置错误.
 export class HalignError extends Error
 {
-  constructor(message: string)
-  {
-    super(message);
-    this.name = "HalignError";
-  }
+    constructor(message: string)
+    {
+        super(message);
+        this.name = "HalignError";
+    }
 }
 
 // 在 strict TypeScript 中 catch 值是 `unknown`, 不能假定存在 `.message`. `instanceof Error` 是运行时 narrowing.
 // `async` 函数返回 `Promise<T>`. `throw` 会使 Promise rejected, `await` 会在调用点重新抛出, 因此本文件只在需要增加上下文时转换错误.
 function errorText(error: unknown): string
 {
-  return error instanceof Error ? error.message : String(error);
+    return error instanceof Error ? error.message : String(error);
 }
 
 function valueText(value: unknown): string
 {
-  try
-  {
-    return JSON.stringify(value) ?? String(value);
-  }
-  catch
-  {
-    return String(value);
-  }
+    try
+    {
+        return JSON.stringify(value) ?? String(value);
+    }
+    catch
+    {
+        return String(value);
+    }
 }
 
 function typeText(value: unknown): string
 {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
-  if (typeof value === "object") return "mapping";
-  if (typeof value === "boolean") return "boolean";
-  if (typeof value === "number" && Number.isInteger(value)) return "integer";
-  return typeof value;
+    if (value === null) return "null";
+    if (Array.isArray(value)) return "array";
+    if (typeof value === "object") return "mapping";
+    if (typeof value === "boolean") return "boolean";
+    if (typeof value === "number" && Number.isInteger(value)) return "integer";
+    return typeof value;
 }
 
 // type guard 的 `value is ...` 同时包含运行时检查和编译器提示. 调用者在 true 分支后才可以安全读取属性.
 // JavaScript 中 `typeof null === "object"`, array 也是 object. 所以只检查 typeof 不足以表达本项目接受的 JSON/YAML mapping.
 function isRecord(value: unknown): value is Record<string, unknown>
 {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function hasOwn(record: Record<string, unknown>, field: string): boolean
 {
-  return Object.prototype.hasOwnProperty.call(record, field);
+    return Object.prototype.hasOwnProperty.call(record, field);
 }
 
 function isHarness(value: string): value is Harness
 {
-  return (HARNESSES as readonly string[]).includes(value);
+    return (HARNESSES as readonly string[]).includes(value);
 }
 
 // JavaScript 默认 sort 会先把值转为 string, 再按 UTF-16 code unit 比较. 它既不是 locale-aware 规则, 也不能把 supplementary code point 当作单一比较单位.
 // `localeCompare()` 又会受机器 locale 与 ICU 数据影响. 这里显式按 Unicode code point 比较, 以换取跨 Node 环境可复现的输出和错误顺序.
 function codePointCompare(left: string, right: string): number
 {
-  const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? 0);
-  const rightPoints = Array.from(right, (character) => character.codePointAt(0) ?? 0);
-  const length = Math.min(leftPoints.length, rightPoints.length);
-  for (let index = 0; index < length; index += 1)
-  {
-    const difference = leftPoints[index]! - rightPoints[index]!;
-    if (difference !== 0) return difference;
-  }
-  return leftPoints.length - rightPoints.length;
+    const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? 0);
+    const rightPoints = Array.from(right, (character) => character.codePointAt(0) ?? 0);
+    const length = Math.min(leftPoints.length, rightPoints.length);
+    for (let index = 0; index < length; index += 1)
+    {
+        const difference = leftPoints[index]! - rightPoints[index]!;
+        if (difference !== 0) return difference;
+    }
+    return leftPoints.length - rightPoints.length;
 }
 
 function firstSorted(values: Iterable<string>): string
 {
-  return [...values].sort(codePointCompare)[0] ?? "";
+    return [...values].sort(codePointCompare)[0] ?? "";
 }
 
 // canonical bytes 从这里开始: 先统一 CRLF/CR 为 LF, 再保证恰好一个结尾换行. 这样不同编辑器的换行不会造成 `check()` 假阳性.
 function normalizedBody(body: string): string
 {
-  return `${body.replace(/\r\n?/gu, "\n").replace(/\n+$/u, "")}\n`;
+    return `${body.replace(/\r\n?/gu, "\n").replace(/\n+$/u, "")}\n`;
 }
 
 function display(root: string, path: string): string
 {
-  const pathRelative = relative(root, path);
-  return pathRelative && !pathRelative.startsWith(`..${sep}`) && pathRelative !== ".." && !isAbsolute(pathRelative)
-    ? pathRelative.split(sep).join("/")
-    : path;
+    const pathRelative = relative(root, path);
+    return pathRelative && !pathRelative.startsWith(`..${sep}`) && pathRelative !== ".." && !isAbsolute(pathRelative)
+        ? pathRelative.split(sep).join("/")
+        : path;
 }
 
 // 路径安全不能用 `path.startsWith(root)`: `C:\work2` 会错误地看似位于 `C:\work` 下.
 // `relative()` 之后检查 `..` 和绝对结果, 才是在 resolve 后验证真实路径组件的 containment 方式.
 function assertContained(root: string, path: string, label: string): void
 {
-  const pathRelative = relative(root, path);
-  if (pathRelative === ".." || pathRelative.startsWith(`..${sep}`) || isAbsolute(pathRelative))
-  {
-    throw new HalignError(`${label}: path must stay inside the project root`);
-  }
+    const pathRelative = relative(root, path);
+    if (pathRelative === ".." || pathRelative.startsWith(`..${sep}`) || isAbsolute(pathRelative))
+    {
+        throw new HalignError(`${label}: path must stay inside the project root`);
+    }
 }
 
 // `lstat` 读取链接本身而不是跟随链接后的目标. 对 Windows junction/reparse point 和 symbolic link 都必须在访问前看到这一层.
 // 只有 ENOENT 被建模为 `undefined`. 其他 I/O 错误继续 rejected, 防止权限错误被误当成不存在.
 async function lstatIfExists(path: string): Promise<Stats | undefined>
 {
-  try
-  {
-    return await fs.lstat(path);
-  }
-  catch (error)
-  {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
+    try
+    {
+        return await fs.lstat(path);
+    }
+    catch (error)
+    {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+    }
 }
 
 function reparseError(root: string, path: string, output: boolean): HalignError
 {
-  return new HalignError(
-    `${display(root, path)}: symbolic link ${output ? "outputs" : "sources"} are not allowed`,
-  );
+    return new HalignError(
+        `${display(root, path)}: symbolic link ${output ? "outputs" : "sources"} are not allowed`,
+    );
 }
 
 async function ensureRegularSource(root: string, path: string): Promise<void>
 {
-  assertContained(root, path, path);
-  const pathRelative = relative(root, path);
-  let current = root;
-  const rootStats = await lstatIfExists(current);
-  if (rootStats?.isSymbolicLink()) throw reparseError(root, current, false);
-  for (const part of pathRelative.split(sep).filter(Boolean))
-  {
-    current = join(current, part);
-    const stats = await lstatIfExists(current);
-    if (!stats) return;
-    if (stats.isSymbolicLink()) throw reparseError(root, current, false);
-  }
+    assertContained(root, path, path);
+    const pathRelative = relative(root, path);
+    let current = root;
+    const rootStats = await lstatIfExists(current);
+    if (rootStats?.isSymbolicLink()) throw reparseError(root, current, false);
+    for (const part of pathRelative.split(sep).filter(Boolean))
+    {
+        current = join(current, part);
+        const stats = await lstatIfExists(current);
+        if (!stats) return;
+        if (stats.isSymbolicLink()) throw reparseError(root, current, false);
+    }
 }
 
 async function readUtf8(root: string, path: string, context = display(root, path)): Promise<string>
 {
-  try
-  {
-    // Node 的普通 utf8 解码会替换坏字节. 生成输入不能悄悄改变内容, 因此必须用 fatal decoder 拒绝它们.
-    return new TextDecoder("utf-8", { fatal: true }).decode(await fs.readFile(path));
-  }
-  catch (error)
-  {
-    throw new HalignError(`${context}: expected UTF-8 text, got ${errorText(error)}`);
-  }
+    try
+    {
+        // Node 的普通 utf8 解码会替换坏字节. 生成输入不能悄悄改变内容, 因此必须用 fatal decoder 拒绝它们.
+        return new TextDecoder("utf-8", { fatal: true }).decode(await fs.readFile(path));
+    }
+    catch (error)
+    {
+        throw new HalignError(`${context}: expected UTF-8 text, got ${errorText(error)}`);
+    }
 }
 
 // ===== 2. 不可信源文件发现与解析 =====
 
 // 目录遍历每进入一层都重新检查 source 边界. `readdir` 只列举条目, 不代表随后读取时仍安全, 因而每个候选路径也要 lstat.
 async function markdownFiles(
-  root: string,
-  directory: string,
-  recursive: boolean,
-  excludedDirectories: readonly string[] = [],
+    root: string,
+    directory: string,
+    recursive: boolean,
+    excludedDirectories: readonly string[] = [],
 ): Promise<string[]>
 {
-  await ensureRegularSource(root, directory);
-  const directoryStats = await lstatIfExists(directory);
-  if (!directoryStats) return [];
-  if (!directoryStats.isDirectory())
-  {
-    throw new HalignError(`${display(root, directory)}: expected a directory`);
-  }
-
-  const excluded = new Set(excludedDirectories.map((path) => resolve(path)));
-  const files: string[] = [];
-
-  const visit = async (current: string): Promise<void> =>
-  {
-    await ensureRegularSource(root, current);
-    const entries = await fs.readdir(current, { withFileTypes: true });
-    entries.sort((left, right) => codePointCompare(left.name, right.name));
-    for (const entry of entries)
+    await ensureRegularSource(root, directory);
+    const directoryStats = await lstatIfExists(directory);
+    if (!directoryStats) return [];
+    if (!directoryStats.isDirectory())
     {
-      const path = join(current, entry.name);
-      if (excluded.has(resolve(path))) continue;
-      await ensureRegularSource(root, path);
-      const stats = await lstatIfExists(path);
-      if (!stats) continue;
-      if (stats.isSymbolicLink()) throw reparseError(root, path, false);
-      if (stats.isDirectory())
-      {
-        if (recursive) await visit(path);
-      }
-      else if (stats.isFile() && path.endsWith(".md"))
-      {
-        files.push(path);
-      }
+        throw new HalignError(`${display(root, directory)}: expected a directory`);
     }
-  };
 
-  if (recursive)
-  {
-    await visit(directory);
-  }
-  else
-  {
-    const entries = await fs.readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => codePointCompare(left.name, right.name));
-    for (const entry of entries)
+    const excluded = new Set(excludedDirectories.map((path) => resolve(path)));
+    const files: string[] = [];
+
+    const visit = async (current: string): Promise<void> =>
     {
-      const path = join(directory, entry.name);
-      await ensureRegularSource(root, path);
-      const stats = await lstatIfExists(path);
-      if (!stats) continue;
-      if (stats.isSymbolicLink()) throw reparseError(root, path, false);
-      if (stats.isFile() && path.endsWith(".md")) files.push(path);
+        await ensureRegularSource(root, current);
+        const entries = await fs.readdir(current, { withFileTypes: true });
+        entries.sort((left, right) => codePointCompare(left.name, right.name));
+        for (const entry of entries)
+        {
+            const path = join(current, entry.name);
+            if (excluded.has(resolve(path))) continue;
+            await ensureRegularSource(root, path);
+            const stats = await lstatIfExists(path);
+            if (!stats) continue;
+            if (stats.isSymbolicLink()) throw reparseError(root, path, false);
+            if (stats.isDirectory())
+            {
+                if (recursive) await visit(path);
+            }
+            else if (stats.isFile() && path.endsWith(".md"))
+            {
+                files.push(path);
+            }
+        }
+    };
+
+    if (recursive)
+    {
+        await visit(directory);
     }
-  }
-  return files;
+    else
+    {
+        const entries = await fs.readdir(directory, { withFileTypes: true });
+        entries.sort((left, right) => codePointCompare(left.name, right.name));
+        for (const entry of entries)
+        {
+            const path = join(directory, entry.name);
+            await ensureRegularSource(root, path);
+            const stats = await lstatIfExists(path);
+            if (!stats) continue;
+            if (stats.isSymbolicLink()) throw reparseError(root, path, false);
+            if (stats.isFile() && path.endsWith(".md")) files.push(path);
+        }
+    }
+    return files;
 }
 
 // frontmatter regex 只定位首个完整 YAML header. body 通过 `match[0].length` 切片而不是重新 join 行, 以保留正文中的空行与换行语义.
 async function parseFrontmatter(root: string, path: string): Promise<[Record<string, unknown>, string]>
 {
-  const text = await readUtf8(root, path);
-  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)(?:\r?\n)?/u.exec(text);
-  if (!match)
-  {
-    throw new HalignError(`${display(root, path)}: frontmatter must start with a YAML mapping`);
-  }
-  let metadata: unknown;
-  try
-  {
-    // YAML 库只能承诺返回 JavaScript 值, 不能承诺符合本项目 schema. 直接 `as Metadata` 只会欺骗编译器, 不会验证文件.
-    // 保持 `unknown` 到 `isRecord`, `hasOwn` 与字段级检查完成为止, 相当于 C# 反序列化后仍做显式 DTO 校验.
-    metadata = parseYaml(match[1] ?? "");
-  }
-  catch (error)
-  {
-    throw new HalignError(`${display(root, path)}: invalid YAML frontmatter: ${errorText(error)}`);
-  }
-  if (!isRecord(metadata))
-  {
-    throw new HalignError(`${display(root, path)}: frontmatter must be a mapping, got ${typeText(metadata)}`);
-  }
-  const body = text.slice(match[0].length);
-  if (!body.trim())
-  {
-    throw new HalignError(`${display(root, path)}: Markdown body must be non-empty, got ${valueText(body)}`);
-  }
-  return [metadata, body];
+    const text = await readUtf8(root, path);
+    const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)(?:\r?\n)?/u.exec(text);
+    if (!match)
+    {
+        throw new HalignError(`${display(root, path)}: frontmatter must start with a YAML mapping`);
+    }
+    let metadata: unknown;
+    try
+    {
+        // YAML 库只能承诺返回 JavaScript 值, 不能承诺符合本项目 schema. 直接 `as Metadata` 只会欺骗编译器, 不会验证文件.
+        // 保持 `unknown` 到 `isRecord`, `hasOwn` 与字段级检查完成为止, 相当于 C# 反序列化后仍做显式 DTO 校验.
+        metadata = parseYaml(match[1] ?? "");
+    }
+    catch (error)
+    {
+        throw new HalignError(`${display(root, path)}: invalid YAML frontmatter: ${errorText(error)}`);
+    }
+    if (!isRecord(metadata))
+    {
+        throw new HalignError(`${display(root, path)}: frontmatter must be a mapping, got ${typeText(metadata)}`);
+    }
+    const body = text.slice(match[0].length);
+    if (!body.trim())
+    {
+        throw new HalignError(`${display(root, path)}: Markdown body must be non-empty, got ${valueText(body)}`);
+    }
+    return [metadata, body];
 }
 
 // 这个小 validator 是 narrowing 边界. 返回 `string[]` 前已经证明元素类型和重复约束, 后续逻辑无需反复做同样的动态检查.
 function stringArray(value: unknown, path: string, field: string): string[]
 {
-  if (!Array.isArray(value) || value.length === 0 || !value.every((item) => typeof item === "string" && item.length > 0))
-  {
-    throw new HalignError(`${path}: ${field} must be a non-empty string array, got ${valueText(value)}`);
-  }
-  if (new Set(value).size !== value.length)
-  {
-    throw new HalignError(`${path}: ${field} must not contain duplicates, got ${valueText(value)}`);
-  }
-  return value;
+    if (!Array.isArray(value) || value.length === 0 || !value.every((item) => typeof item === "string" && item.length > 0))
+    {
+        throw new HalignError(`${path}: ${field} must be a non-empty string array, got ${valueText(value)}`);
+    }
+    if (new Set(value).size !== value.length)
+    {
+        throw new HalignError(`${path}: ${field} must not contain duplicates, got ${valueText(value)}`);
+    }
+    return value;
 }
 
 // ===== 3. Schema 验证与已验证领域对象 =====
@@ -348,208 +348,208 @@ function stringArray(value: unknown, path: string, field: string): string[]
 // 因此 `name` 用 `hasOwn` 判断是否提供, 再单独验证实际值, 而不是把外部对象直接展开为 Config.
 export function validateConfig(value: unknown): Config
 {
-  const path = ".halign/config.json";
-  if (!isRecord(value)) throw new HalignError(`${path}: expected a mapping`);
-  for (const field of ["version", "default_profile", "profiles", "harnesses"])
-  {
-    if (!hasOwn(value, field)) throw new HalignError(`${path}: ${field} is required`);
-  }
-  if (typeof value.version !== "number" || !Number.isInteger(value.version) || value.version !== 1)
-  {
-    throw new HalignError(`${path}: version must be integer 1, got ${valueText(value.version)}`);
-  }
-  if (typeof value.default_profile !== "string" || !value.default_profile)
-  {
-    throw new HalignError(`${path}: default_profile must be a non-empty string, got ${valueText(value.default_profile)}`);
-  }
-  const name = hasOwn(value, "name") ? value.name : "AGENTS";
-  if (typeof name !== "string" || !name.trim() || /[\r\n]/u.test(name))
-  {
-    throw new HalignError(`${path}: name must be a non-empty single-line string, got ${valueText(name)}`);
-  }
-  const profiles = stringArray(value.profiles, path, "profiles");
-  const rawHarnesses = stringArray(value.harnesses, path, "harnesses");
-  if (!profiles.includes(value.default_profile))
-  {
-    throw new HalignError(`${path}: default_profile must be included in profiles, got ${valueText(value.default_profile)}`);
-  }
-  const unsafeProfile = profiles.find((profile) => profile === "." || profile === ".." || /[\\/]/u.test(profile));
-  if (unsafeProfile !== undefined)
-  {
-    throw new HalignError(`${path}: profiles must contain single directory names, got ${valueText(unsafeProfile)}`);
-  }
-  const unsupported = rawHarnesses.find((harness) => !isHarness(harness));
-  if (unsupported !== undefined)
-  {
-    throw new HalignError(`${path}: harnesses may only contain codex, cursor, opencode, got ${valueText(unsupported)}`);
-  }
-  return { version: 1, name, defaultProfile: value.default_profile, profiles, harnesses: rawHarnesses as Harness[] };
+    const path = ".halign/config.json";
+    if (!isRecord(value)) throw new HalignError(`${path}: expected a mapping`);
+    for (const field of ["version", "default_profile", "profiles", "harnesses"])
+    {
+        if (!hasOwn(value, field)) throw new HalignError(`${path}: ${field} is required`);
+    }
+    if (typeof value.version !== "number" || !Number.isInteger(value.version) || value.version !== 1)
+    {
+        throw new HalignError(`${path}: version must be integer 1, got ${valueText(value.version)}`);
+    }
+    if (typeof value.default_profile !== "string" || !value.default_profile)
+    {
+        throw new HalignError(`${path}: default_profile must be a non-empty string, got ${valueText(value.default_profile)}`);
+    }
+    const name = hasOwn(value, "name") ? value.name : "AGENTS";
+    if (typeof name !== "string" || !name.trim() || /[\r\n]/u.test(name))
+    {
+        throw new HalignError(`${path}: name must be a non-empty single-line string, got ${valueText(name)}`);
+    }
+    const profiles = stringArray(value.profiles, path, "profiles");
+    const rawHarnesses = stringArray(value.harnesses, path, "harnesses");
+    if (!profiles.includes(value.default_profile))
+    {
+        throw new HalignError(`${path}: default_profile must be included in profiles, got ${valueText(value.default_profile)}`);
+    }
+    const unsafeProfile = profiles.find((profile) => profile === "." || profile === ".." || /[\\/]/u.test(profile));
+    if (unsafeProfile !== undefined)
+    {
+        throw new HalignError(`${path}: profiles must contain single directory names, got ${valueText(unsafeProfile)}`);
+    }
+    const unsupported = rawHarnesses.find((harness) => !isHarness(harness));
+    if (unsupported !== undefined)
+    {
+        throw new HalignError(`${path}: harnesses may only contain codex, cursor, opencode, got ${valueText(unsupported)}`);
+    }
+    return { version: 1, name, defaultProfile: value.default_profile, profiles, harnesses: rawHarnesses as Harness[] };
 }
 
 // JSON.parse 的静态返回类型在本质上是不可信数据. 即使标准库签名较宽松, 此处也立即放回 `unknown` 再走同一验证路径.
 export async function loadConfig(root: string): Promise<Config>
 {
-  const path = join(root, ".halign", "config.json");
-  await ensureRegularSource(root, path);
-  if (!(await lstatIfExists(path)))
-  {
-    throw new HalignError(".halign/config.json: file is required");
-  }
-  let parsed: unknown;
-  try
-  {
-    parsed = JSON.parse(await readUtf8(root, path, ".halign/config.json")) as unknown;
-  }
-  catch (error)
-  {
-    if (error instanceof HalignError) throw error;
-    throw new HalignError(`.halign/config.json: invalid JSON: ${errorText(error)}`);
-  }
-  return validateConfig(parsed);
+    const path = join(root, ".halign", "config.json");
+    await ensureRegularSource(root, path);
+    if (!(await lstatIfExists(path)))
+    {
+        throw new HalignError(".halign/config.json: file is required");
+    }
+    let parsed: unknown;
+    try
+    {
+        parsed = JSON.parse(await readUtf8(root, path, ".halign/config.json")) as unknown;
+    }
+    catch (error)
+    {
+        if (error instanceof HalignError) throw error;
+        throw new HalignError(`.halign/config.json: invalid JSON: ${errorText(error)}`);
+    }
+    return validateConfig(parsed);
 }
 
 // Rule/Agent 加载器完成从动态 mapping 到内部 interface 的最后一步. 之后 renderer 只接受已收窄的字段, 不和文件格式耦合.
 async function loadRules(root: string, profile: string, harnesses: Harness[]): Promise<Rule[]>
 {
-  const halign = join(root, ".halign");
-  const rulesDirectory = join(halign, "rules");
-  const paths = [
-    ...(await markdownFiles(root, rulesDirectory, true, [join(rulesDirectory, "shared")])),
-    ...(await markdownFiles(root, join(halign, "domains", profile, "rules"), true)),
-  ].sort((left, right) => codePointCompare(display(root, left), display(root, right)));
-  const folded = new Map<string, string>();
-  const rules: Rule[] = [];
+    const halign = join(root, ".halign");
+    const rulesDirectory = join(halign, "rules");
+    const paths = [
+        ...(await markdownFiles(root, rulesDirectory, true, [join(rulesDirectory, "shared")])),
+        ...(await markdownFiles(root, join(halign, "domains", profile, "rules"), true)),
+    ].sort((left, right) => codePointCompare(display(root, left), display(root, right)));
+    const folded = new Map<string, string>();
+    const rules: Rule[] = [];
 
-  for (const sourcePath of paths)
-  {
-    const path = display(root, sourcePath);
-    // JS 没有 Python casefold 的完整等价物. upper/lower 可覆盖当前名称约束和常见展开, 但不把它宣称为完整 Unicode 兼容层.
-    const foldedPath = path.toUpperCase().toLowerCase();
-    const existing = folded.get(foldedPath);
-    if (existing && existing !== path)
+    for (const sourcePath of paths)
     {
-      throw new HalignError(`${path}: path conflicts with ${existing}; paths may not differ only by case`);
+        const path = display(root, sourcePath);
+        // JS 没有 Python casefold 的完整等价物. upper/lower 可覆盖当前名称约束和常见展开, 但不把它宣称为完整 Unicode 兼容层.
+        const foldedPath = path.toUpperCase().toLowerCase();
+        const existing = folded.get(foldedPath);
+        if (existing && existing !== path)
+        {
+            throw new HalignError(`${path}: path conflicts with ${existing}; paths may not differ only by case`);
+        }
+        folded.set(foldedPath, path);
+        const [metadata, body] = await parseFrontmatter(root, sourcePath);
+        const unknown = Object.keys(metadata).filter((field) => !RULE_FIELDS.has(field));
+        if (unknown.length > 0) throw new HalignError(`${path}: unknown rule field ${valueText(firstSorted(unknown))}`);
+        if (!hasOwn(metadata, "priority")) throw new HalignError(`${path}: priority is required`);
+        const priority = metadata.priority;
+        if (typeof priority !== "number" || !Number.isInteger(priority) || priority < 0)
+        {
+            throw new HalignError(`${path}: priority must be a non-negative integer, got ${valueText(priority)}`);
+        }
+        let targets: Harness[];
+        if (!hasOwn(metadata, "targets"))
+        {
+            targets = [...harnesses];
+        }
+        else
+        {
+            const rawTargets = stringArray(metadata.targets, path, "targets");
+            const invalid = rawTargets.find((target) => !isHarness(target));
+            if (invalid !== undefined)
+            {
+                throw new HalignError(`${path}: targets may only contain codex, cursor, opencode, got ${valueText(invalid)}`);
+            }
+            targets = rawTargets as Harness[];
+        }
+        rules.push({ path, priority, targets, body: normalizedBody(body) });
     }
-    folded.set(foldedPath, path);
-    const [metadata, body] = await parseFrontmatter(root, sourcePath);
-    const unknown = Object.keys(metadata).filter((field) => !RULE_FIELDS.has(field));
-    if (unknown.length > 0) throw new HalignError(`${path}: unknown rule field ${valueText(firstSorted(unknown))}`);
-    if (!hasOwn(metadata, "priority")) throw new HalignError(`${path}: priority is required`);
-    const priority = metadata.priority;
-    if (typeof priority !== "number" || !Number.isInteger(priority) || priority < 0)
-    {
-      throw new HalignError(`${path}: priority must be a non-negative integer, got ${valueText(priority)}`);
-    }
-    let targets: Harness[];
-    if (!hasOwn(metadata, "targets"))
-    {
-      targets = [...harnesses];
-    }
-    else
-    {
-      const rawTargets = stringArray(metadata.targets, path, "targets");
-      const invalid = rawTargets.find((target) => !isHarness(target));
-      if (invalid !== undefined)
-      {
-        throw new HalignError(`${path}: targets may only contain codex, cursor, opencode, got ${valueText(invalid)}`);
-      }
-      targets = rawTargets as Harness[];
-    }
-    rules.push({ path, priority, targets, body: normalizedBody(body) });
-  }
-  return rules;
+    return rules;
 }
 
 function validateString(path: string, field: string, value: unknown): string
 {
-  if (typeof value !== "string" || !value.trim())
-  {
-    throw new HalignError(`${path}: ${field} must be a non-empty string, got ${valueText(value)}`);
-  }
-  return value;
+    if (typeof value !== "string" || !value.trim())
+    {
+        throw new HalignError(`${path}: ${field} must be a non-empty string, got ${valueText(value)}`);
+    }
+    return value;
 }
 
 async function loadAgents(root: string, configuredHarnesses: Harness[]): Promise<Agent[]>
 {
-  const paths = await markdownFiles(root, join(root, ".halign", "agents"), false);
-  const agents: Agent[] = [];
-  const names = new Map<string, string>();
-  for (const sourcePath of paths)
-  {
-    const path = display(root, sourcePath);
-    const [metadata, body] = await parseFrontmatter(root, sourcePath);
-    const unknown = Object.keys(metadata).filter((field) => !AGENT_FIELDS.has(field));
-    if (unknown.length > 0) throw new HalignError(`${path}: unknown agent field ${valueText(firstSorted(unknown))}`);
-    for (const field of AGENT_FIELDS)
+    const paths = await markdownFiles(root, join(root, ".halign", "agents"), false);
+    const agents: Agent[] = [];
+    const names = new Map<string, string>();
+    for (const sourcePath of paths)
     {
-      if (!hasOwn(metadata, field)) throw new HalignError(`${path}: ${field} is required`);
-    }
-    const name = validateString(path, "name", metadata.name);
-    if (!AGENT_NAME.test(name)) throw new HalignError(`${path}: name must match ${AGENT_NAME.source}, got ${valueText(name)}`);
-    const foldedName = name.toLowerCase();
-    if (names.has(foldedName))
-    {
-      throw new HalignError(`${path}: name must be unique without case sensitivity, got ${valueText(name)}`);
-    }
-    names.set(foldedName, name);
-    const description = validateString(path, "description", metadata.description);
-    if (!isRecord(metadata.harnesses))
-    {
-      throw new HalignError(`${path}: harnesses must be a mapping, got ${typeText(metadata.harnesses)}`);
-    }
-    const invalidHarness = Object.keys(metadata.harnesses).find((harness) => !isHarness(harness));
-    if (invalidHarness !== undefined)
-    {
-      throw new HalignError(`${path}: harnesses may only contain codex, cursor, opencode, got ${valueText(invalidHarness)}`);
-    }
-    // `Partial<Record<Harness, Metadata>>` 代表每个 Harness 键都可缺失. 这是静态表达, 运行时仍用 `Object.keys` 和 `if (!metadata)` 处理缺失值.
-    // 在 exactOptionalPropertyTypes 下, 不把缺失键与显式 `undefined` 混为一谈, 也不把未经验证的 metadata 直接赋入.
-    const rendered: Partial<Record<Harness, Metadata>> = {};
-    for (const [harnessName, rawValues] of Object.entries(metadata.harnesses))
-    {
-      const harness = harnessName as Harness;
-      if (!isRecord(rawValues))
-      {
-        throw new HalignError(`${path}: ${harness} metadata must be a mapping, got ${typeText(rawValues)}`);
-      }
-      const allowed = new Set<string>(AGENT_METADATA[harness]);
-      const invalidField = Object.keys(rawValues).filter((field) => !allowed.has(field));
-      if (invalidField.length > 0)
-      {
-        throw new HalignError(`${path}: unknown ${harness} field ${valueText(firstSorted(invalidField))}`);
-      }
-      for (const [field, value] of Object.entries(rawValues))
-      {
-        const qualified = `${harness}.${field}`;
-        if (harness === "cursor" && field === "readonly")
+        const path = display(root, sourcePath);
+        const [metadata, body] = await parseFrontmatter(root, sourcePath);
+        const unknown = Object.keys(metadata).filter((field) => !AGENT_FIELDS.has(field));
+        if (unknown.length > 0) throw new HalignError(`${path}: unknown agent field ${valueText(firstSorted(unknown))}`);
+        for (const field of AGENT_FIELDS)
         {
-          if (typeof value !== "boolean") throw new HalignError(`${path}: ${qualified} must be a boolean, got ${typeText(value)}`);
+            if (!hasOwn(metadata, field)) throw new HalignError(`${path}: ${field} is required`);
         }
-        else if (harness === "opencode" && field === "permission")
+        const name = validateString(path, "name", metadata.name);
+        if (!AGENT_NAME.test(name)) throw new HalignError(`${path}: name must match ${AGENT_NAME.source}, got ${valueText(name)}`);
+        const foldedName = name.toLowerCase();
+        if (names.has(foldedName))
         {
-          if (!isRecord(value)) throw new HalignError(`${path}: ${qualified} must be a mapping, got ${typeText(value)}`);
-          for (const [permission, mode] of Object.entries(value))
-          {
-            if (typeof mode !== "string" || !["allow", "ask", "deny"].includes(mode))
+            throw new HalignError(`${path}: name must be unique without case sensitivity, got ${valueText(name)}`);
+        }
+        names.set(foldedName, name);
+        const description = validateString(path, "description", metadata.description);
+        if (!isRecord(metadata.harnesses))
+        {
+            throw new HalignError(`${path}: harnesses must be a mapping, got ${typeText(metadata.harnesses)}`);
+        }
+        const invalidHarness = Object.keys(metadata.harnesses).find((harness) => !isHarness(harness));
+        if (invalidHarness !== undefined)
+        {
+            throw new HalignError(`${path}: harnesses may only contain codex, cursor, opencode, got ${valueText(invalidHarness)}`);
+        }
+        // `Partial<Record<Harness, Metadata>>` 代表每个 Harness 键都可缺失. 这是静态表达, 运行时仍用 `Object.keys` 和 `if (!metadata)` 处理缺失值.
+        // 在 exactOptionalPropertyTypes 下, 不把缺失键与显式 `undefined` 混为一谈, 也不把未经验证的 metadata 直接赋入.
+        const rendered: Partial<Record<Harness, Metadata>> = {};
+        for (const [harnessName, rawValues] of Object.entries(metadata.harnesses))
+        {
+            const harness = harnessName as Harness;
+            if (!isRecord(rawValues))
             {
-              throw new HalignError(`${path}: ${qualified}.${permission} must be allow, ask, or deny, got ${valueText(mode)}`);
+                throw new HalignError(`${path}: ${harness} metadata must be a mapping, got ${typeText(rawValues)}`);
             }
-          }
+            const allowed = new Set<string>(AGENT_METADATA[harness]);
+            const invalidField = Object.keys(rawValues).filter((field) => !allowed.has(field));
+            if (invalidField.length > 0)
+            {
+                throw new HalignError(`${path}: unknown ${harness} field ${valueText(firstSorted(invalidField))}`);
+            }
+            for (const [field, value] of Object.entries(rawValues))
+            {
+                const qualified = `${harness}.${field}`;
+                if (harness === "cursor" && field === "readonly")
+                {
+                    if (typeof value !== "boolean") throw new HalignError(`${path}: ${qualified} must be a boolean, got ${typeText(value)}`);
+                }
+                else if (harness === "opencode" && field === "permission")
+                {
+                    if (!isRecord(value)) throw new HalignError(`${path}: ${qualified} must be a mapping, got ${typeText(value)}`);
+                    for (const [permission, mode] of Object.entries(value))
+                    {
+                        if (typeof mode !== "string" || !["allow", "ask", "deny"].includes(mode))
+                        {
+                            throw new HalignError(`${path}: ${qualified}.${permission} must be allow, ask, or deny, got ${valueText(mode)}`);
+                        }
+                    }
+                }
+                else if (typeof value !== "string" || !value)
+                {
+                    throw new HalignError(`${path}: ${qualified} must be a non-empty string, got ${valueText(value)}`);
+                }
+            }
+            if (configuredHarnesses.includes(harness)) rendered[harness] = rawValues;
         }
-        else if (typeof value !== "string" || !value)
+        if (Object.keys(rendered).length === 0)
         {
-          throw new HalignError(`${path}: ${qualified} must be a non-empty string, got ${valueText(value)}`);
+            throw new HalignError(`${path}: at least one configured harness block is required`);
         }
-      }
-      if (configuredHarnesses.includes(harness)) rendered[harness] = rawValues;
+        agents.push({ path, name, description, harnesses: rendered, body: normalizedBody(body) });
     }
-    if (Object.keys(rendered).length === 0)
-    {
-      throw new HalignError(`${path}: at least one configured harness block is required`);
-    }
-    agents.push({ path, name, description, harnesses: rendered, body: normalizedBody(body) });
-  }
-  return agents;
+    return agents;
 }
 
 // ===== 4. Markdown 状态机与确定性渲染 =====
@@ -558,150 +558,150 @@ async function loadAgents(root: string, configuredHarnesses: Harness[]): Promise
 // 状态只保存 fence 字符和开 fence 最小长度. 关闭 fence 必须同字符且不短于开 fence, 这是 Markdown 的关键边界而非简单的行匹配.
 function fenceState(line: string, character: string, length: number): [string, number]
 {
-  const fence = FENCE.exec(line);
-  if (character)
-  {
-    if (fence && fence[1]?.[0] === character && fence[1].length >= length && !line.slice(fence[0].length).trim())
+    const fence = FENCE.exec(line);
+    if (character)
     {
-      return ["", 0];
+        if (fence && fence[1]?.[0] === character && fence[1].length >= length && !line.slice(fence[0].length).trim())
+        {
+            return ["", 0];
+        }
+        return [character, length];
     }
-    return [character, length];
-  }
-  if (fence) return [fence[1]?.[0] ?? "", fence[1]?.length ?? 0];
-  return ["", 0];
+    if (fence) return [fence[1]?.[0] ?? "", fence[1]?.length ?? 0];
+    return ["", 0];
 }
 
 export function downgradeMarkdownHeadings(body: string): string
 {
-  const lines: string[] = [];
-  let fenceCharacter = "";
-  let fenceLength = 0;
-  for (let line of body.split("\n"))
-  {
-    if (fenceCharacter)
+    const lines: string[] = [];
+    let fenceCharacter = "";
+    let fenceLength = 0;
+    for (let line of body.split("\n"))
     {
-      [fenceCharacter, fenceLength] = fenceState(line, fenceCharacter, fenceLength);
-      lines.push(line);
-      continue;
+        if (fenceCharacter)
+        {
+            [fenceCharacter, fenceLength] = fenceState(line, fenceCharacter, fenceLength);
+            lines.push(line);
+            continue;
+        }
+        const fence = FENCE.exec(line);
+        if (fence)
+        {
+            fenceCharacter = fence[1]?.[0] ?? "";
+            fenceLength = fence[1]?.length ?? 0;
+            lines.push(line);
+            continue;
+        }
+        const heading = ATX_HEADING.exec(line);
+        if (heading && heading[2]!.length < 6) line = `${line.slice(0, heading[1]!.length)}#${line.slice(heading[1]!.length)}`;
+        lines.push(line);
     }
-    const fence = FENCE.exec(line);
-    if (fence)
-    {
-      fenceCharacter = fence[1]?.[0] ?? "";
-      fenceLength = fence[1]?.length ?? 0;
-      lines.push(line);
-      continue;
-    }
-    const heading = ATX_HEADING.exec(line);
-    if (heading && heading[2]!.length < 6) line = `${line.slice(0, heading[1]!.length)}#${line.slice(heading[1]!.length)}`;
-    lines.push(line);
-  }
-  return lines.join("\n");
+    return lines.join("\n");
 }
 
 // Anchor 不调用平台 Markdown renderer. 固定的纯函数规则让同一标题在生成和测试中得到同样的链接目标.
 function markdownAnchor(title: string): string
 {
-  return title
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}_\s-]/gu, "")
-    .replace(/\s/gu, "-");
+    return title
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}_\s-]/gu, "")
+        .replace(/\s/gu, "-");
 }
 
 export function renderMarkdownToc(bodies: string[], name: string): string
 {
-  const anchors = new Set<string>();
-  const counts = new Map<string, number>();
-  const items: string[] = [];
-  const anchorFor = (title: string): string =>
-  {
-    const base = markdownAnchor(title);
-    let count = counts.get(base) ?? 0;
-    let anchor = count === 0 ? base : `${base}-${count}`;
-    while (anchors.has(anchor))
+    const anchors = new Set<string>();
+    const counts = new Map<string, number>();
+    const items: string[] = [];
+    const anchorFor = (title: string): string =>
     {
-      count += 1;
-      anchor = `${base}-${count}`;
-    }
-    counts.set(base, count + 1);
-    anchors.add(anchor);
-    return anchor;
-  };
-  anchorFor(name);
-  anchorFor("目录");
-  for (const body of bodies)
-  {
-    let fenceCharacter = "";
-    let fenceLength = 0;
-    for (const line of body.split("\n"))
+        const base = markdownAnchor(title);
+        let count = counts.get(base) ?? 0;
+        let anchor = count === 0 ? base : `${base}-${count}`;
+        while (anchors.has(anchor))
+        {
+            count += 1;
+            anchor = `${base}-${count}`;
+        }
+        counts.set(base, count + 1);
+        anchors.add(anchor);
+        return anchor;
+    };
+    anchorFor(name);
+    anchorFor("目录");
+    for (const body of bodies)
     {
-      if (fenceCharacter)
-      {
-        [fenceCharacter, fenceLength] = fenceState(line, fenceCharacter, fenceLength);
-        continue;
-      }
-      const fence = FENCE.exec(line);
-      if (fence)
-      {
-        fenceCharacter = fence[1]?.[0] ?? "";
-        fenceLength = fence[1]?.length ?? 0;
-        continue;
-      }
-      const heading = ATX_HEADING.exec(line);
-      if (!heading) continue;
-      const title = line.slice(heading[0].length).trim().replace(/[ \t]+#+[ \t]*$/u, "");
-      if (!title) continue;
-      const anchor = anchorFor(title);
-      if (heading[2]!.length === 2) items.push(`- [${title}](#${anchor})`);
+        let fenceCharacter = "";
+        let fenceLength = 0;
+        for (const line of body.split("\n"))
+        {
+            if (fenceCharacter)
+            {
+                [fenceCharacter, fenceLength] = fenceState(line, fenceCharacter, fenceLength);
+                continue;
+            }
+            const fence = FENCE.exec(line);
+            if (fence)
+            {
+                fenceCharacter = fence[1]?.[0] ?? "";
+                fenceLength = fence[1]?.length ?? 0;
+                continue;
+            }
+            const heading = ATX_HEADING.exec(line);
+            if (!heading) continue;
+            const title = line.slice(heading[0].length).trim().replace(/[ \t]+#+[ \t]*$/u, "");
+            if (!title) continue;
+            const anchor = anchorFor(title);
+            if (heading[2]!.length === 2) items.push(`- [${title}](#${anchor})`);
+        }
     }
-  }
-  return `## 目录\n\n${items.join("\n")}`;
+    return `## 目录\n\n${items.join("\n")}`;
 }
 
 // renderer 只消费已验证 Rule. sort 后再 filter 的顺序是输出契约的一部分, 不能依赖文件系统枚举顺序.
 // 返回 Buffer 而非 string, 使后续 generate/check 比较的是最终字节而不是某次隐式 UTF-8 转换的文本.
 function renderAgentsMarkdown(rules: Rule[], harness: Harness, name: string): Buffer
 {
-  const bodies = rules
-    .slice()
-    .sort((left, right) => left.priority - right.priority || codePointCompare(left.path, right.path))
-    .filter((rule) => rule.targets.includes(harness))
-    .map((rule) => downgradeMarkdownHeadings(rule.body.replace(/\n+$/u, "")));
-  let content = `${MARKER}\n\n# ${name}\n\n${renderMarkdownToc(bodies, name)}`;
-  if (bodies.length > 0) content += `\n\n${bodies.join("\n\n")}`;
-  return Buffer.from(`${content}\n`, "utf8");
+    const bodies = rules
+        .slice()
+        .sort((left, right) => left.priority - right.priority || codePointCompare(left.path, right.path))
+        .filter((rule) => rule.targets.includes(harness))
+        .map((rule) => downgradeMarkdownHeadings(rule.body.replace(/\n+$/u, "")));
+    let content = `${MARKER}\n\n# ${name}\n\n${renderMarkdownToc(bodies, name)}`;
+    if (bodies.length > 0) content += `\n\n${bodies.join("\n\n")}`;
+    return Buffer.from(`${content}\n`, "utf8");
 }
 
 function jsonString(value: unknown): string
 {
-  return JSON.stringify(value);
+    return JSON.stringify(value);
 }
 
 // TOML 字段顺序由显式插入顺序决定: 公共字段在前, 再按固定 `AGENT_METADATA.codex` 追加允许字段.
 // JavaScript 对非整数属性保留插入顺序, 但这里仍显式列出顺序, 避免把用户 YAML 的键枚举顺序当作输出契约.
 function renderCodexAgent(agent: Agent, metadata: Metadata): Buffer
 {
-  const fields: Metadata = { name: agent.name, description: agent.description };
-  for (const field of AGENT_METADATA.codex)
-  {
-    if (hasOwn(metadata, field)) fields[field] = metadata[field];
-  }
-  const body = agent.body.split("\n").map((line) => jsonString(line).slice(1, -1)).join("\n");
-  let content = "";
-  for (const [field, value] of Object.entries(fields)) content += `${field} = ${jsonString(value)}\n`;
-  return Buffer.from(`${content}developer_instructions = """\n${body}"""\n`, "utf8");
+    const fields: Metadata = { name: agent.name, description: agent.description };
+    for (const field of AGENT_METADATA.codex)
+    {
+        if (hasOwn(metadata, field)) fields[field] = metadata[field];
+    }
+    const body = agent.body.split("\n").map((line) => jsonString(line).slice(1, -1)).join("\n");
+    let content = "";
+    for (const [field, value] of Object.entries(fields)) content += `${field} = ${jsonString(value)}\n`;
+    return Buffer.from(`${content}developer_instructions = """\n${body}"""\n`, "utf8");
 }
 
 // YAML serializer 也不能自由排序. 先构建 `ordered`, 再使用 `sortMapEntries: false`, 才能把 Harness 原生字段的固定顺序写成 canonical bytes.
 function renderYamlAgent(agent: Agent, harness: Exclude<Harness, "codex">, metadata: Metadata): Buffer
 {
-  const order = harness === "cursor"
-    ? ["name", "description", "model", "readonly"]
-    : ["name", "description", "mode", "model", "variant", "permission"];
-  const values: Metadata = { name: agent.name, description: agent.description, ...metadata };
-  const ordered: Metadata = {};
-  for (const field of order) if (hasOwn(values, field)) ordered[field] = values[field];
-  return Buffer.from(`---\n${stringifyYaml(ordered, { lineWidth: 0, sortMapEntries: false })}---\n\n${agent.body}`, "utf8");
+    const order = harness === "cursor"
+        ? ["name", "description", "model", "readonly"]
+        : ["name", "description", "mode", "model", "variant", "permission"];
+    const values: Metadata = { name: agent.name, description: agent.description, ...metadata };
+    const ordered: Metadata = {};
+    for (const field of order) if (hasOwn(values, field)) ordered[field] = values[field];
+    return Buffer.from(`---\n${stringifyYaml(ordered, { lineWidth: 0, sortMapEntries: false })}---\n\n${agent.body}`, "utf8");
 }
 
 // ===== 5. Canonical 输出, manifest 与生成生命周期 =====
@@ -710,192 +710,192 @@ function renderYamlAgent(agent: Agent, harness: Exclude<Harness, "codex">, metad
 // 这类似先完成编译单元再进入写入阶段. 因此无效输入会在任何输出变更前失败, 同一 Map 也成为 manifest 文件顺序的唯一来源.
 export async function buildOutputs(rootPath: string, profile?: string): Promise<OutputMap>
 {
-  const root = resolve(rootPath);
-  const config = await loadConfig(root);
-  const selected = profile || config.defaultProfile;
-  if (!config.profiles.includes(selected))
-  {
-    throw new HalignError(`.halign/config.json: profile must be configured, got ${valueText(selected)}`);
-  }
-  const rules = await loadRules(root, selected, config.harnesses);
-  const agents = await loadAgents(root, config.harnesses);
-  const outputs: OutputMap = new Map();
-  for (const harness of config.harnesses)
-  {
-    outputs.set(`${harness}/AGENTS.md`, renderAgentsMarkdown(rules, harness, config.name));
-    for (const agent of agents.slice().sort((left, right) => codePointCompare(left.name, right.name)))
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const selected = profile || config.defaultProfile;
+    if (!config.profiles.includes(selected))
     {
-      const metadata = agent.harnesses[harness];
-      if (!metadata) continue;
-      const extension = harness === "codex" ? "toml" : "md";
-      const destination = `${harness}/agents/${agent.name}.${extension}`;
-      outputs.set(destination, harness === "codex"
-        ? renderCodexAgent(agent, metadata)
-        : renderYamlAgent(agent, harness, metadata));
+        throw new HalignError(`.halign/config.json: profile must be configured, got ${valueText(selected)}`);
     }
-  }
-  const files = [...outputs.keys()];
-  outputs.set(
-    ".manifest.json",
-    Buffer.from(`${JSON.stringify({ version: 1, profile: selected, files }, null, 2)}\n`, "utf8"),
-  );
-  return outputs;
+    const rules = await loadRules(root, selected, config.harnesses);
+    const agents = await loadAgents(root, config.harnesses);
+    const outputs: OutputMap = new Map();
+    for (const harness of config.harnesses)
+    {
+        outputs.set(`${harness}/AGENTS.md`, renderAgentsMarkdown(rules, harness, config.name));
+        for (const agent of agents.slice().sort((left, right) => codePointCompare(left.name, right.name)))
+        {
+            const metadata = agent.harnesses[harness];
+            if (!metadata) continue;
+            const extension = harness === "codex" ? "toml" : "md";
+            const destination = `${harness}/agents/${agent.name}.${extension}`;
+            outputs.set(destination, harness === "codex"
+                ? renderCodexAgent(agent, metadata)
+                : renderYamlAgent(agent, harness, metadata));
+        }
+    }
+    const files = [...outputs.keys()];
+    outputs.set(
+        ".manifest.json",
+        Buffer.from(`${JSON.stringify({ version: 1, profile: selected, files }, null, 2)}\n`, "utf8"),
+    );
+    return outputs;
 }
 
 // generated 根目录本身也必须拒绝链接. 仅检查最终文件不足以阻止 `.halign/generated` 被 junction 引到项目外.
 async function outputRoot(root: string): Promise<string>
 {
-  const path = join(root, ".halign", "generated");
-  const stats = await lstatIfExists(path);
-  if (stats?.isSymbolicLink()) throw new HalignError(".halign/generated: symbolic link output directories are not allowed");
-  if (stats && !stats.isDirectory()) throw new HalignError(".halign/generated: expected a directory");
-  return path;
+    const path = join(root, ".halign", "generated");
+    const stats = await lstatIfExists(path);
+    if (stats?.isSymbolicLink()) throw new HalignError(".halign/generated: symbolic link output directories are not allowed");
+    if (stats && !stats.isDirectory()) throw new HalignError(".halign/generated: expected a directory");
+    return path;
 }
 
 // manifest 路径来自磁盘, 所以即使 TypeScript 标注返回 string 也必须先处理 `unknown`. 这个函数只认可项目定义的 POSIX 相对片段.
 export function safeOutputRelative(value: unknown): string
 {
-  if (typeof value !== "string" || !value || value.includes("\\") || posix.isAbsolute(value) || /^[A-Za-z]:/u.test(value))
-  {
-    throw new HalignError(`.halign/generated/.manifest.json: invalid managed path ${valueText(value)}`);
-  }
-  const parts = value.split("/");
-  if (parts.includes(".") || parts.includes(".."))
-  {
-    throw new HalignError(`.halign/generated/.manifest.json: invalid managed path ${valueText(value)}`);
-  }
-  return value;
+    if (typeof value !== "string" || !value || value.includes("\\") || posix.isAbsolute(value) || /^[A-Za-z]:/u.test(value))
+    {
+        throw new HalignError(`.halign/generated/.manifest.json: invalid managed path ${valueText(value)}`);
+    }
+    const parts = value.split("/");
+    if (parts.includes(".") || parts.includes(".."))
+    {
+        throw new HalignError(`.halign/generated/.manifest.json: invalid managed path ${valueText(value)}`);
+    }
+    return value;
 }
 
 // manifest 使用 POSIX `/` 片段, 所以先拒绝 Windows `\\`, drive 与 `.`/`..`, 再在本机路径上 resolve.
 // 字符串前缀既挡不住 `../`, 也挡不住 Windows reparse point. 对每个既有 ancestor 做 lstat 才能同时保证 containment 与真实目录类型.
 async function destination(root: string, outputRelative: string): Promise<string>
 {
-  safeOutputRelative(outputRelative);
-  const generated = await outputRoot(root);
-  const parts = outputRelative.split("/");
-  const path = resolve(generated, ...parts);
-  assertContained(generated, path, ".halign/generated");
-  let current = generated;
-  for (const part of parts.slice(0, -1))
-  {
-    current = join(current, part);
-    const stats = await lstatIfExists(current);
-    if (stats?.isSymbolicLink()) throw reparseError(root, current, true);
-    if (stats && !stats.isDirectory()) throw new HalignError(`${display(root, current)}: expected an output directory`);
-  }
-  const stats = await lstatIfExists(path);
-  if (stats?.isSymbolicLink()) throw reparseError(root, path, true);
-  if (stats && !stats.isFile()) throw new HalignError(`${display(root, path)}: managed output must be a file`);
-  return path;
+    safeOutputRelative(outputRelative);
+    const generated = await outputRoot(root);
+    const parts = outputRelative.split("/");
+    const path = resolve(generated, ...parts);
+    assertContained(generated, path, ".halign/generated");
+    let current = generated;
+    for (const part of parts.slice(0, -1))
+    {
+        current = join(current, part);
+        const stats = await lstatIfExists(current);
+        if (stats?.isSymbolicLink()) throw reparseError(root, current, true);
+        if (stats && !stats.isDirectory()) throw new HalignError(`${display(root, current)}: expected an output directory`);
+    }
+    const stats = await lstatIfExists(path);
+    if (stats?.isSymbolicLink()) throw reparseError(root, path, true);
+    if (stats && !stats.isFile()) throw new HalignError(`${display(root, path)}: managed output must be a file`);
+    return path;
 }
 
 // manifest 是上一次成功生成声明的所有权清单, 不是用户可以自由编辑的删除列表. 先完整验证再返回 stale 候选, 防止恶意路径扩大删除范围.
 async function loadManifest(root: string): Promise<string[]>
 {
-  const generated = await outputRoot(root);
-  const path = join(generated, ".manifest.json");
-  const stats = await lstatIfExists(path);
-  if (!stats) return [];
-  if (stats.isSymbolicLink()) throw new HalignError(".halign/generated/.manifest.json: symbolic link outputs are not allowed");
-  if (!stats.isFile()) throw new HalignError(".halign/generated/.manifest.json: managed output must be a file");
-  let manifest: unknown;
-  try
-  {
-    manifest = JSON.parse(await readUtf8(root, path, ".halign/generated/.manifest.json")) as unknown;
-  }
-  catch (error)
-  {
-    if (error instanceof HalignError) throw error;
-    throw new HalignError(`.halign/generated/.manifest.json: invalid manifest: ${errorText(error)}`);
-  }
-  if (!isRecord(manifest) || typeof manifest.version !== "number" || !Number.isInteger(manifest.version) || manifest.version !== 1)
-  {
-    throw new HalignError(".halign/generated/.manifest.json: version must be integer 1");
-  }
-  if (!Array.isArray(manifest.files) || !manifest.files.every((file) => typeof file === "string"))
-  {
-    throw new HalignError(".halign/generated/.manifest.json: files must be a string array");
-  }
-  if (new Set(manifest.files).size !== manifest.files.length)
-  {
-    throw new HalignError(".halign/generated/.manifest.json: files must not contain duplicates");
-  }
-  if (manifest.files.includes(".manifest.json"))
-  {
-    throw new HalignError(".halign/generated/.manifest.json: files must not manage the manifest itself");
-  }
-  return manifest.files.map((file) => safeOutputRelative(file));
+    const generated = await outputRoot(root);
+    const path = join(generated, ".manifest.json");
+    const stats = await lstatIfExists(path);
+    if (!stats) return [];
+    if (stats.isSymbolicLink()) throw new HalignError(".halign/generated/.manifest.json: symbolic link outputs are not allowed");
+    if (!stats.isFile()) throw new HalignError(".halign/generated/.manifest.json: managed output must be a file");
+    let manifest: unknown;
+    try
+    {
+        manifest = JSON.parse(await readUtf8(root, path, ".halign/generated/.manifest.json")) as unknown;
+    }
+    catch (error)
+    {
+        if (error instanceof HalignError) throw error;
+        throw new HalignError(`.halign/generated/.manifest.json: invalid manifest: ${errorText(error)}`);
+    }
+    if (!isRecord(manifest) || typeof manifest.version !== "number" || !Number.isInteger(manifest.version) || manifest.version !== 1)
+    {
+        throw new HalignError(".halign/generated/.manifest.json: version must be integer 1");
+    }
+    if (!Array.isArray(manifest.files) || !manifest.files.every((file) => typeof file === "string"))
+    {
+        throw new HalignError(".halign/generated/.manifest.json: files must be a string array");
+    }
+    if (new Set(manifest.files).size !== manifest.files.length)
+    {
+        throw new HalignError(".halign/generated/.manifest.json: files must not contain duplicates");
+    }
+    if (manifest.files.includes(".manifest.json"))
+    {
+        throw new HalignError(".halign/generated/.manifest.json: files must not manage the manifest itself");
+    }
+    return manifest.files.map((file) => safeOutputRelative(file));
 }
 
 async function preflightOutputChanges(root: string, expected: OutputMap): Promise<string[]>
 {
-  const oldFiles = await loadManifest(root);
-  const currentFiles = new Set([...expected.keys()].filter((path) => path !== ".manifest.json"));
-  const stale = oldFiles.filter((path) => !currentFiles.has(path));
-  // 写入前先收集并验证全部 destination 与 stale path. 否则后面的目录冲突会让前面的输出已经更新, 破坏输入失败不写入的边界.
-  // 这不是整个目录事务, 但把可预见的类型冲突和路径错误移到第一个写入之前.
-  for (const path of expected.keys()) await destination(root, path);
-  const stalePaths: string[] = [];
-  for (const path of stale) stalePaths.push(await destination(root, path));
-  return stalePaths;
+    const oldFiles = await loadManifest(root);
+    const currentFiles = new Set([...expected.keys()].filter((path) => path !== ".manifest.json"));
+    const stale = oldFiles.filter((path) => !currentFiles.has(path));
+    // 写入前先收集并验证全部 destination 与 stale path. 否则后面的目录冲突会让前面的输出已经更新, 破坏输入失败不写入的边界.
+    // 这不是整个目录事务, 但把可预见的类型冲突和路径错误移到第一个写入之前.
+    for (const path of expected.keys()) await destination(root, path);
+    const stalePaths: string[] = [];
+    for (const path of stale) stalePaths.push(await destination(root, path));
+    return stalePaths;
 }
 
 export async function atomicWrite(
-  path: string,
-  content: Buffer,
-  replace: (oldPath: string, newPath: string) => Promise<void> = fs.rename,
+    path: string,
+    content: Buffer,
+    replace: (oldPath: string, newPath: string) => Promise<void> = fs.rename,
 ): Promise<void>
 {
-  const existing = await lstatIfExists(path);
-  if (existing?.isFile() && (await fs.readFile(path)).equals(content)) return;
-  const parent = dirname(path);
-  await fs.mkdir(parent, { recursive: true });
-  const temporary = join(parent, `.halign-${randomUUID()}.tmp`);
-  try
-  {
-    // 临时文件必须和目标位于同一目录, 才能让 rename 保持单文件 replace 语义. 跨目录 move 可能退化为 copy/delete.
-    // 这里不承诺整个 generated tree 是事务. 逐文件原子替换与批次全局原子是不同保证, 也绝不先删除旧文件来伪造 replace.
-    const handle = await fs.open(temporary, "wx", 0o600);
+    const existing = await lstatIfExists(path);
+    if (existing?.isFile() && (await fs.readFile(path)).equals(content)) return;
+    const parent = dirname(path);
+    await fs.mkdir(parent, { recursive: true });
+    const temporary = join(parent, `.halign-${randomUUID()}.tmp`);
     try
     {
-      await handle.writeFile(content);
+        // 临时文件必须和目标位于同一目录, 才能让 rename 保持单文件 replace 语义. 跨目录 move 可能退化为 copy/delete.
+        // 这里不承诺整个 generated tree 是事务. 逐文件原子替换与批次全局原子是不同保证, 也绝不先删除旧文件来伪造 replace.
+        const handle = await fs.open(temporary, "wx", 0o600);
+        try
+        {
+            await handle.writeFile(content);
+        }
+        finally
+        {
+            await handle.close();
+        }
+        await replace(temporary, path);
     }
     finally
     {
-      await handle.close();
+        await fs.unlink(temporary).catch((error: unknown) =>
+        {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        });
     }
-    await replace(temporary, path);
-  }
-  finally
-  {
-    await fs.unlink(temporary).catch((error: unknown) =>
-    {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    });
-  }
 }
 
 // `await` 按顺序执行写入和 stale 删除. 不使用 Promise.all, 因为错误报告顺序和 manifest 提交点本身都是可观察契约.
 export async function generate(rootPath: string, profile?: string): Promise<OutputMap>
 {
-  const expected = await buildOutputs(rootPath, profile);
-  const root = resolve(rootPath);
-  const stalePaths = await preflightOutputChanges(root, expected);
-  const generated = await outputRoot(root);
-  await fs.mkdir(generated, { recursive: true });
-  for (const [path, content] of expected)
-  {
-    if (path !== ".manifest.json") await atomicWrite(await destination(root, path), content);
-  }
-  for (const path of stalePaths)
-  {
-    const stats = await lstatIfExists(path);
-    if (stats) await fs.unlink(path);
-  }
-  // Manifest 是所有权提交点. stale 删除失败时保留旧 manifest, 下一次 generate 才能安全重试.
-  await atomicWrite(await destination(root, ".manifest.json"), expected.get(".manifest.json")!);
-  return expected;
+    const expected = await buildOutputs(rootPath, profile);
+    const root = resolve(rootPath);
+    const stalePaths = await preflightOutputChanges(root, expected);
+    const generated = await outputRoot(root);
+    await fs.mkdir(generated, { recursive: true });
+    for (const [path, content] of expected)
+    {
+        if (path !== ".manifest.json") await atomicWrite(await destination(root, path), content);
+    }
+    for (const path of stalePaths)
+    {
+        const stats = await lstatIfExists(path);
+        if (stats) await fs.unlink(path);
+    }
+    // Manifest 是所有权提交点. stale 删除失败时保留旧 manifest, 下一次 generate 才能安全重试.
+    await atomicWrite(await destination(root, ".manifest.json"), expected.get(".manifest.json")!);
+    return expected;
 }
 
 
@@ -905,216 +905,216 @@ export async function generate(rootPath: string, profile?: string): Promise<Outp
 // `resolve` 只规范化字面路径, 不会消除 junction. 所以 containment 之后仍需要 `assertNoReparseComponents()`.
 function assertContainedWithin(root: string, path: string, label: string): string
 {
-  const rootFull = resolve(root);
-  const pathFull = resolve(path);
-  const pathRelative = relative(rootFull, pathFull);
-  if (!pathRelative || pathRelative === ".." || pathRelative.startsWith(`..${sep}`) || isAbsolute(pathRelative))
-  {
-    throw new HalignError(`${label}: path must stay inside its allowed root`);
-  }
-  return pathFull;
+    const rootFull = resolve(root);
+    const pathFull = resolve(path);
+    const pathRelative = relative(rootFull, pathFull);
+    if (!pathRelative || pathRelative === ".." || pathRelative.startsWith(`..${sep}`) || isAbsolute(pathRelative))
+    {
+        throw new HalignError(`${label}: path must stay inside its allowed root`);
+    }
+    return pathFull;
 }
 
 function deploymentReparseError(label: string, path: string): HalignError
 {
-  return new HalignError(`${label}: reparse points are not allowed: ${path}`);
+    return new HalignError(`${label}: reparse points are not allowed: ${path}`);
 }
 
 // 对目标的每个已存在组件 lstat. 第一个不存在组件之后无需继续读取, 因为它尚未能把路径重定向到其他位置.
 // 这降低已知 reparse 风险, 但文件系统检查与写入之间仍可能存在 TOCTOU, 因而写入前的再次验证也保留在删除 helper 中.
 async function assertNoReparseComponents(root: string, path: string, label: string): Promise<string>
 {
-  const rootFull = resolve(root);
-  const pathFull = assertContainedWithin(rootFull, path, label);
-  const rootStats = await lstatIfExists(rootFull);
-  if (!rootStats || !rootStats.isDirectory()) throw new HalignError(`${label}: allowed root must be an existing directory: ${rootFull}`);
-  if (rootStats.isSymbolicLink()) throw deploymentReparseError(label, rootFull);
-  let current = rootFull;
-  for (const part of relative(rootFull, pathFull).split(sep).filter(Boolean))
-  {
-    current = join(current, part);
-    const stats = await lstatIfExists(current);
-    if (!stats) break;
-    if (stats.isSymbolicLink()) throw deploymentReparseError(label, current);
-  }
-  return pathFull;
+    const rootFull = resolve(root);
+    const pathFull = assertContainedWithin(rootFull, path, label);
+    const rootStats = await lstatIfExists(rootFull);
+    if (!rootStats || !rootStats.isDirectory()) throw new HalignError(`${label}: allowed root must be an existing directory: ${rootFull}`);
+    if (rootStats.isSymbolicLink()) throw deploymentReparseError(label, rootFull);
+    let current = rootFull;
+    for (const part of relative(rootFull, pathFull).split(sep).filter(Boolean))
+    {
+        current = join(current, part);
+        const stats = await lstatIfExists(current);
+        if (!stats) break;
+        if (stats.isSymbolicLink()) throw deploymentReparseError(label, current);
+    }
+    return pathFull;
 }
 
 async function assertRegularDirectory(path: string, label: string): Promise<void>
 {
-  const stats = await lstatIfExists(path);
-  if (!stats) throw new HalignError(`${label}: directory does not exist: ${path}`);
-  if (stats.isSymbolicLink()) throw deploymentReparseError(label, path);
-  if (!stats.isDirectory()) throw new HalignError(`${label}: expected a directory: ${path}`);
+    const stats = await lstatIfExists(path);
+    if (!stats) throw new HalignError(`${label}: directory does not exist: ${path}`);
+    if (stats.isSymbolicLink()) throw deploymentReparseError(label, path);
+    if (!stats.isDirectory()) throw new HalignError(`${label}: expected a directory: ${path}`);
 }
 
 async function assertRegularFile(path: string, label: string): Promise<void>
 {
-  const stats = await lstatIfExists(path);
-  if (!stats) throw new HalignError(`${label}: file does not exist: ${path}`);
-  if (stats.isSymbolicLink()) throw deploymentReparseError(label, path);
-  if (!stats.isFile()) throw new HalignError(`${label}: expected a file: ${path}`);
+    const stats = await lstatIfExists(path);
+    if (!stats) throw new HalignError(`${label}: file does not exist: ${path}`);
+    if (stats.isSymbolicLink()) throw deploymentReparseError(label, path);
+    if (!stats.isFile()) throw new HalignError(`${label}: expected a file: ${path}`);
 }
 
 async function assertRegularFileIfPresent(path: string, label: string): Promise<void>
 {
-  const stats = await lstatIfExists(path);
-  if (!stats) return;
-  if (stats.isSymbolicLink()) throw deploymentReparseError(label, path);
-  if (!stats.isFile()) throw new HalignError(`${label}: expected a file: ${path}`);
+    const stats = await lstatIfExists(path);
+    if (!stats) return;
+    if (stats.isSymbolicLink()) throw deploymentReparseError(label, path);
+    if (!stats.isFile()) throw new HalignError(`${label}: expected a file: ${path}`);
 }
 
 // 删除前递归检查整棵既有树. `fs.rm({ recursive: true })` 本身不表达本项目的安全策略, 所以不能把 reparse 检查省略给底层 API.
 async function assertNoReparseTree(path: string, label: string): Promise<void>
 {
-  const stats = await lstatIfExists(path);
-  if (!stats) throw new HalignError(`${label}: path does not exist: ${path}`);
-  if (stats.isSymbolicLink()) throw deploymentReparseError(label, path);
-  if (!stats.isDirectory()) return;
-  const entries = await fs.readdir(path, { withFileTypes: true });
-  for (const entry of entries)
-  {
-    await assertNoReparseTree(join(path, entry.name), label);
-  }
+    const stats = await lstatIfExists(path);
+    if (!stats) throw new HalignError(`${label}: path does not exist: ${path}`);
+    if (stats.isSymbolicLink()) throw deploymentReparseError(label, path);
+    if (!stats.isDirectory()) return;
+    const entries = await fs.readdir(path, { withFileTypes: true });
+    for (const entry of entries)
+    {
+        await assertNoReparseTree(join(path, entry.name), label);
+    }
 }
 
 async function removeDeploymentDirectory(userProfile: string, path: string, label: string): Promise<void>
 {
-  const target = await assertNoReparseComponents(userProfile, path, label);
-  const stats = await lstatIfExists(target);
-  if (!stats) return;
-  if (!stats.isDirectory()) throw new HalignError(`${label}: expected a directory: ${target}`);
-  await assertNoReparseTree(target, label);
-  await fs.rm(target, { recursive: true, force: true });
+    const target = await assertNoReparseComponents(userProfile, path, label);
+    const stats = await lstatIfExists(target);
+    if (!stats) return;
+    if (!stats.isDirectory()) throw new HalignError(`${label}: expected a directory: ${target}`);
+    await assertNoReparseTree(target, label);
+    await fs.rm(target, { recursive: true, force: true });
 }
 
 // 这个 interface 只是全量预检的内存记录. 每个 path 都在此之前完成 containment 与类型检查, 后面的部署循环不再重新推导目标.
 interface SetupInstallation
 {
-  harness: Harness;
-  sourceAgents: string;
-  sourceRules: string;
-  targetAgents: string;
-  targetRules: string;
+    harness: Harness;
+    sourceAgents: string;
+    sourceRules: string;
+    targetAgents: string;
+    targetRules: string;
 }
 
 // setup 的预检必须在任何删除前完成. 先 generate 是为了复用相同的 source 验证和 canonical bytes, 再验证所有 deployment target.
 // 否则后一个 Harness 的 reparse point 会让前一个 Harness 已被清空, 造成可避免的部分部署. 这同样不是全局事务, 但先消除所有可预见失败.
 export async function setup(rootPath: string, profile?: string, userProfile = process.env.USERPROFILE): Promise<void>
 {
-  const root = resolve(rootPath);
-  await generate(root, profile);
-  if (!userProfile || !isAbsolute(userProfile))
-  {
-    throw new HalignError(`USERPROFILE must be an absolute path, got ${valueText(userProfile)}`);
-  }
-  const deploymentRoot = resolve(userProfile);
-  await assertRegularDirectory(deploymentRoot, "USERPROFILE");
-  const generated = join(root, ".halign", "generated");
-  await assertNoReparseComponents(root, generated, "generated root");
-
-  const targets: Array<{ harness: Harness; root: string }> = [
-    { harness: "codex", root: join(deploymentRoot, ".codex") },
-    { harness: "cursor", root: join(deploymentRoot, ".cursor") },
-    { harness: "opencode", root: join(deploymentRoot, ".config", "opencode") },
-  ];
-  const installations: SetupInstallation[] = [];
-
-  // 缺失的 Harness 根目录被明确跳过. setup 只更新用户已经启用的工具, 不因为配置生成而创建新的全局工具目录.
-  for (const target of targets)
-  {
-    const sourceRoot = await assertNoReparseComponents(root, join(generated, target.harness), `${target.harness} generated source`);
-    const sourceAgents = await assertNoReparseComponents(root, join(sourceRoot, "agents"), `${target.harness} source agents`);
-    const sourceRules = await assertNoReparseComponents(root, join(sourceRoot, "AGENTS.md"), `${target.harness} source AGENTS.md`);
-    await assertRegularDirectory(sourceAgents, `${target.harness} source agents`);
-    await assertNoReparseTree(sourceAgents, `${target.harness} source agents`);
-    await assertRegularFile(sourceRules, `${target.harness} source AGENTS.md`);
-
-    const targetRoot = await assertNoReparseComponents(deploymentRoot, target.root, `${target.harness} target root`);
-    const targetStats = await lstatIfExists(targetRoot);
-    if (!targetStats) continue;
-    await assertRegularDirectory(targetRoot, `${target.harness} target root`);
-    const targetAgents = await assertNoReparseComponents(deploymentRoot, join(targetRoot, "agents"), `${target.harness} target agents`);
-    const targetRules = await assertNoReparseComponents(deploymentRoot, join(targetRoot, "AGENTS.md"), `${target.harness} target AGENTS.md`);
-    const agentsStats = await lstatIfExists(targetAgents);
-    if (agentsStats)
+    const root = resolve(rootPath);
+    await generate(root, profile);
+    if (!userProfile || !isAbsolute(userProfile))
     {
-      if (!agentsStats.isDirectory()) throw new HalignError(`${target.harness} target agents: expected a directory: ${targetAgents}`);
-      await assertNoReparseTree(targetAgents, `${target.harness} target agents`);
+        throw new HalignError(`USERPROFILE must be an absolute path, got ${valueText(userProfile)}`);
     }
-    await assertRegularFileIfPresent(targetRules, `${target.harness} target AGENTS.md`);
-    installations.push({ harness: target.harness, sourceAgents, sourceRules, targetAgents, targetRules });
-  }
+    const deploymentRoot = resolve(userProfile);
+    await assertRegularDirectory(deploymentRoot, "USERPROFILE");
+    const generated = join(root, ".halign", "generated");
+    await assertNoReparseComponents(root, generated, "generated root");
 
-  const sourceSharedRules = await assertNoReparseComponents(root, join(root, ".halign", "rules", "shared"), "shared rules source");
-  await assertRegularDirectory(sourceSharedRules, "shared rules source");
-  await assertNoReparseTree(sourceSharedRules, "shared rules source");
-  const targetAgentsRoot = await assertNoReparseComponents(deploymentRoot, join(deploymentRoot, ".agents"), "shared rules root");
-  const targetSharedRules = await assertNoReparseComponents(deploymentRoot, join(targetAgentsRoot, "shared-rules"), "shared rules target");
-  const sharedStats = await lstatIfExists(targetSharedRules);
-  if (sharedStats)
-  {
-    if (!sharedStats.isDirectory()) throw new HalignError(`shared rules target: expected a directory: ${targetSharedRules}`);
-    await assertNoReparseTree(targetSharedRules, "shared rules target");
-  }
+    const targets: Array<{ harness: Harness; root: string }> = [
+        { harness: "codex", root: join(deploymentRoot, ".codex") },
+        { harness: "cursor", root: join(deploymentRoot, ".cursor") },
+        { harness: "opencode", root: join(deploymentRoot, ".config", "opencode") },
+    ];
+    const installations: SetupInstallation[] = [];
 
-  // 至此所有可部署 Harness 和 shared rules 都完成预检. 部署仍按确定顺序串行执行, 这样错误位置与部分完成范围可解释且可重现.
-  for (const installation of installations)
-  {
-    await removeDeploymentDirectory(deploymentRoot, installation.targetAgents, `${installation.harness} target agents`);
-    await atomicWrite(installation.targetRules, await fs.readFile(installation.sourceRules));
-    await fs.cp(installation.sourceAgents, installation.targetAgents, { recursive: true, force: false, errorOnExist: true });
-  }
+    // 缺失的 Harness 根目录被明确跳过. setup 只更新用户已经启用的工具, 不因为配置生成而创建新的全局工具目录.
+    for (const target of targets)
+    {
+        const sourceRoot = await assertNoReparseComponents(root, join(generated, target.harness), `${target.harness} generated source`);
+        const sourceAgents = await assertNoReparseComponents(root, join(sourceRoot, "agents"), `${target.harness} source agents`);
+        const sourceRules = await assertNoReparseComponents(root, join(sourceRoot, "AGENTS.md"), `${target.harness} source AGENTS.md`);
+        await assertRegularDirectory(sourceAgents, `${target.harness} source agents`);
+        await assertNoReparseTree(sourceAgents, `${target.harness} source agents`);
+        await assertRegularFile(sourceRules, `${target.harness} source AGENTS.md`);
 
-  // shared rules 没有对应 Harness root, 因此在完成同一轮预检后才按需创建 `.agents` 父目录.
-  await fs.mkdir(targetAgentsRoot, { recursive: true });
-  await removeDeploymentDirectory(deploymentRoot, targetSharedRules, "shared rules target");
-  await fs.cp(sourceSharedRules, targetSharedRules, { recursive: true, force: false, errorOnExist: true });
+        const targetRoot = await assertNoReparseComponents(deploymentRoot, target.root, `${target.harness} target root`);
+        const targetStats = await lstatIfExists(targetRoot);
+        if (!targetStats) continue;
+        await assertRegularDirectory(targetRoot, `${target.harness} target root`);
+        const targetAgents = await assertNoReparseComponents(deploymentRoot, join(targetRoot, "agents"), `${target.harness} target agents`);
+        const targetRules = await assertNoReparseComponents(deploymentRoot, join(targetRoot, "AGENTS.md"), `${target.harness} target AGENTS.md`);
+        const agentsStats = await lstatIfExists(targetAgents);
+        if (agentsStats)
+        {
+            if (!agentsStats.isDirectory()) throw new HalignError(`${target.harness} target agents: expected a directory: ${targetAgents}`);
+            await assertNoReparseTree(targetAgents, `${target.harness} target agents`);
+        }
+        await assertRegularFileIfPresent(targetRules, `${target.harness} target AGENTS.md`);
+        installations.push({ harness: target.harness, sourceAgents, sourceRules, targetAgents, targetRules });
+    }
+
+    const sourceSharedRules = await assertNoReparseComponents(root, join(root, ".halign", "rules", "shared"), "shared rules source");
+    await assertRegularDirectory(sourceSharedRules, "shared rules source");
+    await assertNoReparseTree(sourceSharedRules, "shared rules source");
+    const targetAgentsRoot = await assertNoReparseComponents(deploymentRoot, join(deploymentRoot, ".agents"), "shared rules root");
+    const targetSharedRules = await assertNoReparseComponents(deploymentRoot, join(targetAgentsRoot, "shared-rules"), "shared rules target");
+    const sharedStats = await lstatIfExists(targetSharedRules);
+    if (sharedStats)
+    {
+        if (!sharedStats.isDirectory()) throw new HalignError(`shared rules target: expected a directory: ${targetSharedRules}`);
+        await assertNoReparseTree(targetSharedRules, "shared rules target");
+    }
+
+    // 至此所有可部署 Harness 和 shared rules 都完成预检. 部署仍按确定顺序串行执行, 这样错误位置与部分完成范围可解释且可重现.
+    for (const installation of installations)
+    {
+        await removeDeploymentDirectory(deploymentRoot, installation.targetAgents, `${installation.harness} target agents`);
+        await atomicWrite(installation.targetRules, await fs.readFile(installation.sourceRules));
+        await fs.cp(installation.sourceAgents, installation.targetAgents, { recursive: true, force: false, errorOnExist: true });
+    }
+
+    // shared rules 没有对应 Harness root, 因此在完成同一轮预检后才按需创建 `.agents` 父目录.
+    await fs.mkdir(targetAgentsRoot, { recursive: true });
+    await removeDeploymentDirectory(deploymentRoot, targetSharedRules, "shared rules target");
+    await fs.cp(sourceSharedRules, targetSharedRules, { recursive: true, force: false, errorOnExist: true });
 }
 
 // check 不读取 manifest 来推测现状, 而是安全地扫描实际树. 返回 Map 保持 stable path -> bytes 表示, 便于与 buildOutputs 的 Map 直接对照.
 async function actualFiles(root: string): Promise<Map<string, Buffer>>
 {
-  const generated = await outputRoot(root);
-  if (!(await lstatIfExists(generated))) return new Map();
-  const files = new Map<string, Buffer>();
-  const visit = async (current: string): Promise<void> =>
-  {
-    const currentStats = await lstatIfExists(current);
-    if (currentStats?.isSymbolicLink()) throw reparseError(root, current, true);
-    const entries = await fs.readdir(current, { withFileTypes: true });
-    entries.sort((left, right) => codePointCompare(left.name, right.name));
-    for (const entry of entries)
+    const generated = await outputRoot(root);
+    if (!(await lstatIfExists(generated))) return new Map();
+    const files = new Map<string, Buffer>();
+    const visit = async (current: string): Promise<void> =>
     {
-      const path = join(current, entry.name);
-      const stats = await lstatIfExists(path);
-      if (!stats) continue;
-      if (stats.isSymbolicLink()) throw reparseError(root, path, true);
-      if (stats.isDirectory()) await visit(path);
-      else if (stats.isFile()) files.set(display(generated, path), await fs.readFile(path));
-    }
-  };
-  await visit(generated);
-  return files;
+        const currentStats = await lstatIfExists(current);
+        if (currentStats?.isSymbolicLink()) throw reparseError(root, current, true);
+        const entries = await fs.readdir(current, { withFileTypes: true });
+        entries.sort((left, right) => codePointCompare(left.name, right.name));
+        for (const entry of entries)
+        {
+            const path = join(current, entry.name);
+            const stats = await lstatIfExists(path);
+            if (!stats) continue;
+            if (stats.isSymbolicLink()) throw reparseError(root, path, true);
+            if (stats.isDirectory()) await visit(path);
+            else if (stats.isFile()) files.set(display(generated, path), await fs.readFile(path));
+        }
+    };
+    await visit(generated);
+    return files;
 }
 
 // check 比较 renderer 的 canonical Buffer, 不重新格式化实际文件. Buffer.equals 比 string 比较更严格, 能报告 BOM, 换行与编码造成的字节级漂移.
 export async function check(rootPath: string, profile?: string): Promise<string[]>
 {
-  const expected = await buildOutputs(rootPath, profile);
-  const actual = await actualFiles(resolve(rootPath));
-  const differences: string[] = [];
-  for (const [path, content] of expected)
-  {
-    const actualContent = actual.get(path);
-    if (!actualContent) differences.push(`missing: ${path}`);
-    else if (!actualContent.equals(content)) differences.push(`modified: ${path}`);
-  }
-  for (const path of [...actual.keys()].filter((path) => !expected.has(path)).sort(codePointCompare))
-  {
-    differences.push(`extra: ${path}`);
-  }
-  return differences;
+    const expected = await buildOutputs(rootPath, profile);
+    const actual = await actualFiles(resolve(rootPath));
+    const differences: string[] = [];
+    for (const [path, content] of expected)
+    {
+        const actualContent = actual.get(path);
+        if (!actualContent) differences.push(`missing: ${path}`);
+        else if (!actualContent.equals(content)) differences.push(`modified: ${path}`);
+    }
+    for (const path of [...actual.keys()].filter((path) => !expected.has(path)).sort(codePointCompare))
+    {
+        differences.push(`extra: ${path}`);
+    }
+    return differences;
 }
 
 // ===== 7. ESM CLI 边界 =====
@@ -1123,84 +1123,84 @@ export async function check(rootPath: string, profile?: string): Promise<string[
 // `argv[0]!` 是 noUncheckedIndexedAccess 下的非空断言. 前面的长度条件或后续 command 检查已经建立运行时前提, `!` 不生成任何 JavaScript 检查.
 function usage(error?: string): number
 {
-  if (error) process.stderr.write(`error: ${error}\n`);
-  process.stderr.write("usage: halign <generate|check|setup> [--profile <profile>]\n");
-  return 2;
+    if (error) process.stderr.write(`error: ${error}\n`);
+    process.stderr.write("usage: halign <generate|check|setup> [--profile <profile>]\n");
+    return 2;
 }
 
 export async function main(argv: string[], root = process.cwd()): Promise<number>
 {
-  if (argv.length === 1 && ["--help", "-h"].includes(argv[0]!))
-  {
-    process.stdout.write("usage: halign <generate|check|setup> [--profile <profile>]\n");
-    return 0;
-  }
-  const command = argv[0];
-  if (command !== "generate" && command !== "check" && command !== "setup") return usage("command must be generate, check, or setup");
-  let profile: string | undefined;
-  for (let index = 1; index < argv.length; index += 1)
-  {
-    const argument = argv[index]!;
-    if (argument === "--profile")
+    if (argv.length === 1 && ["--help", "-h"].includes(argv[0]!))
     {
-      profile = argv[index + 1];
-      if (profile === undefined) return usage("--profile requires a value");
-      index += 1;
+        process.stdout.write("usage: halign <generate|check|setup> [--profile <profile>]\n");
+        return 0;
     }
-    else if (argument.startsWith("--profile="))
+    const command = argv[0];
+    if (command !== "generate" && command !== "check" && command !== "setup") return usage("command must be generate, check, or setup");
+    let profile: string | undefined;
+    for (let index = 1; index < argv.length; index += 1)
     {
-      profile = argument.slice("--profile=".length);
+        const argument = argv[index]!;
+        if (argument === "--profile")
+        {
+            profile = argv[index + 1];
+            if (profile === undefined) return usage("--profile requires a value");
+            index += 1;
+        }
+        else if (argument.startsWith("--profile="))
+        {
+            profile = argument.slice("--profile=".length);
+        }
+        else
+        {
+            return usage(`unknown argument ${argument}`);
+        }
     }
-    else
+    try
     {
-      return usage(`unknown argument ${argument}`);
+        if (command === "generate")
+        {
+            const outputs = await generate(root, profile);
+            const managedFileCount = [...outputs.keys()].filter((path) => path !== ".manifest.json").length;
+            process.stdout.write(`Generation complete. ${managedFileCount} managed files are up to date.\n`);
+            return 0;
+        }
+        if (command === "setup")
+        {
+            await setup(root, profile);
+            process.stdout.write("Setup complete. Generated files and enabled harness installations are up to date.\n");
+            return 0;
+        }
+        const differences = await check(root, profile);
+        if (differences.length > 0)
+        {
+            process.stdout.write(`Check failed:\n${differences.join("\n")}\n`);
+            return 1;
+        }
+        process.stdout.write("Check passed. Generated output is up to date.\n");
+        return 0;
     }
-  }
-  try
-  {
-    if (command === "generate")
+    catch (error)
     {
-      const outputs = await generate(root, profile);
-      const managedFileCount = [...outputs.keys()].filter((path) => path !== ".manifest.json").length;
-      process.stdout.write(`Generation complete. ${managedFileCount} managed files are up to date.\n`);
-      return 0;
+        if (error instanceof HalignError)
+        {
+            process.stderr.write(`error: ${error.message}\n`);
+            return 1;
+        }
+        throw error;
     }
-    if (command === "setup")
-    {
-      await setup(root, profile);
-      process.stdout.write("Setup complete. Generated files and enabled harness installations are up to date.\n");
-      return 0;
-    }
-    const differences = await check(root, profile);
-    if (differences.length > 0)
-    {
-      process.stdout.write(`Check failed:\n${differences.join("\n")}\n`);
-      return 1;
-    }
-    process.stdout.write("Check passed. Generated output is up to date.\n");
-    return 0;
-  }
-  catch (error)
-  {
-    if (error instanceof HalignError)
-    {
-      process.stderr.write(`error: ${error.message}\n`);
-      return 1;
-    }
-    throw error;
-  }
 }
 
 // ESM 没有 CommonJS 的 `require.main === module`. `npm link` 会让 `argv[1]` 经过目录联接指向本文件,
 // 因此先用 `realpathSync()` 消除联接, 再比较 file URL. 这样既能识别全局 CLI, 又不会在测试 import 时误执行 `main()`.
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
 {
-  main(process.argv.slice(2)).then((code) =>
-  {
-    process.exitCode = code;
-  }).catch((error: unknown) =>
-  {
-    process.stderr.write(`${errorText(error)}\n`);
-    process.exitCode = 1;
-  });
+    main(process.argv.slice(2)).then((code) =>
+    {
+        process.exitCode = code;
+    }).catch((error: unknown) =>
+    {
+        process.stderr.write(`${errorText(error)}\n`);
+        process.exitCode = 1;
+    });
 }
