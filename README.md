@@ -136,7 +136,7 @@ halign setup --profile kei
 
 ## 工程目录
 
-- `src/halign.ts` 保存完整生产实现与面向 TypeScript 初学者的中文教学注释.
+- `src/` 按数据流拆分生产实现 (`model`, `fs-safe`, `load`, `render`, `generate`, `setup`), `halign.ts` 是 CLI 入口; 关键边界保留面向 TypeScript 初学者的中文教学注释.
 - `tests/halign.test.ts` 使用 Node 内置 `node:test`, 当前覆盖 6 个顶层测试场景.
 - `dist/src/halign.js` 是全局 `halign` 实际执行的编译结果.
 - `dist/tests/halign.test.js` 是测试编译结果.

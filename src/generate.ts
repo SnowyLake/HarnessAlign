@@ -1,0 +1,209 @@
+/*
+Canonical 输出, manifest 与生成生命周期:
+
+- buildOutputs 只读 source, 返回有序 path -> Buffer Map, 不创建 generated 文件.
+- Manifest 是所有权提交点. stale 删除失败时保留旧 manifest.
+*/
+
+import { promises as fs } from "node:fs";
+import { join, posix, resolve } from "node:path";
+import { assertContained, atomicWrite, display, lstatIfExists, readUtf8, reparseError } from "./fs-safe.js";
+import { loadAgents, loadConfig, loadRules } from "./load.js";
+import {
+    type OutputMap,
+    codePointCompare,
+    errorText,
+    HalignError,
+    isRecord,
+    valueText,
+} from "./model.js";
+import { renderAgentsMarkdown, renderCodexAgent, renderYamlAgent } from "./render.js";
+
+export async function buildOutputs(rootPath: string, profile?: string): Promise<OutputMap>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const selected = profile || config.defaultProfile;
+    if (!config.profiles.includes(selected))
+    {
+        throw new HalignError(`.halign/config.json: profile must be configured, got ${valueText(selected)}`);
+    }
+    const rules = await loadRules(root, selected, config.harnesses);
+    const agents = await loadAgents(root, config.harnesses);
+    const outputs: OutputMap = new Map();
+    for (const harness of config.harnesses)
+    {
+        outputs.set(`${harness}/AGENTS.md`, renderAgentsMarkdown(rules, harness, config.name));
+        for (const agent of agents.slice().sort((left, right) => codePointCompare(left.name, right.name)))
+        {
+            const metadata = agent.harnesses[harness];
+            if (!metadata) continue;
+            const extension = harness === "codex" ? "toml" : "md";
+            const destinationPath = `${harness}/agents/${agent.name}.${extension}`;
+            outputs.set(destinationPath, harness === "codex"
+                ? renderCodexAgent(agent, metadata)
+                : renderYamlAgent(agent, harness, metadata));
+        }
+    }
+    const files = [...outputs.keys()];
+    outputs.set(
+        ".manifest.json",
+        Buffer.from(`${JSON.stringify({ version: 1, profile: selected, files }, null, 2)}\n`, "utf8"),
+    );
+    return outputs;
+}
+
+async function outputRoot(root: string): Promise<string>
+{
+    const path = join(root, ".halign", "generated");
+    const stats = await lstatIfExists(path);
+    if (stats?.isSymbolicLink()) throw new HalignError(".halign/generated: symbolic link output directories are not allowed");
+    if (stats && !stats.isDirectory()) throw new HalignError(".halign/generated: expected a directory");
+    return path;
+}
+
+export function safeOutputRelative(value: unknown): string
+{
+    if (typeof value !== "string" || !value || value.includes("\\") || posix.isAbsolute(value) || /^[A-Za-z]:/u.test(value))
+    {
+        throw new HalignError(`.halign/generated/.manifest.json: invalid managed path ${valueText(value)}`);
+    }
+    const parts = value.split("/");
+    if (parts.includes(".") || parts.includes(".."))
+    {
+        throw new HalignError(`.halign/generated/.manifest.json: invalid managed path ${valueText(value)}`);
+    }
+    return value;
+}
+
+async function destination(root: string, outputRelative: string): Promise<string>
+{
+    safeOutputRelative(outputRelative);
+    const generated = await outputRoot(root);
+    const parts = outputRelative.split("/");
+    const path = resolve(generated, ...parts);
+    assertContained(generated, path, ".halign/generated");
+    let current = generated;
+    for (const part of parts.slice(0, -1))
+    {
+        current = join(current, part);
+        const stats = await lstatIfExists(current);
+        if (stats?.isSymbolicLink()) throw reparseError(root, current, true);
+        if (stats && !stats.isDirectory()) throw new HalignError(`${display(root, current)}: expected an output directory`);
+    }
+    const stats = await lstatIfExists(path);
+    if (stats?.isSymbolicLink()) throw reparseError(root, path, true);
+    if (stats && !stats.isFile()) throw new HalignError(`${display(root, path)}: managed output must be a file`);
+    return path;
+}
+
+async function loadManifest(root: string): Promise<string[]>
+{
+    const generated = await outputRoot(root);
+    const path = join(generated, ".manifest.json");
+    const stats = await lstatIfExists(path);
+    if (!stats) return [];
+    if (stats.isSymbolicLink()) throw new HalignError(".halign/generated/.manifest.json: symbolic link outputs are not allowed");
+    if (!stats.isFile()) throw new HalignError(".halign/generated/.manifest.json: managed output must be a file");
+    let manifest: unknown;
+    try
+    {
+        manifest = JSON.parse(await readUtf8(root, path, ".halign/generated/.manifest.json")) as unknown;
+    }
+    catch (error)
+    {
+        if (error instanceof HalignError) throw error;
+        throw new HalignError(`.halign/generated/.manifest.json: invalid manifest: ${errorText(error)}`);
+    }
+    if (!isRecord(manifest) || typeof manifest.version !== "number" || !Number.isInteger(manifest.version) || manifest.version !== 1)
+    {
+        throw new HalignError(".halign/generated/.manifest.json: version must be integer 1");
+    }
+    if (!Array.isArray(manifest.files) || !manifest.files.every((file) => typeof file === "string"))
+    {
+        throw new HalignError(".halign/generated/.manifest.json: files must be a string array");
+    }
+    if (new Set(manifest.files).size !== manifest.files.length)
+    {
+        throw new HalignError(".halign/generated/.manifest.json: files must not contain duplicates");
+    }
+    if (manifest.files.includes(".manifest.json"))
+    {
+        throw new HalignError(".halign/generated/.manifest.json: files must not manage the manifest itself");
+    }
+    return manifest.files.map((file) => safeOutputRelative(file));
+}
+
+async function preflightOutputChanges(root: string, expected: OutputMap): Promise<string[]>
+{
+    const oldFiles = await loadManifest(root);
+    const currentFiles = new Set([...expected.keys()].filter((path) => path !== ".manifest.json"));
+    const stale = oldFiles.filter((path) => !currentFiles.has(path));
+    for (const path of expected.keys()) await destination(root, path);
+    const stalePaths: string[] = [];
+    for (const path of stale) stalePaths.push(await destination(root, path));
+    return stalePaths;
+}
+
+export async function generate(rootPath: string, profile?: string): Promise<OutputMap>
+{
+    const expected = await buildOutputs(rootPath, profile);
+    const root = resolve(rootPath);
+    const stalePaths = await preflightOutputChanges(root, expected);
+    const generated = await outputRoot(root);
+    await fs.mkdir(generated, { recursive: true });
+    for (const [path, content] of expected)
+    {
+        if (path !== ".manifest.json") await atomicWrite(await destination(root, path), content);
+    }
+    for (const path of stalePaths)
+    {
+        const stats = await lstatIfExists(path);
+        if (stats) await fs.unlink(path);
+    }
+    await atomicWrite(await destination(root, ".manifest.json"), expected.get(".manifest.json")!);
+    return expected;
+}
+
+async function actualFiles(root: string): Promise<Map<string, Buffer>>
+{
+    const generated = await outputRoot(root);
+    if (!(await lstatIfExists(generated))) return new Map();
+    const files = new Map<string, Buffer>();
+    const visit = async (current: string): Promise<void> =>
+    {
+        const currentStats = await lstatIfExists(current);
+        if (currentStats?.isSymbolicLink()) throw reparseError(root, current, true);
+        const entries = await fs.readdir(current, { withFileTypes: true });
+        entries.sort((left, right) => codePointCompare(left.name, right.name));
+        for (const entry of entries)
+        {
+            const path = join(current, entry.name);
+            const stats = await lstatIfExists(path);
+            if (!stats) continue;
+            if (stats.isSymbolicLink()) throw reparseError(root, path, true);
+            if (stats.isDirectory()) await visit(path);
+            else if (stats.isFile()) files.set(display(generated, path), await fs.readFile(path));
+        }
+    };
+    await visit(generated);
+    return files;
+}
+
+export async function check(rootPath: string, profile?: string): Promise<string[]>
+{
+    const expected = await buildOutputs(rootPath, profile);
+    const actual = await actualFiles(resolve(rootPath));
+    const differences: string[] = [];
+    for (const [path, content] of expected)
+    {
+        const actualContent = actual.get(path);
+        if (!actualContent) differences.push(`missing: ${path}`);
+        else if (!actualContent.equals(content)) differences.push(`modified: ${path}`);
+    }
+    for (const path of [...actual.keys()].filter((path) => !expected.has(path)).sort(codePointCompare))
+    {
+        differences.push(`extra: ${path}`);
+    }
+    return differences;
+}
