@@ -10,7 +10,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { atomicWrite, lstatIfExists } from "./fs-safe.js";
 import { generate } from "./generate.js";
 import { loadConfig } from "./load.js";
-import { type Harness, HalignError, valueText } from "./model.js";
+import { type Harness, type OutputMap, codePointCompare, HalignError, valueText } from "./model.js";
 
 function assertContainedWithin(root: string, path: string, label: string): string
 {
@@ -103,29 +103,87 @@ interface SetupInstallation
     targetRules: string;
 }
 
-export async function setup(rootPath: string, profile?: string, userProfile = process.env.USERPROFILE): Promise<void>
+export interface SetupTargetReport
+{
+    harness: Harness;
+    root: string;
+    skipped: boolean;
+    files: string[];
+}
+
+export interface SetupResult
+{
+    outputs: OutputMap;
+    generatedRoot: string;
+    targets: SetupTargetReport[];
+    sharedRules: { target: string; files: string[] };
+}
+
+async function listRelativeFiles(directory: string): Promise<string[]>
+{
+    const files: string[] = [];
+    const visit = async (current: string, prefix: string): Promise<void> =>
+    {
+        const entries = await fs.readdir(current, { withFileTypes: true });
+        entries.sort((left, right) => codePointCompare(left.name, right.name));
+        for (const entry of entries)
+        {
+            const child = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) await visit(join(current, entry.name), child);
+            else if (entry.isFile()) files.push(child);
+        }
+    };
+    await visit(directory, "");
+    return files;
+}
+
+export function reportSetup(result: SetupResult): string
+{
+    const files = [...result.outputs.keys()];
+    const lines = [
+        "Setup complete.",
+        `Wrote ${files.length} files to ${result.generatedRoot}`,
+        ...files.map((path) => `  ${path}`),
+    ];
+    for (const target of result.targets)
+    {
+        if (target.skipped)
+        {
+            lines.push(`Skipped ${target.harness}; target does not exist: ${target.root}`);
+            continue;
+        }
+        lines.push(`Updated ${target.harness} at ${target.root}`);
+        for (const file of target.files) lines.push(`  ${file}`);
+    }
+    lines.push(`Updated shared rules at ${result.sharedRules.target}`);
+    for (const file of result.sharedRules.files) lines.push(`  ${file}`);
+    return `${lines.join("\n")}\n`;
+}
+
+export async function setup(rootPath: string, profile?: string, userProfile = process.env.USERPROFILE): Promise<SetupResult>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    await generate(root, profile);
+    const outputs = await generate(root, profile);
+    const generatedRoot = join(root, ".halign", "generated");
     if (!userProfile || !isAbsolute(userProfile))
     {
         throw new HalignError(`USERPROFILE must be an absolute path, got ${valueText(userProfile)}`);
     }
     const deploymentRoot = resolve(userProfile);
     await assertRegularDirectory(deploymentRoot, "USERPROFILE");
-    const generated = join(root, ".halign", "generated");
-    await assertNoReparseComponents(root, generated, "generated root");
+    await assertNoReparseComponents(root, generatedRoot, "generated root");
 
     const targets: Array<{ harness: Harness; root: string }> = config.harnesses.map((harness) => ({
         harness: harness.name,
         root: join(deploymentRoot, ...harness.configPath.split("/")),
     }));
     const installations: SetupInstallation[] = [];
+    const reports: SetupTargetReport[] = [];
 
     for (const target of targets)
     {
-        const sourceRoot = await assertNoReparseComponents(root, join(generated, target.harness), `${target.harness} generated source`);
+        const sourceRoot = await assertNoReparseComponents(root, join(generatedRoot, target.harness), `${target.harness} generated source`);
         const sourceAgents = await assertNoReparseComponents(root, join(sourceRoot, "agents"), `${target.harness} source agents`);
         const sourceRules = await assertNoReparseComponents(root, join(sourceRoot, "AGENTS.md"), `${target.harness} source AGENTS.md`);
         await assertRegularDirectory(sourceAgents, `${target.harness} source agents`);
@@ -134,7 +192,11 @@ export async function setup(rootPath: string, profile?: string, userProfile = pr
 
         const targetRoot = await assertNoReparseComponents(deploymentRoot, target.root, `${target.harness} target root`);
         const targetStats = await lstatIfExists(targetRoot);
-        if (!targetStats) continue;
+        if (!targetStats)
+        {
+            reports.push({ harness: target.harness, root: targetRoot, skipped: true, files: [] });
+            continue;
+        }
         await assertRegularDirectory(targetRoot, `${target.harness} target root`);
         const targetAgents = await assertNoReparseComponents(deploymentRoot, join(targetRoot, "agents"), `${target.harness} target agents`);
         const targetRules = await assertNoReparseComponents(deploymentRoot, join(targetRoot, "AGENTS.md"), `${target.harness} target AGENTS.md`);
@@ -145,7 +207,9 @@ export async function setup(rootPath: string, profile?: string, userProfile = pr
             await assertNoReparseTree(targetAgents, `${target.harness} target agents`);
         }
         await assertRegularFileIfPresent(targetRules, `${target.harness} target AGENTS.md`);
+        const files = ["AGENTS.md", ...(await listRelativeFiles(sourceAgents)).map((file) => `agents/${file}`)];
         installations.push({ harness: target.harness, sourceAgents, sourceRules, targetAgents, targetRules });
+        reports.push({ harness: target.harness, root: targetRoot, skipped: false, files });
     }
 
     const sourceSharedRules = await assertNoReparseComponents(root, join(root, ".halign", "rules", "shared"), "shared rules source");
@@ -167,7 +231,14 @@ export async function setup(rootPath: string, profile?: string, userProfile = pr
         await fs.cp(installation.sourceAgents, installation.targetAgents, { recursive: true, force: false, errorOnExist: true });
     }
 
+    const sharedFiles = await listRelativeFiles(sourceSharedRules);
     await fs.mkdir(targetAgentsRoot, { recursive: true });
     await removeDeploymentDirectory(deploymentRoot, targetSharedRules, "shared rules target");
     await fs.cp(sourceSharedRules, targetSharedRules, { recursive: true, force: false, errorOnExist: true });
+    return {
+        outputs,
+        generatedRoot,
+        targets: reports,
+        sharedRules: { target: targetSharedRules, files: sharedFiles },
+    };
 }

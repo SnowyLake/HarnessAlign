@@ -97,7 +97,7 @@ halign check --profile=kei
 halign setup --profile kei
 ```
 
-`check` 发现缺失, 修改或额外文件时会列出差异并返回 `1`. 无效命令或参数返回 `2`.
+`check` 发现缺失, 修改或额外文件时会列出差异并返回 `1`. 无效命令或参数返回 `2`. `generate` 和 `setup` 成功时会列出写入的文件以及目标目录.
 
 配套配置目录中的 `generate.cmd` 和 `setup.cmd` 是便捷封装. 它们会切换到自身所在目录, 调用全局 `halign`, 保留退出码, 并通过 `pause` 防止窗口执行后立即关闭.
 

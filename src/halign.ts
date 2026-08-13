@@ -19,18 +19,20 @@
 */
 
 import { realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { check, generate } from "./generate.js";
+import { check, generate, reportGenerate } from "./generate.js";
 import { errorText, HalignError } from "./model.js";
-import { setup } from "./setup.js";
+import { reportSetup, setup } from "./setup.js";
 
 export type { AgentFormat, Config, Harness, HarnessConfig, OutputMap } from "./model.js";
+export type { SetupResult, SetupTargetReport } from "./setup.js";
 export { HalignError } from "./model.js";
 export { atomicWrite } from "./fs-safe.js";
 export { loadConfig, validateConfig } from "./load.js";
 export { downgradeMarkdownHeadings, renderMarkdownToc } from "./render.js";
-export { buildOutputs, check, generate, safeOutputRelative } from "./generate.js";
-export { setup } from "./setup.js";
+export { buildOutputs, check, generate, reportGenerate, safeOutputRelative } from "./generate.js";
+export { reportSetup, setup } from "./setup.js";
 
 function usage(error?: string): number
 {
@@ -72,14 +74,12 @@ export async function main(argv: string[], root = process.cwd()): Promise<number
         if (command === "generate")
         {
             const outputs = await generate(root, profile);
-            const managedFileCount = [...outputs.keys()].filter((path) => path !== ".manifest.json").length;
-            process.stdout.write(`Generation complete. ${managedFileCount} managed files are up to date.\n`);
+            process.stdout.write(reportGenerate(join(resolve(root), ".halign", "generated"), outputs));
             return 0;
         }
         if (command === "setup")
         {
-            await setup(root, profile);
-            process.stdout.write("Setup complete. Generated files and enabled harness installations are up to date.\n");
+            process.stdout.write(reportSetup(await setup(root, profile)));
             return 0;
         }
         const differences = await check(root, profile);

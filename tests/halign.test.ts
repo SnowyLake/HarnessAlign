@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { atomicWrite, buildOutputs, check, downgradeMarkdownHeadings, generate, HalignError, renderMarkdownToc, safeOutputRelative, setup } from "../src/halign.js";
+import { atomicWrite, buildOutputs, check, downgradeMarkdownHeadings, generate, HalignError, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, setup } from "../src/halign.js";
 
 const config = {
     version: 2,
@@ -331,5 +331,34 @@ test("setup rejects target reparse points before replacing an existing root", as
         await assert.rejects(setup(root, undefined, userProfile), /reparse points are not allowed/u);
         assert.equal(await readFile(join(targetRoot, "AGENTS.md"), "utf8"), "keep this file\n");
         assert.equal(await readFile(join(redirected, "sentinel.txt"), "utf8"), "must remain\n");
+    });
+});
+
+test("generate and setup reports list written files and destination directories", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        const outputs = await generate(root);
+        const generatedRoot = join(root, ".halign", "generated");
+        const generateLog = reportGenerate(generatedRoot, outputs);
+        assert.ok(generateLog.includes(`Wrote ${outputs.size} files to ${generatedRoot}`));
+        assert.ok(generateLog.includes("  .manifest.json"));
+        assert.ok(generateLog.includes("  codex/AGENTS.md"));
+        assert.ok(generateLog.includes("  codex/agents/explorer.toml"));
+        assert.ok(generateLog.includes("  cursor/agents/explorer.md"));
+        assert.ok(generateLog.includes("  opencode/AGENTS.md"));
+
+        const userProfile = join(root, "isolated-userprofile");
+        await mkdir(join(userProfile, ".codex", "agents"), { recursive: true });
+        const setupLog = reportSetup(await setup(root, undefined, userProfile));
+        assert.ok(setupLog.includes(`Wrote ${outputs.size} files to ${generatedRoot}`));
+        assert.ok(setupLog.includes(`Updated codex at ${join(userProfile, ".codex")}`));
+        assert.ok(setupLog.includes("  agents/explorer.toml"));
+        assert.ok(setupLog.includes(`Skipped cursor; target does not exist: ${join(userProfile, ".cursor")}`));
+        assert.ok(setupLog.includes(`Skipped opencode; target does not exist: ${join(userProfile, ".config", "opencode")}`));
+        assert.ok(setupLog.includes(`Updated shared rules at ${join(userProfile, ".agents", "shared-rules")}`));
+        assert.ok(setupLog.includes("  shared.md"));
     });
 });

@@ -40,9 +40,9 @@
 
 ## 命令契约
 
-- `halign generate [--profile <profile>]` 验证配置并更新当前目录下的 `.halign/generated/`, 成功时输出受管理文件数量.
+- `halign generate [--profile <profile>]` 验证配置并更新当前目录下的 `.halign/generated/`, 成功时列出写入的文件和生成目录.
 - `halign check [--profile <profile>]` 比较期望输出与 `.halign/generated/`, 一致时输出成功摘要并返回 `0`, 存在差异时列出差异并返回 `1`.
-- `halign setup [--profile <profile>]` 先生成, 再把结果部署到当前用户已经存在的 Harness 根目录, 成功时输出部署摘要.
+- `halign setup [--profile <profile>]` 先生成, 再把结果部署到当前用户已经存在的 Harness 根目录, 成功时列出生成文件, 已更新或跳过的 Harness 目录, 以及 `shared-rules` 目标.
 - 无效命令或参数输出 usage 并返回 `2`. 领域错误输出到 stderr 并返回 `1`.
 - `package.json` 的 `bin.halign` 必须指向 `dist/src/halign.js`. 修改入口路径后必须重新执行 `npm link`.
 - ESM 入口判断必须先解析 `npm link` 产生的真实路径, 避免目录联接导致 `main()` 未执行.

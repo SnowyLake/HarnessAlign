@@ -162,6 +162,12 @@ export async function generate(rootPath: string, profile?: string): Promise<Outp
     return expected;
 }
 
+export function reportGenerate(generatedRoot: string, outputs: OutputMap): string
+{
+    const files = [...outputs.keys()];
+    return `Generation complete.\nWrote ${files.length} files to ${generatedRoot}\n${files.map((path) => `  ${path}`).join("\n")}\n`;
+}
+
 async function actualFiles(root: string): Promise<Map<string, Buffer>>
 {
     const generated = await outputRoot(root);
