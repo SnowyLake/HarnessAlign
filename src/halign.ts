@@ -6,7 +6,7 @@
 1. `model.ts` — 领域类型, `unknown` 收窄 helper, `HalignError`
 2. `fs-safe.ts` — 路径 containment, reparse 拒绝, UTF-8 读, 原子写入
 3. `load.ts` — 配置 / Rule / Agent 发现与验证
-4. `render.ts` — Markdown 标题降级, TOC, 三个 Harness renderer
+4. `render.ts` — Markdown 标题降级, TOC, 可配置 Harness renderer
 5. `generate.ts` — `buildOutputs`, manifest, `generate`, `check`
 6. `setup.ts` — 部署到已存在的用户 Harness 根目录
 7. 本文件 — ESM CLI 边界; 同时 re-export 公开 API 供测试导入
@@ -24,7 +24,7 @@ import { check, generate } from "./generate.js";
 import { errorText, HalignError } from "./model.js";
 import { setup } from "./setup.js";
 
-export type { Config, Harness, OutputMap } from "./model.js";
+export type { AgentFormat, Config, Harness, HarnessConfig, OutputMap } from "./model.js";
 export { HalignError } from "./model.js";
 export { atomicWrite } from "./fs-safe.js";
 export { loadConfig, validateConfig } from "./load.js";

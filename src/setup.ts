@@ -9,6 +9,7 @@ import { promises as fs } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { atomicWrite, lstatIfExists } from "./fs-safe.js";
 import { generate } from "./generate.js";
+import { loadConfig } from "./load.js";
 import { type Harness, HalignError, valueText } from "./model.js";
 
 function assertContainedWithin(root: string, path: string, label: string): string
@@ -105,6 +106,7 @@ interface SetupInstallation
 export async function setup(rootPath: string, profile?: string, userProfile = process.env.USERPROFILE): Promise<void>
 {
     const root = resolve(rootPath);
+    const config = await loadConfig(root);
     await generate(root, profile);
     if (!userProfile || !isAbsolute(userProfile))
     {
@@ -115,11 +117,10 @@ export async function setup(rootPath: string, profile?: string, userProfile = pr
     const generated = join(root, ".halign", "generated");
     await assertNoReparseComponents(root, generated, "generated root");
 
-    const targets: Array<{ harness: Harness; root: string }> = [
-        { harness: "codex", root: join(deploymentRoot, ".codex") },
-        { harness: "cursor", root: join(deploymentRoot, ".cursor") },
-        { harness: "opencode", root: join(deploymentRoot, ".config", "opencode") },
-    ];
+    const targets: Array<{ harness: Harness; root: string }> = config.harnesses.map((harness) => ({
+        harness: harness.name,
+        root: join(deploymentRoot, ...harness.configPath.split("/")),
+    }));
     const installations: SetupInstallation[] = [];
 
     for (const target of targets)

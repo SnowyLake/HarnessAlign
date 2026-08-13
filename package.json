@@ -12,10 +12,12 @@
     "test": "npm run build && node --test dist/tests/halign.test.js",
     "verify": "npm run typecheck && npm test"
   },
-  "dependencies": { "yaml": "2.9.0" },
+  "dependencies": {
+    "smol-toml": "1.7.1",
+    "yaml": "2.9.0"
+  },
   "devDependencies": {
     "@types/node": "24.13.3",
-    "smol-toml": "1.7.1",
     "typescript": "7.0.2"
   }
 }

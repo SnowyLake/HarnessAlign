@@ -17,7 +17,7 @@
 - 本仓库实现独立的 `halign` TypeScript CLI, 不保存用户的 `.halign` 配置源.
 - CLI 必须以调用者的当前工作目录作为配置根目录. 不得把工具安装目录或源码目录当作配置根目录.
 - 行为验证以 `tests/` 中的临时目录用例为准, 不依赖仓库外任何配置或路径.
-- 只实现 Codex, Cursor 和 OpenCode 已明确需要的能力. 不为未经需求证明的 Harness, 插件, 模板或扩展点预留抽象.
+- 只实现配置声明的 Harness 以及 `toml` / `yaml` 两种 Subagent 格式. 不为插件, 模板, renderer registry 或未声明的 Harness 预留抽象.
 
 ## 目录职责
 
@@ -25,7 +25,7 @@
   - `model.ts` — 领域类型, 常量, `HalignError`, 收窄 helper
   - `fs-safe.ts` — 路径 containment, reparse 拒绝, UTF-8 读, 原子写入
   - `load.ts` — 配置 / Rule / Agent 发现与验证
-  - `render.ts` — Markdown 标题降级, TOC, Codex / Cursor / OpenCode 渲染
+  - `render.ts` — Markdown 标题降级, TOC, 按 Harness 配置渲染 TOML / YAML Subagent
   - `generate.ts` — `buildOutputs`, manifest, `generate`, `check`
   - `setup.ts` — 部署到已存在的用户 Harness 根目录
   - `halign.ts` — ESM CLI 入口, 并对测试 re-export 公开 API
@@ -50,7 +50,7 @@
 ## 实现约束
 
 - 支持 Node 24, 当前 `engines` 范围是 `>=24 <25`.
-- Runtime 仅使用 `yaml`. `typescript`, `@types/node` 和 `smol-toml` 仅用于开发或测试.
+- Runtime 仅使用 `yaml` 和 `smol-toml`. `typescript` 和 `@types/node` 仅用于开发或测试.
 - 优先复用现有函数和数据流. 不创建 renderer registry, dependency injection, 通用模板系统或单实现接口.
 - 输入必须先完整验证, 再修改 `.halign/generated/` 或用户部署目录.
 - 保持 UTF-8 without BOM, LF 和确定性排序.
@@ -60,14 +60,14 @@
 
 ## 生成规则
 
-- `.halign/config.json` 定义版本, 输出标题, Profile 和 Harness 列表.
+- `.halign/config.json` 使用版本 `2`, 定义输出标题, Profile 和 Harness 对象列表. 每个 Harness 声明 `name`, `config_path`, `agent_format`, `agent_extension`; TOML Harness 还必须声明 `instructions_field`.
 - `.halign/rules/` 中的根 Rule 按 `(priority, repository_relative_path)` 排序, 再按 Harness targets 独立过滤.
 - `.halign/domains/<profile>/rules/` 只加载当前选中的 Profile.
 - `.halign/rules/shared/` 是独立部署的共享规则, 不参与 `AGENTS.md` 渲染, 不出现在生成 manifest 中.
-- `.halign/agents/` 中的 Subagent 共享 Markdown body, 但保留 Codex, Cursor 和 OpenCode 各自的原生 metadata.
+- `.halign/agents/` 中的 Subagent 共享 Markdown body. 各 Harness 块中的 metadata 没有字段白名单, 由对应格式的序列化器输出.
 - 生成的 `AGENTS.md` 只允许配置的 `name` 产生一个一级标题.
 - Rule 中 fenced code 之外的一至五级 ATX 标题必须降一级, 六级标题保持不变.
-- Codex `developer_instructions` 使用 TOML 多行字符串, 不得将正文换行写成字面量 `\n`.
+- TOML Harness 的 `instructions_field` 使用多行字符串保存共享正文, 不得将正文换行写成字面量 `\n`, 也不允许 metadata 重复声明该字段.
 - 只删除旧 manifest 记录且本次不再生成的文件. 不删除 manifest 未管理的文件.
 - 所有新文件写入与 stale 删除成功后, 才写入新的 manifest.
 
@@ -95,7 +95,7 @@ npm link
 ## 部署安全
 
 - `generate` 只更新调用目录中的 `.halign/generated/`.
-- `setup` 只更新用户已经启用且根目录已经存在的 Codex, Cursor 和 OpenCode. 不因部署而创建缺失的 Harness 根目录.
+- `setup` 只更新配置中声明且根目录已经存在的 Harness. 不因部署而创建缺失的 Harness 根目录.
 - 对已启用 Harness, `setup` 替换其 `agents` 目录并更新根 `AGENTS.md`.
 - `setup` 还会更新 `%USERPROFILE%\.agents\shared-rules`.
 - 部署前必须验证解析后的目标位于 `USERPROFILE` 或项目生成目录内, 并拒绝既有 symlink 或 junction.

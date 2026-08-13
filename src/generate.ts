@@ -17,7 +17,7 @@ import {
     isRecord,
     valueText,
 } from "./model.js";
-import { renderAgentsMarkdown, renderCodexAgent, renderYamlAgent } from "./render.js";
+import { renderAgent, renderAgentsMarkdown } from "./render.js";
 
 export async function buildOutputs(rootPath: string, profile?: string): Promise<OutputMap>
 {
@@ -33,16 +33,13 @@ export async function buildOutputs(rootPath: string, profile?: string): Promise<
     const outputs: OutputMap = new Map();
     for (const harness of config.harnesses)
     {
-        outputs.set(`${harness}/AGENTS.md`, renderAgentsMarkdown(rules, harness, config.name));
+        outputs.set(`${harness.name}/AGENTS.md`, renderAgentsMarkdown(rules, harness.name, config.name));
         for (const agent of agents.slice().sort((left, right) => codePointCompare(left.name, right.name)))
         {
-            const metadata = agent.harnesses[harness];
+            const metadata = agent.harnesses[harness.name];
             if (!metadata) continue;
-            const extension = harness === "codex" ? "toml" : "md";
-            const destinationPath = `${harness}/agents/${agent.name}.${extension}`;
-            outputs.set(destinationPath, harness === "codex"
-                ? renderCodexAgent(agent, metadata)
-                : renderYamlAgent(agent, harness, metadata));
+            const destinationPath = `${harness.name}/agents/${agent.name}.${harness.agentExtension}`;
+            outputs.set(destinationPath, renderAgent(agent, harness, metadata));
         }
     }
     const files = [...outputs.keys()];

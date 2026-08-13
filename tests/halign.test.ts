@@ -7,7 +7,17 @@ import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { atomicWrite, buildOutputs, check, downgradeMarkdownHeadings, generate, HalignError, renderMarkdownToc, safeOutputRelative, setup } from "../src/halign.js";
 
-const config = { version: 1, name: "AGENTS", default_profile: "arona", profiles: ["arona", "kei"], harnesses: ["codex", "cursor", "opencode"] };
+const config = {
+    version: 2,
+    name: "AGENTS",
+    default_profile: "arona",
+    profiles: ["arona", "kei"],
+    harnesses: [
+        { name: "codex", config_path: ".codex", agent_format: "toml", agent_extension: "toml", instructions_field: "developer_instructions" },
+        { name: "cursor", config_path: ".cursor", agent_format: "yaml", agent_extension: "md" },
+        { name: "opencode", config_path: ".config/opencode", agent_format: "yaml", agent_extension: "md" },
+    ],
+};
 
 async function withProject(run: (root: string) => Promise<void>): Promise<void>
 {
@@ -37,7 +47,40 @@ async function writeRule(root: string, name: string, priority: number, body: str
 
 async function writeAgent(root: string, name = "explorer"): Promise<void>
 {
-    await writeFile(join(root, ".halign", "agents", name + ".md"), "---\nname: " + name + "\ndescription: Read only.\nharnesses:\n  codex:\n    model: test-codex\n    sandbox_mode: read-only\n    web_search: disabled\n  cursor:\n    model: test-cursor\n    readonly: true\n  opencode:\n    model: test-opencode\n    variant: max\n    mode: subagent\n    permission:\n      edit: deny\n      bash: deny\n---\n\nRead evidence.\n", "utf8");
+    const content = [
+        "---",
+        `name: ${name}`,
+        "description: Read only.",
+        "harnesses:",
+        "  codex:",
+        "    model: test-codex",
+        "    sandbox_mode: read-only",
+        "    web_search: disabled",
+        "    temperature: 0.25",
+        "    tags:",
+        "      - audit",
+        "      - safe",
+        "    limits:",
+        "      requests: 3",
+        "  cursor:",
+        "    model: test-cursor",
+        "    readonly: true",
+        "    custom_number: 42",
+        "    capabilities:",
+        "      review: true",
+        "  opencode:",
+        "    model: test-opencode",
+        "    variant: max",
+        "    mode: subagent",
+        "    permission:",
+        "      edit: deny",
+        "      bash: deny",
+        "---",
+        "",
+        "Read evidence.",
+        "",
+    ].join("\n");
+    await writeFile(join(root, ".halign", "agents", name + ".md"), content, "utf8");
 }
 
 function output(outputs: Map<string, Buffer>, path: string): string
@@ -70,7 +113,43 @@ test("config and metadata validation reject unsafe input", async () =>
     {
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, default_profile: "../x", profiles: ["../x"] }), "utf8");
         await assert.rejects(buildOutputs(root), /single directory names/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[0], config_path: "../escape" }] }), "utf8");
+        await assert.rejects(buildOutputs(root), /normalized relative path/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
+            { ...config.harnesses[0], config_path: ".tools" },
+            { ...config.harnesses[1], config_path: ".tools/nested" },
+        ] }), "utf8");
+        await assert.rejects(buildOutputs(root), /must not overlap/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
+            { ...config.harnesses[0], config_path: ".agents/shared-rules/custom" },
+        ] }), "utf8");
+        await assert.rejects(buildOutputs(root), /managed shared rules target/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, version: 1 }), "utf8");
+        await assert.rejects(buildOutputs(root), /version must be integer 2/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], extra: true }] }), "utf8");
+        await assert.rejects(buildOutputs(root), /unknown field/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], agent_format: "json" }] }), "utf8");
+        await assert.rejects(buildOutputs(root), /agent_format must be toml or yaml/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], agent_extension: ".md" }] }), "utf8");
+        await assert.rejects(buildOutputs(root), /agent_extension must match/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[0], instructions_field: undefined }] }), "utf8");
+        await assert.rejects(buildOutputs(root), /instructions_field is required/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], instructions_field: "developer_instructions" }] }), "utf8");
+        await assert.rejects(buildOutputs(root), /instructions_field is only supported when agent_format is toml/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[0], instructions_field: "name" }] }), "utf8");
+        await assert.rejects(buildOutputs(root), /other than name or description/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({
+            ...config,
+            harnesses: [config.harnesses[0], { ...config.harnesses[0], config_path: ".other" }],
+        }), "utf8");
+        await assert.rejects(buildOutputs(root), /harness names must be unique/u);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify(config), "utf8");
+        await writeFile(join(root, ".halign", "agents", "explorer.md"), "---\nname: explorer\ndescription: Read only.\nharnesses:\n  codex:\n    developer_instructions: stolen\n---\n\nbody\n", "utf8");
+        await assert.rejects(buildOutputs(root), /reserved for the Markdown body/u);
+        await writeAgent(root);
+        await writeFile(join(root, ".halign", "agents", "explorer.md"), "---\nname: explorer\ndescription: Read only.\nharnesses:\n  missing:\n    model: x\n---\n\nbody\n", "utf8");
+        await assert.rejects(buildOutputs(root), /configured harness names/u);
+        await writeAgent(root);
         await writeFile(join(root, ".halign", "rules", "bad.md"), "---\npriority: high\n---\n\n# Bad\n\nbad\n", "utf8");
         await assert.rejects(buildOutputs(root), /priority/u);
     });
@@ -94,10 +173,17 @@ test("rules profile selection, targets, Markdown, and all renderers are determin
         assert.ok(output(await buildOutputs(root, "kei"), "codex/AGENTS.md").includes("kei soul"));
         assert.equal(downgradeMarkdownHeadings("# One\n\n~~~md\n# Hidden\n~~~"), "## One\n\n~~~md\n# Hidden\n~~~");
         assert.ok(!renderMarkdownToc(["## Same\n\n~~~md\n## Hidden\n~~~"], "AGENTS").includes("Hidden"));
-        const toml = parseToml(output(first, "codex/agents/explorer.toml"));
+        const tomlText = output(first, "codex/agents/explorer.toml");
+        assert.ok(tomlText.includes("developer_instructions = \"\"\"\nRead evidence.\n\"\"\""));
+        const toml = parseToml(tomlText);
         assert.ok(String(toml.developer_instructions).includes("Read evidence.\n"));
+        assert.equal(toml.temperature, 0.25);
+        assert.deepEqual(toml.tags, ["audit", "safe"]);
+        assert.deepEqual(toml.limits, { requests: 3 });
         const yaml = parseYaml(output(first, "cursor/agents/explorer.md").split("---\n")[1] ?? "");
         assert.equal(yaml.readonly, true);
+        assert.equal(yaml.custom_number, 42);
+        assert.deepEqual(yaml.capabilities, { review: true });
         for (const content of first.values())
         {
             assert.ok(!content.includes(0x0d));
@@ -182,6 +268,48 @@ test("setup deploys generated harness content into existing roots and shared rul
         assert.deepEqual(await snapshot(join(userProfile, ".config", "opencode")), await snapshot(join(root, ".halign", "generated", "opencode")));
         assert.deepEqual(await snapshot(join(userProfile, ".agents", "shared-rules")), await snapshot(join(root, ".halign", "rules", "shared")));
         await assert.rejects(readFile(join(userProfile, ".cursor", "AGENTS.md")));
+    });
+});
+
+test("setup follows configurable harness names, formats, extensions, and deployment paths", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const customConfig = {
+            ...config,
+            harnesses: [{ name: "atlas", config_path: ".tools/atlas", agent_format: "yaml", agent_extension: "agent" }],
+        };
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify(customConfig), "utf8");
+        const agent = [
+            "---",
+            "name: explorer",
+            "description: Read only.",
+            "harnesses:",
+            "  atlas:",
+            "    arbitrary_flag: true",
+            "    nested:",
+            "      retries: 3",
+            "---",
+            "",
+            "Read custom evidence.",
+            "",
+        ].join("\n");
+        await writeFile(join(root, ".halign", "agents", "explorer.md"), agent, "utf8");
+        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+
+        const userProfile = join(root, "isolated-userprofile");
+        const targetRoot = join(userProfile, ".tools", "atlas");
+        await mkdir(join(targetRoot, "agents"), { recursive: true });
+
+        await setup(root, undefined, userProfile);
+
+        assert.deepEqual(await snapshot(targetRoot), await snapshot(join(root, ".halign", "generated", "atlas")));
+        const generatedAgent = await readFile(join(targetRoot, "agents", "explorer.agent"), "utf8");
+        const metadata = parseYaml(generatedAgent.split("---\n")[1] ?? "");
+        assert.equal(metadata.arbitrary_flag, true);
+        assert.deepEqual(metadata.nested, { retries: 3 });
+        await assert.rejects(readFile(join(userProfile, ".codex", "AGENTS.md")));
     });
 });
 

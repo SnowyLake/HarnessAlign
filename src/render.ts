@@ -6,17 +6,19 @@ Markdown 状态机与确定性渲染:
 */
 
 import { stringify as stringifyYaml } from "yaml";
+import { stringify as stringifyToml } from "smol-toml";
 import {
-    AGENT_METADATA,
     ATX_HEADING,
     type Agent,
     FENCE,
     type Harness,
+    type HarnessConfig,
+    HalignError,
     MARKER,
     type Metadata,
     type Rule,
     codePointCompare,
-    hasOwn,
+    errorText,
 } from "./model.js";
 
 function fenceState(line: string, character: string, length: number): [string, number]
@@ -137,26 +139,42 @@ function jsonString(value: unknown): string
     return JSON.stringify(value);
 }
 
-export function renderCodexAgent(agent: Agent, metadata: Metadata): Buffer
+function renderTomlAgent(agent: Agent, harness: HarnessConfig, metadata: Metadata): Buffer
 {
-    const fields: Metadata = { name: agent.name, description: agent.description };
-    for (const field of AGENT_METADATA.codex)
+    const instructionsField = harness.instructionsField;
+    if (instructionsField === undefined)
     {
-        if (hasOwn(metadata, field)) fields[field] = metadata[field];
+        throw new HalignError(`${agent.path}: ${harness.name} TOML output requires instructions_field`);
     }
+    const placeholder = "__HALIGN_MARKDOWN_BODY__";
+    const values: Metadata = { name: agent.name, description: agent.description, ...metadata, [instructionsField]: placeholder };
+    let content: string;
+    let assignment: string;
+    try
+    {
+        content = stringifyToml(values);
+        assignment = stringifyToml({ [instructionsField]: placeholder }).trimEnd();
+    }
+    catch (error)
+    {
+        throw new HalignError(`${agent.path}: ${harness.name} metadata cannot be serialized as TOML: ${errorText(error)}`);
+    }
+    const assignmentLine = `${assignment}\n`;
+    if (!content.includes(assignmentLine)) throw new HalignError(`${agent.path}: ${harness.name} instructions field could not be rendered`);
     const body = agent.body.split("\n").map((line) => jsonString(line).slice(1, -1)).join("\n");
-    let content = "";
-    for (const [field, value] of Object.entries(fields)) content += `${field} = ${jsonString(value)}\n`;
-    return Buffer.from(`${content}developer_instructions = """\n${body}"""\n`, "utf8");
+    const key = assignment.slice(0, assignment.indexOf(" = "));
+    return Buffer.from(content.replace(assignmentLine, `${key} = """\n${body}"""\n`), "utf8");
 }
 
-export function renderYamlAgent(agent: Agent, harness: Exclude<Harness, "codex">, metadata: Metadata): Buffer
+function renderYamlAgent(agent: Agent, metadata: Metadata): Buffer
 {
-    const order = harness === "cursor"
-        ? ["name", "description", "model", "readonly"]
-        : ["name", "description", "mode", "model", "variant", "permission"];
     const values: Metadata = { name: agent.name, description: agent.description, ...metadata };
-    const ordered: Metadata = {};
-    for (const field of order) if (hasOwn(values, field)) ordered[field] = values[field];
-    return Buffer.from(`---\n${stringifyYaml(ordered, { lineWidth: 0, sortMapEntries: false })}---\n\n${agent.body}`, "utf8");
+    return Buffer.from(`---\n${stringifyYaml(values, { lineWidth: 0, sortMapEntries: false })}---\n\n${agent.body}`, "utf8");
+}
+
+export function renderAgent(agent: Agent, harness: HarnessConfig, metadata: Metadata): Buffer
+{
+    return harness.agentFormat === "toml"
+        ? renderTomlAgent(agent, harness, metadata)
+        : renderYamlAgent(agent, metadata);
 }
