@@ -1,17 +1,16 @@
-/*
-setup 部署边界:
-
-- deployment root 与 project root 是不同的信任边界.
-- 预检必须在任何删除前完成. 缺失的 Harness 根目录被明确跳过.
-*/
+/**
+ * Deploy generated harness files into existing USERPROFILE roots and shared-rules.
+ * Missing harness roots are skipped. Preflight every target before any delete.
+ */
 
 import { promises as fs } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { atomicWrite, lstatIfExists } from "./fs-safe.js";
-import { generate } from "./generate.js";
-import { loadConfig } from "./load.js";
-import { type Harness, type OutputMap, codePointCompare, HalignError, valueText } from "./model.js";
+import { atomicWrite, lstatIfExists } from "./FsSafe.js";
+import { generate } from "./Generate.js";
+import { loadConfig } from "./Load.js";
+import { type Harness, type OutputMap, codePointCompare, HalignError, valueText } from "./Model.js";
 
+/** Resolve `path` and throw if it escapes `root`. */
 function assertContainedWithin(root: string, path: string, label: string): string
 {
     const rootFull = resolve(root);
@@ -24,11 +23,13 @@ function assertContainedWithin(root: string, path: string, label: string): strin
     return pathFull;
 }
 
+/** Build the domain error used when a deploy target is a reparse point. */
 function deploymentReparseError(label: string, path: string): HalignError
 {
     return new HalignError(`${label}: reparse points are not allowed: ${path}`);
 }
 
+/** Walk every path prefix under `root` and reject reparse points. */
 async function assertNoReparseComponents(root: string, path: string, label: string): Promise<string>
 {
     const rootFull = resolve(root);
@@ -47,6 +48,7 @@ async function assertNoReparseComponents(root: string, path: string, label: stri
     return pathFull;
 }
 
+/** Require an existing regular directory. */
 async function assertRegularDirectory(path: string, label: string): Promise<void>
 {
     const stats = await lstatIfExists(path);
@@ -55,6 +57,7 @@ async function assertRegularDirectory(path: string, label: string): Promise<void
     if (!stats.isDirectory()) throw new HalignError(`${label}: expected a directory: ${path}`);
 }
 
+/** Require an existing regular file. */
 async function assertRegularFile(path: string, label: string): Promise<void>
 {
     const stats = await lstatIfExists(path);
@@ -63,6 +66,7 @@ async function assertRegularFile(path: string, label: string): Promise<void>
     if (!stats.isFile()) throw new HalignError(`${label}: expected a file: ${path}`);
 }
 
+/** Require a regular file when the path exists. */
 async function assertRegularFileIfPresent(path: string, label: string): Promise<void>
 {
     const stats = await lstatIfExists(path);
@@ -71,6 +75,7 @@ async function assertRegularFileIfPresent(path: string, label: string): Promise<
     if (!stats.isFile()) throw new HalignError(`${label}: expected a file: ${path}`);
 }
 
+/** Recursively reject reparse points under a deploy directory. */
 async function assertNoReparseTree(path: string, label: string): Promise<void>
 {
     const stats = await lstatIfExists(path);
@@ -84,6 +89,7 @@ async function assertNoReparseTree(path: string, label: string): Promise<void>
     }
 }
 
+/** Delete a deploy directory after containment and reparse checks. */
 async function removeDeploymentDirectory(userProfile: string, path: string, label: string): Promise<void>
 {
     const target = await assertNoReparseComponents(userProfile, path, label);
@@ -94,6 +100,7 @@ async function removeDeploymentDirectory(userProfile: string, path: string, labe
     await fs.rm(target, { recursive: true, force: true });
 }
 
+/** Resolved source and target paths for one harness deploy. */
 interface SetupInstallation
 {
     harness: Harness;
@@ -103,6 +110,7 @@ interface SetupInstallation
     targetRules: string;
 }
 
+/** Per-harness deploy result used in the setup report. */
 export interface SetupTargetReport
 {
     harness: Harness;
@@ -111,6 +119,7 @@ export interface SetupTargetReport
     files: string[];
 }
 
+/** Outcome of generating and deploying into existing harness roots. */
 export interface SetupResult
 {
     outputs: OutputMap;
@@ -119,6 +128,7 @@ export interface SetupResult
     sharedRules: { target: string; files: string[] };
 }
 
+/** List files under a directory as `/`-separated relative paths. */
 async function listRelativeFiles(directory: string): Promise<string[]>
 {
     const files: string[] = [];
@@ -137,6 +147,7 @@ async function listRelativeFiles(directory: string): Promise<string[]>
     return files;
 }
 
+/** Format the setup success report for CLI and the desktop log. */
 export function reportSetup(result: SetupResult): string
 {
     const files = [...result.outputs.keys()];
@@ -160,6 +171,7 @@ export function reportSetup(result: SetupResult): string
     return `${lines.join("\n")}\n`;
 }
 
+/** Generate then deploy into existing USERPROFILE harness roots and shared-rules. */
 export async function setup(rootPath: string, profile?: string, userProfile = process.env.USERPROFILE): Promise<SetupResult>
 {
     const root = resolve(rootPath);

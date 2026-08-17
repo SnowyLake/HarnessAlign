@@ -1,6 +1,12 @@
 node_modules/
 dist/
+out/
+release/
+package-lock.json
+npm-shrinkwrap.json
+yarn.lock
 coverage/
+*.tsbuildinfo
 *.log
 .env
 .env.*

@@ -1,3 +1,8 @@
+/**
+ * Engine tests against temporary directories.
+ * Do not use this repository as a `.halign` config root, and do not open Electron windows here.
+ */
+
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -5,7 +10,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { atomicWrite, buildOutputs, check, downgradeMarkdownHeadings, generate, HalignError, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, setup } from "../src/halign.js";
+import { atomicWrite, addHarness, addProfile, buildOutputs, check, deleteSource, downgradeMarkdownHeadings, generate, HalignError, loadConfig, loadWorkspace, removeHarness, removeProfile, renameHarness, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, saveAgent, saveConfig, saveRule, saveSharedRule, setup } from "../src/engine/Halign.js";
 
 const config = {
     version: 2,
@@ -19,6 +24,7 @@ const config = {
     ],
 };
 
+/** Create a temporary `.halign` project, run the case, then delete the directory. */
 async function withProject(run: (root: string) => Promise<void>): Promise<void>
 {
     const root = await mkdtemp(join(tmpdir(), "halign-ts-"));
@@ -39,12 +45,14 @@ async function withProject(run: (root: string) => Promise<void>): Promise<void>
     }
 }
 
+/** Write a root rule markdown file under `.halign/rules`. */
 async function writeRule(root: string, name: string, priority: number, body: string, targets?: string[]): Promise<void>
 {
     const targetLines = targets ? "targets:\n" + targets.map((target) => "  - " + target + "\n").join("") : "";
     await writeFile(join(root, ".halign", "rules", name), "---\npriority: " + priority + "\n" + targetLines + "---\n\n" + body + "\n", "utf8");
 }
 
+/** Write a sample subagent with per-harness metadata. */
 async function writeAgent(root: string, name = "explorer"): Promise<void>
 {
     const content = [
@@ -83,6 +91,7 @@ async function writeAgent(root: string, name = "explorer"): Promise<void>
     await writeFile(join(root, ".halign", "agents", name + ".md"), content, "utf8");
 }
 
+/** Decode one generated path from an output map. */
 function output(outputs: Map<string, Buffer>, path: string): string
 {
     const content = outputs.get(path);
@@ -90,9 +99,11 @@ function output(outputs: Map<string, Buffer>, path: string): string
     return content.toString("utf8");
 }
 
+/** Recursively read every file under `root` as `/`-separated relative paths. */
 async function snapshot(root: string): Promise<Map<string, Buffer>>
 {
     const files = new Map<string, Buffer>();
+    /** Walk one directory and record regular files. */
     const visit = async (directory: string, prefix: string): Promise<void> =>
     {
         for (const entry of await readdir(directory, { withFileTypes: true }))
@@ -360,5 +371,68 @@ test("generate and setup reports list written files and destination directories"
         assert.ok(setupLog.includes(`Skipped opencode; target does not exist: ${join(userProfile, ".config", "opencode")}`));
         assert.ok(setupLog.includes(`Updated shared rules at ${join(userProfile, ".agents", "shared-rules")}`));
         assert.ok(setupLog.includes("  shared.md"));
+    });
+});
+
+test("edit writes validated sources, cascades harness rename, and rejects path escape", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const loaded = await loadConfig(root);
+        await saveConfig(root, { ...loaded, name: "Aligned" });
+        const written = JSON.parse(await readFile(join(root, ".halign", "config.json"), "utf8")) as { default_profile: string; name: string };
+        assert.equal(written.name, "Aligned");
+        assert.equal(written.default_profile, "arona");
+        const before = await readFile(join(root, ".halign", "config.json"), "utf8");
+        await assert.rejects(saveConfig(root, {
+            ...loaded,
+            name: "Aligned",
+            harnesses: [
+                { name: "a", configPath: ".tools", agentFormat: "yaml", agentExtension: "md" },
+                { name: "b", configPath: ".tools/nested", agentFormat: "yaml", agentExtension: "md" },
+            ],
+        }), /must not overlap/u);
+        assert.equal(await readFile(join(root, ".halign", "config.json"), "utf8"), before);
+
+        await saveRule(root, { path: ".halign/rules/cursor.md", priority: 1, targets: ["cursor"], body: "# Cursor\n\ncursor only" });
+        await saveRule(root, { path: ".halign/domains/kei/rules/soul.md", priority: 3, body: "# Soul\n\nkei soul" });
+        await saveSharedRule(root, ".halign/rules/shared/shared.md", "shared rule");
+        await addProfile(root, "sora");
+        await readdir(join(root, ".halign", "domains", "sora", "rules"));
+        await assert.rejects(removeProfile(root, "arona"), /default_profile cannot be removed/u);
+        await removeProfile(root, "sora");
+        await assert.rejects(readdir(join(root, ".halign", "domains", "sora")));
+
+        await renameHarness(root, "cursor", "atlas");
+        const renamed = await loadWorkspace(root);
+        assert.ok(renamed.config.harnesses.some((harness) => harness.name === "atlas"));
+        assert.ok(!renamed.config.harnesses.some((harness) => harness.name === "cursor"));
+        assert.deepEqual(renamed.rootRules.find((rule) => rule.path === ".halign/rules/cursor.md")?.targets, ["atlas"]);
+        assert.ok(renamed.agents[0]?.harnesses.atlas);
+        assert.equal(renamed.agents[0]?.harnesses.cursor, undefined);
+        assert.equal(renamed.sharedRules[0]?.body, "shared rule\n");
+
+        await addHarness(root, { name: "nova", configPath: ".nova", agentFormat: "yaml", agentExtension: "md" });
+        await saveAgent(root, {
+            path: ".halign/agents/explorer.md",
+            name: "explorer",
+            description: "Read only.",
+            harnesses: {
+                ...renamed.agents[0]!.harnesses,
+                nova: { model: "test-nova" },
+            },
+            body: "Read evidence.",
+        });
+        await removeHarness(root, "nova");
+        const afterRemove = await loadWorkspace(root);
+        assert.ok(!afterRemove.config.harnesses.some((harness) => harness.name === "nova"));
+        assert.equal(afterRemove.agents[0]?.harnesses.nova, undefined);
+
+        await deleteSource(root, ".halign/rules/cursor.md");
+        await assert.rejects(saveRule(root, { path: ".halign/rules/../escape.md", priority: 1, body: "no" }), /must stay inside \.halign/u);
+        await assert.rejects(saveRule(root, { path: ".halign/generated/x.md", priority: 1, body: "no" }), /managed \.halign sources/u);
+        await assert.rejects(saveSharedRule(root, ".halign/rules/base.md", "no"), /must stay under \.halign\/rules\/shared/u);
+        await assert.rejects(deleteSource(root, ".halign/config.json"), /cannot be deleted/u);
+        assert.equal((await loadConfig(root)).name, "Aligned");
     });
 });

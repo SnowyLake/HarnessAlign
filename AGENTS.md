@@ -14,28 +14,38 @@
 
 ## 项目边界
 
-- 本仓库实现独立的 `halign` TypeScript CLI, 不保存用户的 `.halign` 配置源.
-- CLI 必须以调用者的当前工作目录作为配置根目录. 不得把工具安装目录或源码目录当作配置根目录.
-- 行为验证以 `tests/` 中的临时目录用例为准, 不依赖仓库外任何配置或路径.
+- 本仓库实现 `halign` CLI 引擎, 以及可选的 Electron 桌面管理壳. 不保存用户的 `.halign` 配置源.
+- CLI 必须以调用者的当前工作目录作为配置根目录. 桌面壳必须让用户选择配置根目录. 不得把工具安装目录或源码目录当作配置根目录.
+- 行为验证以 `tests/` 中的临时目录用例为准, 不依赖仓库外任何配置或路径. 不把 Electron 窗口测进 Node test runner.
 - 只实现配置声明的 Harness 以及 `toml` / `yaml` 两种 Subagent 格式. 不为插件, 模板, renderer registry 或未声明的 Harness 预留抽象.
+- 桌面壳遵循 Main / Preload / Renderer / Shared 边界. Renderer 不得访问 Node, Electron API 或文件系统.
 
 ## 目录职责
 
-- `src/` 按数据流拆分生产实现, 不拆分 package, 不创建单实现抽象或 renderer registry:
-  - `model.ts` — 领域类型, 常量, `HalignError`, 收窄 helper
-  - `fs-safe.ts` — 路径 containment, reparse 拒绝, UTF-8 读, 原子写入
-  - `load.ts` — 配置 / Rule / Agent 发现与验证
-  - `render.ts` — Markdown 标题降级, TOC, 按 Harness 配置渲染 TOML / YAML Subagent
-  - `generate.ts` — `buildOutputs`, manifest, `generate`, `check`
-  - `setup.ts` — 部署到已存在的用户 Harness 根目录
-  - `halign.ts` — ESM CLI 入口, 并对测试 re-export 公开 API
-- `tests/halign.test.ts` 是唯一测试源文件, 使用 Node 内置 `node:test` 覆盖解析, 渲染, 生成, 检查, 部署和路径安全.
-- `dist/` 是 `tsc` 生成的 JavaScript 输出, 镜像 `src/` 与 `tests/`. CLI 入口仍是 `dist/src/halign.js`. 不得手工编辑.
-- `node_modules/` 保存本地依赖, 由 npm 根据 `package-lock.json` 管理. 不得手工编辑或提交其内部文件.
-- `package.json` 定义 ESM package, Node 版本, `halign` 可执行入口, scripts 和直接依赖.
-- `package-lock.json` 锁定完整依赖树. 依赖变化时使用 npm 更新, 不手工拼改.
-- `tsconfig.json` 使用 `NodeNext`, `ES2023` 和严格类型检查, 将 `src/` 与 `tests/` 编译到 `dist/`.
-- `README.md` 面向使用者说明安装, 命令, 运行原理和开发验证.
+- `src/engine/` 是唯一生产引擎, 按数据流拆分, 不拆分 package, 不创建 renderer registry:
+  - `Model.ts` — 领域类型, 常量, `HalignError`, 收窄 helper
+  - `FsSafe.ts` — 路径 containment, reparse 拒绝, UTF-8 读, 原子写入
+  - `Load.ts` — 配置 / Rule / Agent / shared-rules 发现与验证
+  - `Render.ts` — Markdown 标题降级, TOC, 按 Harness 配置渲染 TOML / YAML Subagent
+  - `Generate.ts` — `buildOutputs`, manifest, `generate`, `check`
+  - `Setup.ts` — 部署到已存在的用户 Harness 根目录
+  - `Edit.ts` — 校验后写回 `.halign` 源文件; CLI 不调用, 供桌面壳与测试使用
+  - `Halign.ts` — ESM CLI 入口, 并对测试 re-export 公开 API
+- `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, SettingsService, WorkspaceService.
+- `src/preload/` 只把 typed `window.appApi` 暴露给 Renderer, 不含业务逻辑.
+- `src/renderer/` 是 React UI. `components/ui` 是通用 primitive, `features/` 保存业务界面.
+- `src/shared/` 只保存可同时被 Main, Preload 和 Renderer 导入的契约, 模型和 schema. 不得导入 Electron, Node 副作用, DOM 或 React.
+- `tests/Halign.test.ts` 是唯一测试源文件, 使用 Node 内置 `node:test` 覆盖解析, 渲染, 生成, 检查, 部署, 源文件写回和路径安全.
+- `dist/` 是引擎 `tsc` 输出. CLI 入口是 `dist/src/engine/Halign.js`. 不得手工编辑.
+- `out/` 是 `electron-vite` 输出. 不得手工编辑.
+- `node_modules/` 保存本地依赖, 由 pnpm 根据 `pnpm-lock.yaml` 管理. 不得手工编辑或提交其内部文件.
+- `package.json` 定义 ESM package, Node 版本, `packageManager`, `halign` 可执行入口, scripts 和依赖.
+- `pnpm-lock.yaml` 锁定完整依赖树. 依赖变化时使用 pnpm 更新, 不手工拼改. 禁止生成或提交 `package-lock.json`.
+- `.npmrc` 固定 pnpm 为唯一包管理器, 并启用 `engine-strict`.
+- `electron.vite.config.ts` 构建 Main, Preload 和 Renderer.
+- `electron-builder.yml` 定义 Windows NSIS 打包.
+- `tsconfig.engine.json` 编译 CLI 引擎和测试. `tsconfig.node.json` 检查 Main/Preload. `tsconfig.web.json` 检查 Renderer.
+- `README.md` 面向使用者说明安装, 命令, 桌面壳, 运行原理和开发验证.
 - `AGENTS.md` 是本仓库的开发约束, 不属于 HALIGN 生成结果.
 
 ## 命令契约
@@ -43,20 +53,24 @@
 - `halign generate [--profile <profile>]` 验证配置并更新当前目录下的 `.halign/generated/`, 成功时列出写入的文件和生成目录.
 - `halign check [--profile <profile>]` 比较期望输出与 `.halign/generated/`, 一致时输出成功摘要并返回 `0`, 存在差异时列出差异并返回 `1`.
 - `halign setup [--profile <profile>]` 先生成, 再把结果部署到当前用户已经存在的 Harness 根目录, 成功时列出生成文件, 已更新或跳过的 Harness 目录, 以及 `shared-rules` 目标.
+- `pnpm dev` 启动 Electron 开发窗口. 窗口打开用户选择的配置根目录, 可视化管理 config / harness / profile / rule / agent / shared-rules, 并调用同一套 `generate` / `check` / `setup`.
 - 无效命令或参数输出 usage 并返回 `2`. 领域错误输出到 stderr 并返回 `1`.
-- `package.json` 的 `bin.halign` 必须指向 `dist/src/halign.js`. 修改入口路径后必须重新执行 `npm link`.
-- ESM 入口判断必须先解析 `npm link` 产生的真实路径, 避免目录联接导致 `main()` 未执行.
+- `package.json` 的 `bin.halign` 必须指向 `dist/src/engine/Halign.js`. 修改入口路径后必须重新执行 `pnpm link --global`.
+- ESM 入口判断必须先解析 `pnpm link --global` 产生的真实路径, 避免目录联接导致 `main()` 未执行.
+- Renderer 只调用 `window.appApi`. 禁止向 Renderer 暴露通用 `ipcRenderer`.
 
 ## 实现约束
 
-- 支持 Node 24, 当前 `engines` 范围是 `>=24 <25`.
-- Runtime 仅使用 `yaml` 和 `smol-toml`. `typescript` 和 `@types/node` 仅用于开发或测试.
+- 支持 Node 24 与 pnpm 10. 当前 `engines` 范围是 Node `>=24 <25`, pnpm `>=10 <11`.
+- CLI runtime 仅使用 `yaml` 和 `smol-toml`. 桌面壳依赖 React, Tailwind, shadcn/Base UI, electron-vite 和 Zod, 不进入 CLI 运行时最小依赖.
 - 优先复用现有函数和数据流. 不创建 renderer registry, dependency injection, 通用模板系统或单实现接口.
-- 输入必须先完整验证, 再修改 `.halign/generated/` 或用户部署目录.
+- 输入必须先完整验证, 再修改 `.halign` 源文件, `.halign/generated/` 或用户部署目录.
 - 保持 UTF-8 without BOM, LF 和确定性排序.
 - 保持 symbolic link, junction, 路径逃逸, manifest 管理范围和单文件原子写入安全检查.
 - 错误信息必须包含足以定位问题的文件路径, 字段, 实际值和期望约束.
-- CLI 输出只放在 `main()` 边界. 可复用领域函数通过返回值或异常表达结果, 不直接写终端.
+- CLI 输出只放在 `main()` 边界. 可复用领域函数通过返回值或异常表达结果, 不直接写终端. 桌面壳把同一份结果字符串显示在窗口日志区.
+- BrowserWindow 默认 `nodeIntegration: false`, `contextIsolation: true`, `sandbox: true`, `webSecurity: true`.
+- 来自 Renderer 的路径, URL 和配置必须在 Main 中校验. IPC handler 必须验证 sender.
 
 ## 生成规则
 
@@ -70,41 +84,48 @@
 - TOML Harness 的 `instructions_field` 使用多行字符串保存共享正文, 不得将正文换行写成字面量 `\n`, 也不允许 metadata 重复声明该字段.
 - 只删除旧 manifest 记录且本次不再生成的文件. 不删除 manifest 未管理的文件.
 - 所有新文件写入与 stale 删除成功后, 才写入新的 manifest.
+- 写回 `.halign` 源文件必须经 `src/engine/Edit.ts` 先校验再原子写入. 重命名 Harness 时级联更新 Rule `targets` 和 Agent `harnesses` 键.
 
 ## 修改流程
 
-1. 阅读目标文件及其所有调用点, 确认真实数据流, CLI 边界和失败边界.
+1. 阅读目标文件及其所有调用点, 确认真实数据流, CLI 边界, IPC 契约和失败边界.
 2. 实施满足需求的最小改动, 不做无关重构.
-3. 为新增分支, 解析规则或安全行为在 `tests/halign.test.ts` 补充一个最小可运行测试.
-4. 运行 `npm run verify`.
-5. 重新注册或修改 CLI 入口时运行 `npm link`.
+3. 为新增分支, 解析规则或安全行为在 `tests/Halign.test.ts` 补充一个最小可运行测试.
+4. 新增 privileged capability 时同步更新 `src/shared` 契约, Main handler, Preload API 和 Renderer 调用.
+5. 运行 `pnpm verify` 和 `pnpm build`.
+6. 重新注册或修改 CLI 入口时运行 `pnpm link --global`.
 
 ## 验证命令
 
 ```powershell
-npm ci
-npm run verify
-npm link
+pnpm install
+pnpm verify
+pnpm build
+pnpm link --global
+pnpm dev
 ```
 
-- `npm run verify` 等价于先执行 `npm run typecheck`, 再执行 `npm test`.
-- `npm test` 会先构建, 再使用 `node --test` 运行 `dist/tests/halign.test.js`.
-- 本仓库根目录不包含 `.halign`, 不得用 npm script 包装 `generate`, `check` 或 `setup`; 这些命令的行为由 `tests/` 用临时目录覆盖.
+- `pnpm verify` 等价于先执行 `pnpm typecheck`, 再执行 `pnpm test`.
+- `pnpm typecheck` 检查引擎, Main/Preload 和 Renderer.
+- `pnpm test` 会先编译引擎, 再使用 `node --test` 运行 `dist/tests/Halign.test.js`.
+- `pnpm build` 使用 electron-vite 构建桌面壳. `pnpm build:win` 再打 NSIS 安装包.
+- 本仓库根目录不包含 `.halign`, 不得用 package script 包装 `generate`, `check` 或 `setup`; 这些命令的行为由 `tests/` 用临时目录覆盖.
 - Windows sandbox 可能阻止 Node test runner 创建子进程. 发生真实权限错误时在获得权限后复跑, 不修改测试绕过边界.
 
 ## 部署安全
 
 - `generate` 只更新调用目录中的 `.halign/generated/`.
-- `setup` 只更新配置中声明且根目录已经存在的 Harness. 不因部署而创建缺失的 Harness 根目录.
+- `setup` 只更新配置中声明且根目录已经存在的 Harness. 不因部署而创建缺失的 Harness 根目录. 桌面壳的 Setup 按钮遵守同一规则.
 - 对已启用 Harness, `setup` 替换其 `agents` 目录并更新根 `AGENTS.md`.
 - `setup` 还会更新 `%USERPROFILE%\.agents\shared-rules`.
 - 部署前必须验证解析后的目标位于 `USERPROFILE` 或项目生成目录内, 并拒绝既有 symlink 或 junction.
 - `setup` 相关验证只使用测试构造的临时 `USERPROFILE`, 不触碰开发机上的真实用户目录.
 - 不递归删除含有 reparse point 的部署目标.
+- 桌面壳把 theme 和上次配置根路径记在 Electron `userData`, 不写进本仓库.
 
 ## 语言与文档
 
-- 代码使用英文. TypeScript 教学注释使用中文, 面向熟练 C++ 或 C# 但初次接触 TypeScript 的高级开发者, 重点解释类型系统, ESM, Node API, 不变量和失败边界.
-- 注释不逐行复述语法, 但不得省略 TypeScript 与 C++ 或 C# 行为不同且容易误解的关键点.
+- 代码使用英文, 包括注释和 TSDoc.
+- TypeScript 注释遵循共享规则 `typescript.md` 的注释与布局: 文件头说明职责和关键约束, 具名声明使用一句英文 TSDoc, 不写教学向中文注释.
 - Markdown 保持一个一级标题, 完整 TOC 和连续标题层级.
 - 路径, 命令, 类型名, 字段名和文件名使用反引号.

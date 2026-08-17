@@ -1,14 +1,12 @@
-/*
-不可信源文件发现, 解析与 schema 验证:
-
-- 目录遍历每进入一层都重新检查 source 边界.
-- JSON/YAML parser 结果先经 `isRecord()` 与字段级检查, 才成为领域对象.
-*/
+/**
+ * Discover and validate untrusted `.halign` sources.
+ * Re-check containment on every directory step, and promote parser output to domain types only after field checks.
+ */
 
 import { promises as fs } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { display, ensureRegularSource, lstatIfExists, readUtf8, reparseError } from "./fs-safe.js";
+import { display, ensureRegularSource, lstatIfExists, readUtf8, reparseError } from "./FsSafe.js";
 import {
     AGENT_EXTENSION,
     AGENT_FIELDS,
@@ -31,8 +29,9 @@ import {
     normalizedBody,
     typeText,
     valueText,
-} from "./model.js";
+} from "./Model.js";
 
+/** List markdown files under `directory`, optionally recursing while skipping excluded names. */
 async function markdownFiles(
     root: string,
     directory: string,
@@ -96,6 +95,7 @@ async function markdownFiles(
     return files;
 }
 
+/** Split a rule or agent file into YAML frontmatter and a non-empty markdown body. */
 async function parseFrontmatter(root: string, path: string): Promise<[Record<string, unknown>, string]>
 {
     const text = await readUtf8(root, path);
@@ -125,6 +125,7 @@ async function parseFrontmatter(root: string, path: string): Promise<[Record<str
     return [metadata, body];
 }
 
+/** Require a non-empty unique string array. */
 function stringArray(value: unknown, path: string, field: string): string[]
 {
     if (!Array.isArray(value) || value.length === 0 || !value.every((item) => typeof item === "string" && item.length > 0))
@@ -138,6 +139,7 @@ function stringArray(value: unknown, path: string, field: string): string[]
     return value;
 }
 
+/** Require a normalized `/`-separated relative path with no `.` or `..` segments. */
 function relativeConfigPath(value: unknown, path: string, field: string): string
 {
     const configPath = validateString(path, field, value);
@@ -150,6 +152,7 @@ function relativeConfigPath(value: unknown, path: string, field: string): string
     return configPath;
 }
 
+/** Validate one harness object from `config.json`. */
 function validateHarnessConfig(value: unknown, path: string, index: number): HarnessConfig
 {
     const context = `${path}: harnesses[${index}]`;
@@ -194,7 +197,7 @@ function validateHarnessConfig(value: unknown, path: string, index: number): Har
         : { name, configPath, agentFormat, agentExtension, instructionsField };
 }
 
-// `exactOptionalPropertyTypes` 区分字段缺失与字段存在但值为 `undefined`.
+/** Validate a parsed config.json value into a Config. */
 export function validateConfig(value: unknown): Config
 {
     const path = ".halign/config.json";
@@ -271,6 +274,7 @@ export function validateConfig(value: unknown): Config
     return { version: 2, name, defaultProfile: value.default_profile, profiles, harnesses };
 }
 
+/** Read and validate `.halign/config.json`. */
 export async function loadConfig(root: string): Promise<Config>
 {
     const path = join(root, ".halign", "config.json");
@@ -292,6 +296,7 @@ export async function loadConfig(root: string): Promise<Config>
     return validateConfig(parsed);
 }
 
+/** Load root and selected-profile rules, filtered later by harness targets. */
 export async function loadRules(root: string, profile: string, harnesses: HarnessConfig[]): Promise<Rule[]>
 {
     const halign = join(root, ".halign");
@@ -343,6 +348,7 @@ export async function loadRules(root: string, profile: string, harnesses: Harnes
     return rules;
 }
 
+/** Require a non-empty string field. */
 function validateString(path: string, field: string, value: unknown): string
 {
     if (typeof value !== "string" || !value.trim())
@@ -352,6 +358,7 @@ function validateString(path: string, field: string, value: unknown): string
     return value;
 }
 
+/** Load subagent sources and validate harness metadata blocks. */
 export async function loadAgents(root: string, configuredHarnesses: HarnessConfig[]): Promise<Agent[]>
 {
     const paths = await markdownFiles(root, join(root, ".halign", "agents"), false);
@@ -407,4 +414,26 @@ export async function loadAgents(root: string, configuredHarnesses: HarnessConfi
         agents.push({ path, name, description, harnesses: rendered, body: normalizedBody(body) });
     }
     return agents;
+}
+
+/** Shared-rule markdown deployed independently of generated AGENTS.md. */
+export interface SharedRule
+{
+    path: string;
+    body: string;
+}
+
+/** Load `.halign/rules/shared` markdown files. */
+export async function loadSharedRules(root: string): Promise<SharedRule[]>
+{
+    const paths = await markdownFiles(root, join(root, ".halign", "rules", "shared"), true);
+    const rules: SharedRule[] = [];
+    for (const sourcePath of paths)
+    {
+        rules.push({
+            path: display(root, sourcePath),
+            body: (await readUtf8(root, sourcePath)).replace(/\r\n?/gu, "\n"),
+        });
+    }
+    return rules;
 }

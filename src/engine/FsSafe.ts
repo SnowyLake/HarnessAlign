@@ -1,15 +1,20 @@
-/*
-路径与文件系统安全边界:
-
-- 路径安全不能用 `path.startsWith(root)`. `relative()` 之后检查 `..` 和绝对结果.
-- `lstat` 读取链接本身. Windows junction/reparse point 和 symbolic link 都必须在访问前看到这一层.
-*/
+/**
+ * Path containment and reparse-point guards for source, generated, and deploy writes.
+ * Do not use `path.startsWith(root)`; check `relative()` for `..` and absolute results, and `lstat` the link itself.
+ */
 
 import { randomUUID } from "node:crypto";
 import { promises as fs, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { errorText, HalignError } from "./model.js";
+import { errorText, HalignError } from "./Model.js";
 
+/** Return whether a thrown value looks like a Node errno exception. */
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException
+{
+    return typeof error === "object" && error !== null && "code" in error;
+}
+
+/** Return a project-relative display path, or the original path if it escapes the root. */
 export function display(root: string, path: string): string
 {
     const pathRelative = relative(root, path);
@@ -18,6 +23,7 @@ export function display(root: string, path: string): string
         : path;
 }
 
+/** Throw if `path` is outside `root`. */
 export function assertContained(root: string, path: string, label: string): void
 {
     const pathRelative = relative(root, path);
@@ -27,7 +33,7 @@ export function assertContained(root: string, path: string, label: string): void
     }
 }
 
-// 只有 ENOENT 被建模为 `undefined`. 其他 I/O 错误继续 rejected.
+/** `lstat` a path, returning `undefined` when it does not exist. */
 export async function lstatIfExists(path: string): Promise<Stats | undefined>
 {
     try
@@ -36,18 +42,20 @@ export async function lstatIfExists(path: string): Promise<Stats | undefined>
     }
     catch (error)
     {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        if (isErrnoException(error) && error.code === "ENOENT") return undefined;
         throw error;
     }
 }
 
-export function reparseError(root: string, path: string, output: boolean): HalignError
+/** Build the domain error used when a symlink or junction is found. */
+export function reparseError(root: string, path: string, isOutput: boolean): HalignError
 {
     return new HalignError(
-        `${display(root, path)}: symbolic link ${output ? "outputs" : "sources"} are not allowed`,
+        `${display(root, path)}: symbolic link ${isOutput ? "outputs" : "sources"} are not allowed`,
     );
 }
 
+/** Walk every prefix of `path` and reject reparse points. */
 export async function ensureRegularSource(root: string, path: string): Promise<void>
 {
     assertContained(root, path, path);
@@ -64,11 +72,11 @@ export async function ensureRegularSource(root: string, path: string): Promise<v
     }
 }
 
+/** Read a UTF-8 file with a fatal decoder so invalid bytes become domain errors. */
 export async function readUtf8(root: string, path: string, context = display(root, path)): Promise<string>
 {
     try
     {
-        // 普通 utf8 解码会替换坏字节. 生成输入必须用 fatal decoder 拒绝它们.
         return new TextDecoder("utf-8", { fatal: true }).decode(await fs.readFile(path));
     }
     catch (error)
@@ -77,6 +85,7 @@ export async function readUtf8(root: string, path: string, context = display(roo
     }
 }
 
+/** Write `content` through a same-directory temporary file, skipping the write when bytes are unchanged. */
 export async function atomicWrite(
     path: string,
     content: Buffer,
@@ -90,7 +99,6 @@ export async function atomicWrite(
     const temporary = join(parent, `.halign-${randomUUID()}.tmp`);
     try
     {
-        // 临时文件必须和目标位于同一目录, 才能让 rename 保持单文件 replace 语义.
         const handle = await fs.open(temporary, "wx", 0o600);
         try
         {
@@ -106,7 +114,7 @@ export async function atomicWrite(
     {
         await fs.unlink(temporary).catch((error: unknown) =>
         {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            if (!isErrnoException(error) || error.code !== "ENOENT") throw error;
         });
     }
 }

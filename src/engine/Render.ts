@@ -1,9 +1,7 @@
-/*
-Markdown 状态机与确定性渲染:
-
-- 标题转换和 TOC 必须共享同一 fence 状态机. fenced code 内的 `#` 属于示例代码.
-- renderer 只消费已验证 Rule/Agent, 返回 Buffer 而非 string.
-*/
+/**
+ * Deterministic markdown and subagent rendering for declared harness formats.
+ * Heading and TOC walks share one fence state machine so `#` inside fenced code stays literal.
+ */
 
 import { stringify as stringifyYaml } from "yaml";
 import { stringify as stringifyToml } from "smol-toml";
@@ -19,8 +17,9 @@ import {
     type Rule,
     codePointCompare,
     errorText,
-} from "./model.js";
+} from "./Model.js";
 
+/** Update fence tracking for one markdown line. */
 function fenceState(line: string, character: string, length: number): [string, number]
 {
     const fence = FENCE.exec(line);
@@ -36,6 +35,7 @@ function fenceState(line: string, character: string, length: number): [string, n
     return ["", 0];
 }
 
+/** Demote ATX headings outside fenced code by one level, keeping h6 unchanged. */
 export function downgradeMarkdownHeadings(body: string): string
 {
     const lines: string[] = [];
@@ -64,6 +64,7 @@ export function downgradeMarkdownHeadings(body: string): string
     return lines.join("\n");
 }
 
+/** Build a GitHub-style heading anchor, lowercasing letters and replacing spaces. */
 function markdownAnchor(title: string): string
 {
     return title
@@ -72,6 +73,7 @@ function markdownAnchor(title: string): string
         .replace(/\s/gu, "-");
 }
 
+/** Build the generated AGENTS.md table of contents. */
 export function renderMarkdownToc(bodies: string[], name: string): string
 {
     const anchors = new Set<string>();
@@ -122,6 +124,7 @@ export function renderMarkdownToc(bodies: string[], name: string): string
     return `## 目录\n\n${items.join("\n")}`;
 }
 
+/** Render one harness AGENTS.md from filtered rules. */
 export function renderAgentsMarkdown(rules: Rule[], harness: Harness, name: string): Buffer
 {
     const bodies = rules
@@ -134,11 +137,13 @@ export function renderAgentsMarkdown(rules: Rule[], harness: Harness, name: stri
     return Buffer.from(`${content}\n`, "utf8");
 }
 
+/** JSON-encode a value so TOML multiline strings can reuse escaped line text. */
 function jsonString(value: unknown): string
 {
     return JSON.stringify(value);
 }
 
+/** Serialize one TOML subagent, storing the shared body in `instructions_field`. */
 function renderTomlAgent(agent: Agent, harness: HarnessConfig, metadata: Metadata): Buffer
 {
     const instructionsField = harness.instructionsField;
@@ -166,12 +171,14 @@ function renderTomlAgent(agent: Agent, harness: HarnessConfig, metadata: Metadat
     return Buffer.from(content.replace(assignmentLine, `${key} = """\n${body}"""\n`), "utf8");
 }
 
+/** Serialize one YAML subagent with frontmatter plus the shared markdown body. */
 function renderYamlAgent(agent: Agent, metadata: Metadata): Buffer
 {
     const values: Metadata = { name: agent.name, description: agent.description, ...metadata };
     return Buffer.from(`---\n${stringifyYaml(values, { lineWidth: 0, sortMapEntries: false })}---\n\n${agent.body}`, "utf8");
 }
 
+/** Render one subagent file for a harness using TOML or YAML metadata. */
 export function renderAgent(agent: Agent, harness: HarnessConfig, metadata: Metadata): Buffer
 {
     return harness.agentFormat === "toml"

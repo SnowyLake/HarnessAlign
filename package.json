@@ -1,23 +1,64 @@
 {
   "name": "harness-align",
+  "version": "1.0.0",
   "private": true,
+  "description": "Generate and deploy AGENTS.md and subagents from a .halign config directory.",
+  "author": "Harness Align",
   "type": "module",
+  "main": "./out/main/index.js",
   "bin": {
-    "halign": "dist/src/halign.js"
+    "halign": "dist/src/engine/Halign.js"
   },
-  "engines": { "node": ">=24 <25" },
+  "packageManager": "pnpm@10.15.0",
+  "engines": {
+    "node": ">=24 <25",
+    "pnpm": ">=10 <11"
+  },
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/tests/halign.test.js",
-    "verify": "npm run typecheck && npm test"
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "build:engine": "tsc -p tsconfig.engine.json",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.engine.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "tsc -p tsconfig.engine.json && node --test dist/tests/Halign.test.js",
+    "verify": "pnpm run typecheck && pnpm run test",
+    "lint": "eslint .",
+    "preinstall": "node -e \"if (!String(process.env.npm_config_user_agent || '').includes('pnpm')) { process.stderr.write('This project uses pnpm. Run pnpm install.\\n'); process.exit(1) }\"",
+    "build:win": "pnpm run build && electron-builder --win"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-winstaller",
+      "esbuild"
+    ]
   },
   "dependencies": {
+    "@base-ui/react": "^1.3.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.544.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
     "smol-toml": "1.7.1",
-    "yaml": "2.9.0"
+    "tailwind-merge": "^3.3.1",
+    "yaml": "2.9.0",
+    "zod": "^4.0.17",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "@tailwindcss/vite": "^4.1.13",
     "@types/node": "24.13.3",
-    "typescript": "7.0.2"
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "electron": "43.4.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.1",
+    "eslint": "^9.35.0",
+    "tailwindcss": "^4.1.13",
+    "typescript": "7.0.2",
+    "typescript-eslint": "^8.43.0"
   }
 }

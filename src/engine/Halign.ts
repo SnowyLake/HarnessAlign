@@ -1,39 +1,29 @@
 #!/usr/bin/env node
 
-/*
-阅读路线 (按数据流, 不是按文件名字母序):
-
-1. `model.ts` — 领域类型, `unknown` 收窄 helper, `HalignError`
-2. `fs-safe.ts` — 路径 containment, reparse 拒绝, UTF-8 读, 原子写入
-3. `load.ts` — 配置 / Rule / Agent 发现与验证
-4. `render.ts` — Markdown 标题降级, TOC, 可配置 Harness renderer
-5. `generate.ts` — `buildOutputs`, manifest, `generate`, `check`
-6. `setup.ts` — 部署到已存在的用户 Harness 根目录
-7. 本文件 — ESM CLI 边界; 同时 re-export 公开 API 供测试导入
-
-面向 C++/C# 开发者的 TypeScript 心智模型:
-
-- TypeScript 的 `interface`, type alias, union 和泛型只服务于编译期. `tsc` 会擦除它们, Node 实际执行的是 JavaScript.
-- 本项目是 ESM. `import`/`export` 在模块加载时工作, `import.meta.url` 是当前模块 URL.
-- TypeScript 采用结构类型. 信任边界不能把未验证对象直接断言成领域类型.
-*/
+/**
+ * ESM CLI boundary for `halign`.
+ * Terminal I/O stays in `main()`. The same module re-exports engine APIs for tests. Resolve `argv[1]` with `realpathSync` so a global bin link still runs `main()`.
+ */
 
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { check, generate, reportGenerate } from "./generate.js";
-import { errorText, HalignError } from "./model.js";
-import { reportSetup, setup } from "./setup.js";
+import { check, generate, reportGenerate } from "./Generate.js";
+import { errorText, HalignError } from "./Model.js";
+import { reportSetup, setup } from "./Setup.js";
 
-export type { AgentFormat, Config, Harness, HarnessConfig, OutputMap } from "./model.js";
-export type { SetupResult, SetupTargetReport } from "./setup.js";
-export { HalignError } from "./model.js";
-export { atomicWrite } from "./fs-safe.js";
-export { loadConfig, validateConfig } from "./load.js";
-export { downgradeMarkdownHeadings, renderMarkdownToc } from "./render.js";
-export { buildOutputs, check, generate, reportGenerate, safeOutputRelative } from "./generate.js";
-export { reportSetup, setup } from "./setup.js";
+export type { Agent, AgentFormat, Config, Harness, HarnessConfig, OutputMap, Rule } from "./Model.js";
+export type { SetupResult, SetupTargetReport } from "./Setup.js";
+export type { RuleInput, SharedRule, Workspace } from "./Edit.js";
+export { HalignError } from "./Model.js";
+export { atomicWrite } from "./FsSafe.js";
+export { loadConfig, loadSharedRules, validateConfig } from "./Load.js";
+export { addHarness, addProfile, deleteSource, loadWorkspace, removeHarness, removeProfile, renameHarness, saveAgent, saveConfig, saveRule, saveSharedRule } from "./Edit.js";
+export { downgradeMarkdownHeadings, renderMarkdownToc } from "./Render.js";
+export { buildOutputs, check, generate, reportGenerate, safeOutputRelative } from "./Generate.js";
+export { reportSetup, setup } from "./Setup.js";
 
+/** Write usage to stderr and return the invalid-argument exit code. */
 function usage(error?: string): number
 {
     if (error) process.stderr.write(`error: ${error}\n`);
@@ -41,6 +31,7 @@ function usage(error?: string): number
     return 2;
 }
 
+/** CLI entry used by the `halign` binary and by tests. */
 export async function main(argv: string[], root = process.cwd()): Promise<number>
 {
     if (argv.length === 1 && ["--help", "-h"].includes(argv[0]!))
@@ -102,8 +93,7 @@ export async function main(argv: string[], root = process.cwd()): Promise<number
     }
 }
 
-// ESM 没有 CommonJS 的 `require.main === module`. `npm link` 会让 `argv[1]` 经过目录联接,
-// 因此先用 `realpathSync()` 消除联接, 再比较 file URL.
+// Compare real paths so a directory junction from `pnpm link --global` still executes `main()`.
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
 {
     main(process.argv.slice(2)).then((code) =>

@@ -1,14 +1,12 @@
-/*
-Canonical 输出, manifest 与生成生命周期:
-
-- buildOutputs 只读 source, 返回有序 path -> Buffer Map, 不创建 generated 文件.
-- Manifest 是所有权提交点. stale 删除失败时保留旧 manifest.
-*/
+/**
+ * Canonical generate lifecycle: build an in-memory map, preflight, write files, then commit the manifest.
+ * `buildOutputs` is read-only. Keep the old manifest if a stale delete fails.
+ */
 
 import { promises as fs } from "node:fs";
 import { join, posix, resolve } from "node:path";
-import { assertContained, atomicWrite, display, lstatIfExists, readUtf8, reparseError } from "./fs-safe.js";
-import { loadAgents, loadConfig, loadRules } from "./load.js";
+import { assertContained, atomicWrite, display, lstatIfExists, readUtf8, reparseError } from "./FsSafe.js";
+import { loadAgents, loadConfig, loadRules } from "./Load.js";
 import {
     type OutputMap,
     codePointCompare,
@@ -16,9 +14,10 @@ import {
     HalignError,
     isRecord,
     valueText,
-} from "./model.js";
-import { renderAgent, renderAgentsMarkdown } from "./render.js";
+} from "./Model.js";
+import { renderAgent, renderAgentsMarkdown } from "./Render.js";
 
+/** Build the in-memory generated file map for a workspace. */
 export async function buildOutputs(rootPath: string, profile?: string): Promise<OutputMap>
 {
     const root = resolve(rootPath);
@@ -50,6 +49,7 @@ export async function buildOutputs(rootPath: string, profile?: string): Promise<
     return outputs;
 }
 
+/** Return the generated directory after ensuring it is not a reparse point. */
 async function outputRoot(root: string): Promise<string>
 {
     const path = join(root, ".halign", "generated");
@@ -59,6 +59,7 @@ async function outputRoot(root: string): Promise<string>
     return path;
 }
 
+/** Validate a generated relative path against the manifest containment rules. */
 export function safeOutputRelative(value: unknown): string
 {
     if (typeof value !== "string" || !value || value.includes("\\") || posix.isAbsolute(value) || /^[A-Za-z]:/u.test(value))
@@ -73,6 +74,7 @@ export function safeOutputRelative(value: unknown): string
     return value;
 }
 
+/** Resolve a generated relative path and reject reparse points along it. */
 async function destination(root: string, outputRelative: string): Promise<string>
 {
     safeOutputRelative(outputRelative);
@@ -94,6 +96,7 @@ async function destination(root: string, outputRelative: string): Promise<string
     return path;
 }
 
+/** Read the current manifest, or an empty list when the file is missing. */
 async function loadManifest(root: string): Promise<string[]>
 {
     const generated = await outputRoot(root);
@@ -131,6 +134,7 @@ async function loadManifest(root: string): Promise<string[]>
     return manifest.files.map((file) => safeOutputRelative(file));
 }
 
+/** Collect generated paths that will be written or deleted, after containment checks. */
 async function preflightOutputChanges(root: string, expected: OutputMap): Promise<string[]>
 {
     const oldFiles = await loadManifest(root);
@@ -142,6 +146,7 @@ async function preflightOutputChanges(root: string, expected: OutputMap): Promis
     return stalePaths;
 }
 
+/** Write generated files and replace the manifest after a successful preflight. */
 export async function generate(rootPath: string, profile?: string): Promise<OutputMap>
 {
     const expected = await buildOutputs(rootPath, profile);
@@ -162,12 +167,14 @@ export async function generate(rootPath: string, profile?: string): Promise<Outp
     return expected;
 }
 
+/** Format the generate success report for CLI and the desktop log. */
 export function reportGenerate(generatedRoot: string, outputs: OutputMap): string
 {
     const files = [...outputs.keys()];
     return `Generation complete.\nWrote ${files.length} files to ${generatedRoot}\n${files.map((path) => `  ${path}`).join("\n")}\n`;
 }
 
+/** Read every file currently under the generated directory. */
 async function actualFiles(root: string): Promise<Map<string, Buffer>>
 {
     const generated = await outputRoot(root);
@@ -193,6 +200,7 @@ async function actualFiles(root: string): Promise<Map<string, Buffer>>
     return files;
 }
 
+/** Compare expected output with `.halign/generated` and return difference lines. */
 export async function check(rootPath: string, profile?: string): Promise<string[]>
 {
     const expected = await buildOutputs(rootPath, profile);
