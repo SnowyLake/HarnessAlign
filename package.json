@@ -9,10 +9,10 @@
   "bin": {
     "halign": "dist/src/engine/Halign.js"
   },
-  "packageManager": "pnpm@10.15.0",
+  "packageManager": "npm@11.13.0",
   "engines": {
     "node": ">=24 <25",
-    "pnpm": ">=10 <11"
+    "npm": ">=11 <12"
   },
   "scripts": {
     "dev": "electron-vite dev",
@@ -21,18 +21,11 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.engine.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "tsc -p tsconfig.engine.json && node --test dist/tests/Halign.test.js",
-    "verify": "pnpm run typecheck && pnpm run test",
+    "verify": "npm run typecheck && npm run test",
     "lint": "eslint .",
-    "preinstall": "node -e \"if (!String(process.env.npm_config_user_agent || '').includes('pnpm')) { process.stderr.write('This project uses pnpm. Run pnpm install.\\n'); process.exit(1) }\"",
+    "preinstall": "node -e \"if (!String(process.env.npm_config_user_agent || '').startsWith('npm/')) { process.stderr.write('This project uses npm. Run npm install.\\n'); process.exit(1) }\"",
     "postinstall": "node ./node_modules/electron/install.js",
-    "build:win": "pnpm run build && electron-builder --win"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "electron-winstaller",
-      "esbuild"
-    ]
+    "build:win": "npm run build && electron-builder --win"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
@@ -54,13 +47,14 @@
     "@types/node": "24.13.3",
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
+    "@typescript/native": "npm:typescript@7.0.2",
     "@vitejs/plugin-react": "^5.0.2",
     "electron": "43.4.0",
     "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.1",
     "eslint": "^9.35.0",
     "tailwindcss": "^4.1.13",
-    "typescript": "7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.43.0",
     "vite": "7.3.6"
   }

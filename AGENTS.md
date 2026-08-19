@@ -38,10 +38,10 @@
 - `tests/Halign.test.ts` 是唯一测试源文件, 使用 Node 内置 `node:test` 覆盖解析, 渲染, 生成, 检查, 部署, 源文件写回和路径安全.
 - `dist/` 是引擎 `tsc` 输出. CLI 入口是 `dist/src/engine/Halign.js`. 不得手工编辑.
 - `out/` 是 `electron-vite` 输出. 不得手工编辑.
-- `node_modules/` 保存本地依赖, 由 pnpm 根据 `pnpm-lock.yaml` 管理. 不得手工编辑或提交其内部文件.
+- `node_modules/` 保存本地依赖, 由 npm 根据 `package-lock.json` 管理. 不得手工编辑或提交其内部文件.
 - `package.json` 定义 ESM package, Node 版本, `packageManager`, `halign` 可执行入口, scripts 和依赖.
-- `pnpm-lock.yaml` 锁定完整依赖树. 依赖变化时使用 pnpm 更新, 不手工拼改. 禁止生成或提交 `package-lock.json`.
-- `.npmrc` 固定 pnpm 为唯一包管理器, 并启用 `engine-strict`.
+- `package-lock.json` 锁定完整依赖树. 依赖变化时使用 npm 更新, 不手工拼改.
+- `.npmrc` 为 npm 启用 `engine-strict`; `package.json` 的 `preinstall` 将 npm 固定为唯一包管理器.
 - `electron.vite.config.ts` 构建 Main, Preload 和 Renderer.
 - `electron-builder.yml` 定义 Windows NSIS 打包.
 - `tsconfig.engine.json` 编译 CLI 引擎和测试. `tsconfig.node.json` 检查 Main/Preload. `tsconfig.web.json` 检查 Renderer.
@@ -53,15 +53,15 @@
 - `halign generate [--profile <profile>]` 验证配置并更新当前目录下的 `.halign/generated/`, 成功时列出写入的文件和生成目录.
 - `halign check [--profile <profile>]` 比较期望输出与 `.halign/generated/`, 一致时输出成功摘要并返回 `0`, 存在差异时列出差异并返回 `1`.
 - `halign setup [--profile <profile>]` 先生成, 再把结果部署到当前用户已经存在的 Harness 根目录, 成功时列出生成文件, 已更新或跳过的 Harness 目录, 以及 `shared-rules` 目标.
-- `pnpm dev` 启动 Electron 开发窗口. 窗口打开用户选择的配置根目录, 可视化管理 config / harness / profile / rule / agent / shared-rules, 并调用同一套 `generate` / `check` / `setup`.
+- `npm run dev` 启动 Electron 开发窗口. 窗口打开用户选择的配置根目录, 可视化管理 config / harness / profile / rule / agent / shared-rules, 并调用同一套 `generate` / `check` / `setup`.
 - 无效命令或参数输出 usage 并返回 `2`. 领域错误输出到 stderr 并返回 `1`.
-- `package.json` 的 `bin.halign` 必须指向 `dist/src/engine/Halign.js`. 修改入口路径后必须重新执行 `pnpm link --global`.
-- ESM 入口判断必须先解析 `pnpm link --global` 产生的真实路径, 避免目录联接导致 `main()` 未执行.
+- `package.json` 的 `bin.halign` 必须指向 `dist/src/engine/Halign.js`. 修改入口路径后必须重新执行 `npm link`.
+- ESM 入口判断必须先解析 `npm link` 产生的真实路径, 避免目录联接导致 `main()` 未执行.
 - Renderer 只调用 `window.appApi`. 禁止向 Renderer 暴露通用 `ipcRenderer`.
 
 ## 实现约束
 
-- 支持 Node 24 与 pnpm 10. 当前 `engines` 范围是 Node `>=24 <25`, pnpm `>=10 <11`.
+- 支持 Node 24 与 npm 11. 当前 `engines` 范围是 Node `>=24 <25`, npm `>=11 <12`.
 - CLI runtime 仅使用 `yaml` 和 `smol-toml`. 桌面壳依赖 React, Tailwind, shadcn/Base UI, electron-vite 和 Zod, 不进入 CLI 运行时最小依赖.
 - 优先复用现有函数和数据流. 不创建 renderer registry, dependency injection, 通用模板系统或单实现接口.
 - 输入必须先完整验证, 再修改 `.halign` 源文件, `.halign/generated/` 或用户部署目录.
@@ -92,23 +92,23 @@
 2. 实施满足需求的最小改动, 不做无关重构.
 3. 为新增分支, 解析规则或安全行为在 `tests/Halign.test.ts` 补充一个最小可运行测试.
 4. 新增 privileged capability 时同步更新 `src/shared` 契约, Main handler, Preload API 和 Renderer 调用.
-5. 运行 `pnpm verify` 和 `pnpm build`.
-6. 重新注册或修改 CLI 入口时运行 `pnpm link --global`.
+5. 运行 `npm run verify` 和 `npm run build`.
+6. 重新注册或修改 CLI 入口时运行 `npm link`.
 
 ## 验证命令
 
 ```powershell
-pnpm install
-pnpm verify
-pnpm build
-pnpm link --global
-pnpm dev
+npm ci
+npm run verify
+npm run build
+npm link
+npm run dev
 ```
 
-- `pnpm verify` 等价于先执行 `pnpm typecheck`, 再执行 `pnpm test`.
-- `pnpm typecheck` 检查引擎, Main/Preload 和 Renderer.
-- `pnpm test` 会先编译引擎, 再使用 `node --test` 运行 `dist/tests/Halign.test.js`.
-- `pnpm build` 使用 electron-vite 构建桌面壳. `pnpm build:win` 再打 NSIS 安装包.
+- `npm run verify` 等价于先执行 `npm run typecheck`, 再执行 `npm run test`.
+- `npm run typecheck` 检查引擎, Main/Preload 和 Renderer.
+- `npm run test` 会先编译引擎, 再使用 `node --test` 运行 `dist/tests/Halign.test.js`.
+- `npm run build` 使用 electron-vite 构建桌面壳. `npm run build:win` 再打 NSIS 安装包.
 - 本仓库根目录不包含 `.halign`, 不得用 package script 包装 `generate`, `check` 或 `setup`; 这些命令的行为由 `tests/` 用临时目录覆盖.
 - Windows sandbox 可能阻止 Node test runner 创建子进程. 发生真实权限错误时在获得权限后复跑, 不修改测试绕过边界.
 

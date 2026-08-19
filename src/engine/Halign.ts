@@ -93,7 +93,7 @@ export async function main(argv: string[], root = process.cwd()): Promise<number
     }
 }
 
-// Compare real paths so a directory junction from `pnpm link --global` still executes `main()`.
+// Compare real paths so a directory junction from a global package link still executes `main()`.
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
 {
     main(process.argv.slice(2)).then((code) =>

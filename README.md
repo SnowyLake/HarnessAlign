@@ -41,7 +41,7 @@ D:\Workspace\AI\HarnessAlign\
 ├─ AGENTS.md
 ├─ README.md
 ├─ package.json
-├─ pnpm-lock.yaml
+├─ package-lock.json
 ├─ .npmrc
 ├─ electron.vite.config.ts
 └─ electron-builder.yml
@@ -59,7 +59,7 @@ C:\Users\fengh\OneDrive\Configs\AI\HarnessAlign\
 
 - Windows PowerShell 或 CMD.
 - Node.js 24. `package.json` 当前限制为 `>=24 <25`.
-- pnpm 10. 本仓库以 `packageManager` 字段和 `pnpm-lock.yaml` 锁定, 不使用 npm 安装依赖.
+- npm 11. 本仓库以 `packageManager` 字段和 `package-lock.json` 锁定依赖.
 
 ## 安装与注册
 
@@ -67,12 +67,12 @@ C:\Users\fengh\OneDrive\Configs\AI\HarnessAlign\
 
 ```powershell
 cd D:\Workspace\AI\HarnessAlign
-pnpm install
-pnpm build:engine
-pnpm link --global
+npm ci
+npm run build:engine
+npm link
 ```
 
-`pnpm install` 根据 `pnpm-lock.yaml` 安装本地依赖. `pnpm build:engine` 将 CLI 引擎编译到 `dist/`. `pnpm link --global` 根据 `package.json` 的 `bin` 字段创建全局 `halign` 命令, 但实际代码仍保留在本工具目录.
+`npm ci` 根据 `package-lock.json` 安装完全一致的本地依赖. `npm run build:engine` 将 CLI 引擎编译到 `dist/`. `npm link` 根据 `package.json` 的 `bin` 字段创建全局 `halign` 命令, 但实际代码仍保留在本工具目录.
 
 验证全局命令:
 
@@ -115,10 +115,10 @@ halign setup --profile kei
 在工具工程目录执行:
 
 ```powershell
-pnpm dev
+npm run dev
 ```
 
-该命令使用 electron-vite 启动 Electron 开发窗口. Windows 安装包可用 `pnpm build:win` 生成.
+该命令使用 electron-vite 启动 Electron 开发窗口. Windows 安装包可用 `npm run build:win` 生成.
 
 产物在 `release/`:
 
@@ -204,7 +204,7 @@ Subagent 文件仍使用公共 `name`, `description`, `harnesses` 和 Markdown �
 
 ## 运行原理
 
-1. pnpm 通过全局 bin 启动 `dist/src/engine/Halign.js`, 或 `pnpm dev` 启动 `out/main/index.js`.
+1. npm 通过全局 bin 启动 `dist/src/engine/Halign.js`, 或通过 `npm run dev` 启动 `out/main/index.js`.
 2. CLI 使用 `process.cwd()` 确定当前配置根目录. 桌面壳使用用户选择的目录.
 3. 读取并验证 `.halign/config.json`, Rule frontmatter, Profile 和 Subagent metadata.
 4. 按配置的 Harness 名称和 Subagent 格式构建确定性的内存输出.
@@ -213,7 +213,7 @@ Subagent 文件仍使用公共 `name`, `description`, `harnesses` 和 Markdown �
 7. `setup` 先执行生成, 再对用户部署目标完成路径与 reparse point 预检, 最后替换已启用 Harness 的文件.
 8. 桌面壳对 Rule / Agent / Config 的保存走 `src/engine/Edit.ts`: Renderer 调用 `window.appApi`, Main 校验后调用引擎, 再原子写入 `.halign` 源文件.
 
-源码采用 ESM. CLI 入口会解析 `pnpm link --global` 目录联接后的真实路径, 从而正确区分直接执行与被测试代码 `import` 的情况.
+源码采用 ESM. CLI 入口会解析 `npm link` 目录联接后的真实路径, 从而正确区分直接执行与被测试代码 `import` 的情况.
 
 ## 工程目录
 
@@ -225,8 +225,8 @@ Subagent 文件仍使用公共 `name`, `description`, `harnesses` 和 Markdown �
 - `out/` 是 electron-vite 编译结果.
 - `node_modules/` 保存项目本地依赖.
 - `package.json` 定义 scripts, Node 版本, `packageManager`, 依赖和全局命令入口.
-- `.npmrc` 固定使用 pnpm, 并拒绝用其他包管理器安装.
-- `pnpm-lock.yaml` 锁定完整依赖树.
+- `.npmrc` 对 npm 启用严格的 Node.js 和 npm 版本检查, `package.json` 的 `preinstall` 拒绝用其他包管理器安装.
+- `package-lock.json` 锁定完整依赖树.
 - `tsconfig.engine.json` 编译 CLI 引擎和测试. `tsconfig.node.json` 与 `tsconfig.web.json` 分别检查 Main/Preload 和 Renderer.
 - `electron.vite.config.ts` 构建桌面壳. `electron-builder.yml` 定义 Windows NSIS 打包.
 - `AGENTS.md` 定义本工程的自动化开发约束.
@@ -236,39 +236,39 @@ Subagent 文件仍使用公共 `name`, `description`, `harnesses` 和 Markdown �
 安装完全一致的依赖:
 
 ```powershell
-pnpm install
+npm ci
 ```
 
 只进行类型检查:
 
 ```powershell
-pnpm typecheck
+npm run typecheck
 ```
 
 构建并运行测试:
 
 ```powershell
-pnpm test
+npm run test
 ```
 
 执行完整开发验证:
 
 ```powershell
-pnpm verify
+npm run verify
 ```
 
-`pnpm verify` 依次执行类型检查和测试. `pnpm typecheck` 检查引擎, Main/Preload 和 Renderer. `pnpm test` 会先编译引擎, 再运行 `dist/tests/Halign.test.js`. `pnpm build` 构建桌面壳.
+`npm run verify` 依次执行类型检查和测试. `npm run typecheck` 检查引擎, Main/Preload 和 Renderer. `npm run test` 会先编译引擎, 再运行 `dist/tests/Halign.test.js`. `npm run build` 构建桌面壳.
 
 启动桌面壳:
 
 ```powershell
-pnpm dev
+npm run dev
 ```
 
 修改 `package.json` 的 `bin` 路径或移动 CLI 入口后, 必须重新执行:
 
 ```powershell
-pnpm link --global
+npm link
 ```
 
 然后从外部配置目录运行 `halign generate` 和 `halign check`, 确认全局 shim 指向最新编译结果.
@@ -283,11 +283,11 @@ pnpm link --global
 
 开发依赖包括:
 
-- `typescript`, TypeScript 编译器.
+- `@typescript/native` 通过 npm alias 提供 TypeScript 7 编译器, `typescript` 通过 npm alias 提供 TypeScript 6 API, 供 typescript-eslint 在 TypeScript 7 过渡期使用.
 - `@types/node`, Node.js API 的类型声明.
 - `electron`, `electron-vite`, `electron-builder`, 桌面壳运行时与打包.
 
-`pnpm-lock.yaml` 中出现的其他 package 是上述直接依赖的传递依赖或平台支持 package. 它们由 pnpm 自动解析, 不代表项目代码直接使用了它们.
+`package-lock.json` 中出现的其他 package 是上述直接依赖的传递依赖或平台支持 package. 它们由 npm 自动解析, 不代表项目代码直接使用了它们.
 
 ## 安全边界
 

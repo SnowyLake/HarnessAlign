@@ -7,7 +7,7 @@ export default defineConfig({
     main: {
         plugins: [
             // Bundle yaml, smol-toml, and zod so the packaged app does not depend on
-            // pnpm's node_modules layout inside the asar.
+            // the development node_modules layout inside the asar.
             externalizeDepsPlugin({ exclude: ["yaml", "smol-toml", "zod"] }),
         ],
     },
