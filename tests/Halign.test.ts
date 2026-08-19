@@ -407,6 +407,7 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
         const renamed = await loadWorkspace(root);
         assert.ok(renamed.config.harnesses.some((harness) => harness.name === "atlas"));
         assert.ok(!renamed.config.harnesses.some((harness) => harness.name === "cursor"));
+        assert.deepEqual(renamed.rootRules.map((rule) => rule.path), [".halign/rules/cursor.md", ".halign/rules/base.md"]);
         assert.deepEqual(renamed.rootRules.find((rule) => rule.path === ".halign/rules/cursor.md")?.targets, ["atlas"]);
         assert.ok(renamed.agents[0]?.harnesses.atlas);
         assert.equal(renamed.agents[0]?.harnesses.cursor, undefined);

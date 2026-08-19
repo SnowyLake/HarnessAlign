@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { WorkspaceEditor } from "@/features/workspace/WorkspaceEditor";
+import { ProjectEditor, WorkspaceEditor } from "@/features/workspace/WorkspaceEditor";
 import { WorkspaceTree } from "@/features/workspace/WorkspaceTree";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 
@@ -43,6 +43,17 @@ export function WorkspacePage({ view }: WorkspacePageProps)
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [isBusy, requestEditorAction, selection, workspaceRoot]);
+
+    if (view === "project")
+    {
+        return (
+            <ScrollArea className="h-full">
+                <div className="min-h-full min-w-0 p-4" key={workspaceRoot ?? ""}>
+                    <ProjectEditor />
+                </div>
+            </ScrollArea>
+        );
+    }
 
     return (
         <ResizablePanelGroup orientation="horizontal" className="h-full min-h-0">

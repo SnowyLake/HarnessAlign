@@ -10,12 +10,6 @@ import {
     ScrollTextIcon,
     Settings2Icon,
 } from "lucide-react";
-import {
-    Breadcrumb,
-    BreadcrumbItem,
-    BreadcrumbList,
-    BreadcrumbPage,
-} from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -31,7 +25,7 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
     SidebarRail,
-    SidebarTrigger,
+    useSidebar,
 } from "@/components/ui/sidebar";
 import { useAppStore, type AppView } from "@/stores/AppStore";
 
@@ -52,14 +46,6 @@ const WORKSPACE_NAV_ITEMS: NavItem[] = [
     { view: "generated", label: "Generated", icon: FileOutputIcon },
 ];
 
-/** Human-readable breadcrumb label for the active shell view. */
-function viewLabel(view: AppView): string
-{
-    if (view === "settings") return "Settings";
-    if (view === "showcase") return "UI Kit";
-    return WORKSPACE_NAV_ITEMS.find((item) => item.view === view)?.label ?? "Project";
-}
-
 /** Props for the desktop chrome that wraps feature pages and owns header commands. */
 export interface AppShellProps
 {
@@ -79,6 +65,7 @@ export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: App
     const profile = useAppStore((state) => state.profile);
     const setProfile = useAppStore((state) => state.setProfile);
     const isBusy = useAppStore((state) => state.isBusy);
+    const { toggleSidebar } = useSidebar();
     const [version, setVersion] = useState("");
     const [setupOpen, setSetupOpen] = useState(false);
     const effectiveView = view === "showcase" && !import.meta.env.DEV ? "project" : view;
@@ -97,10 +84,14 @@ export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: App
         <>
             <Sidebar collapsible="icon" variant="inset">
                 <SidebarHeader className="px-2 py-2">
-                    <div className="flex items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/70">
-                        <LayoutDashboardIcon size={16} />
-                        <span className="group-data-[collapsible=icon]:hidden">Harness Align</span>
-                    </div>
+                    <SidebarMenu>
+                        <SidebarMenuItem>
+                            <SidebarMenuButton tooltip="Toggle sidebar" onClick={toggleSidebar}>
+                                <LayoutDashboardIcon size={16} />
+                                <span className="text-[11px] font-semibold uppercase tracking-[0.14em]">Harness Align</span>
+                            </SidebarMenuButton>
+                        </SidebarMenuItem>
+                    </SidebarMenu>
                 </SidebarHeader>
                 <SidebarContent>
                     <SidebarGroup>
@@ -155,21 +146,15 @@ export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: App
             </Sidebar>
             <SidebarInset className="min-h-0 overflow-hidden">
                 <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
-                    <SidebarTrigger className="-ml-1" />
-                    <Breadcrumb>
-                        <BreadcrumbList>
-                            <BreadcrumbItem>
-                                <BreadcrumbPage>{viewLabel(effectiveView)}</BreadcrumbPage>
-                            </BreadcrumbItem>
-                        </BreadcrumbList>
-                    </Breadcrumb>
-                    <div className="ml-auto flex min-w-0 items-center gap-2">
-                        <Button size="sm" variant={workspace ? "outline" : "default"} disabled={isBusy} onClick={onOpen}>
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                        <Button className="shrink-0" size="sm" variant={workspace ? "outline" : "default"} disabled={isBusy} onClick={onOpen}>
                             Open
                         </Button>
-                        <span className="hidden min-w-0 max-w-56 truncate text-[12px] text-muted-foreground sm:inline">
+                        <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground" title={workspace?.root ?? "No project"}>
                             {workspace?.root ?? "No project"}
                         </span>
+                    </div>
+                    <div className="ml-auto flex shrink-0 items-center gap-2">
                         <Select
                             value={profile || undefined}
                             onValueChange={(value) =>

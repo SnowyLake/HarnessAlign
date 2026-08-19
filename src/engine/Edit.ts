@@ -11,6 +11,7 @@ import { loadAgents, loadConfig, loadRules, loadSharedRules, type SharedRule, va
 import {
     AGENT_NAME,
     type Agent,
+    codePointCompare,
     type Config,
     type Harness,
     type HarnessConfig,
@@ -45,6 +46,12 @@ export interface RuleInput
     priority: number;
     targets?: string[];
     body: string;
+}
+
+/** Sort editable rules by priority and use their paths as a deterministic tie-breaker. */
+function sortEditableRules(rules: Rule[]): Rule[]
+{
+    return rules.sort((left, right) => left.priority - right.priority || codePointCompare(left.path, right.path));
 }
 
 /** Build the JSON document written to `config.json`. */
@@ -250,13 +257,13 @@ export async function loadWorkspace(rootPath: string): Promise<Workspace>
     const config = await loadConfig(root);
     const agents = await loadAgents(root, config.harnesses);
     const firstProfile = config.profiles[0]!;
-    const rootRules = (await loadRules(root, firstProfile, config.harnesses))
-        .filter((rule) => rule.path.startsWith(".halign/rules/") && !rule.path.startsWith(".halign/rules/shared/"));
+    const rootRules = sortEditableRules((await loadRules(root, firstProfile, config.harnesses))
+        .filter((rule) => rule.path.startsWith(".halign/rules/") && !rule.path.startsWith(".halign/rules/shared/")));
     const domainRules: Record<string, Rule[]> = {};
     for (const profile of config.profiles)
     {
         const prefix = `.halign/domains/${profile}/rules/`;
-        domainRules[profile] = (await loadRules(root, profile, config.harnesses)).filter((rule) => rule.path.startsWith(prefix));
+        domainRules[profile] = sortEditableRules((await loadRules(root, profile, config.harnesses)).filter((rule) => rule.path.startsWith(prefix)));
     }
     return { root, config, rootRules, domainRules, sharedRules: await loadSharedRules(root), agents };
 }

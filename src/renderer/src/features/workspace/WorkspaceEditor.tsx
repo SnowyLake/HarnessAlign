@@ -5,7 +5,10 @@
 
 import type { AgentFormat, Config, HarnessConfig, RuleInput, Workspace } from "@shared/models/Workspace";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type RefObject } from "react";
+import { ContextMenu } from "@base-ui/react/context-menu";
+import { ChevronRightIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
@@ -153,8 +156,9 @@ function FormError({ message }: { message: string | undefined })
 }
 
 /** Editor for `config.json` title and default profile. */
-function ConfigForm({ workspace }: { workspace: Workspace })
+function ConfigForm({ workspace, showTitle = true }: { workspace: Workspace; showTitle?: boolean })
 {
+    const setSelection = useAppStore((state) => state.setSelection);
     const [formError, setFormError] = useState<string | undefined>();
     const editorKey = selectionKey({ kind: "config" });
     const editor = useEditorForm(editorKey);
@@ -163,6 +167,7 @@ function ConfigForm({ workspace }: { workspace: Workspace })
         <form
             ref={editor.formRef}
             className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+            onFocusCapture={() => setSelection({ kind: "config" })}
             onChange={editor.handleChange}
             onSubmit={(event) =>
             {
@@ -186,7 +191,7 @@ function ConfigForm({ workspace }: { workspace: Workspace })
                 });
             }}
         >
-            <h2 className="text-base font-semibold">config.json</h2>
+            {showTitle ? <h2 className="text-base font-semibold">config.json</h2> : null}
             <FormError message={formError} />
             <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", workspace.config.name)} /></Label>
             <Label className="grid gap-1 text-[12px] text-muted-foreground">
@@ -213,40 +218,49 @@ function ConfigForm({ workspace }: { workspace: Workspace })
     );
 }
 
-/** Editor for adding or updating one harness declaration. */
-function HarnessForm({ workspace, original }: { workspace: Workspace; original?: string })
+/** Collapsible editor card for one existing or newly created harness. */
+function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspace: Workspace; harness?: HarnessConfig; isInitiallyOpen?: boolean })
 {
     const isBusy = useAppStore((state) => state.isBusy);
-    const existing = workspace.config.harnesses.find((harness) => harness.name === original);
+    const setSelection = useAppStore((state) => state.setSelection);
+    const original = harness?.name;
     const [formError, setFormError] = useState<string | undefined>();
     const [deleteOpen, setDeleteOpen] = useState(false);
+    const [isOpen, setIsOpen] = useState(isInitiallyOpen);
+    const [isRenaming, setIsRenaming] = useState(false);
+    const renameStartRef = useRef(original ?? "");
     const editorKey = selectionKey(original ? { kind: "harness", name: original } : { kind: "harness-new" });
     const editor = useEditorForm(editorKey, original ? () => setDeleteOpen(true) : undefined);
+    const [harnessName, setHarnessName] = useState(draftText(editor.draft, "name", original ?? ""));
+    const [agentFileFormat, setAgentFileFormat] = useState<"toml" | "md">(
+        draftText(editor.draft, "agentFileFormat", harness?.agentFormat === "toml" ? "toml" : "md") === "toml" ? "toml" : "md",
+    );
 
-    return (
-        <>
-            <form
+    const card = (
+        <form
                 ref={editor.formRef}
-                className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+                className="w-full min-w-0"
+                onFocusCapture={() => setSelection(original ? { kind: "harness", name: original } : { kind: "harness-new" })}
                 onChange={editor.handleChange}
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
                     const form = new FormData(event.currentTarget);
-                    const agentFormat: AgentFormat = form.get("agentFormat") === "toml" ? "toml" : "yaml";
+                    const agentFileFormat = form.get("agentFileFormat") === "toml" ? "toml" : "md";
+                    const agentFormat: AgentFormat = agentFileFormat === "toml" ? "toml" : "yaml";
                     const harness: HarnessConfig = agentFormat === "toml"
                         ? {
                             name: String(form.get("name") ?? "").trim(),
                             configPath: String(form.get("configPath") ?? "").trim(),
                             agentFormat,
-                            agentExtension: String(form.get("agentExtension") ?? "").trim(),
+                            agentExtension: agentFileFormat,
                             instructionsField: String(form.get("instructionsField") ?? "").trim(),
                         }
                         : {
                             name: String(form.get("name") ?? "").trim(),
                             configPath: String(form.get("configPath") ?? "").trim(),
                             agentFormat,
-                            agentExtension: String(form.get("agentExtension") ?? "").trim(),
+                            agentExtension: agentFileFormat,
                         };
                     setFormError(undefined);
                     void runMutation(async () =>
@@ -268,32 +282,114 @@ function HarnessForm({ workspace, original }: { workspace: Workspace; original?:
                     });
                 }}
             >
-                <h2 className="text-base font-semibold">{original ? `Harness ${original}` : "New harness"}</h2>
-                <FormError message={formError} />
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", existing?.name ?? "")} /></Label>
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">config_path<Input name="configPath" defaultValue={draftText(editor.draft, "configPath", existing?.configPath ?? "")} /></Label>
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">
-                    agent_format
-                    <Select
-                        name="agentFormat"
-                        defaultValue={draftText(editor.draft, "agentFormat", existing?.agentFormat ?? "yaml")}
-                        onValueChange={(value) =>
-                        {
-                            if (value !== null) editor.handleValueChange("agentFormat", value);
-                        }}
-                    >
-                        <SelectTrigger size="sm" className="w-full">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="yaml">yaml</SelectItem>
-                            <SelectItem value="toml">toml</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </Label>
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">agent_extension<Input name="agentExtension" defaultValue={draftText(editor.draft, "agentExtension", existing?.agentExtension ?? "md")} /></Label>
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">instructions_field (TOML only)<Input name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", existing?.instructionsField ?? "")} /></Label>
-            </form>
+                <details
+                    className={`group overflow-hidden rounded-lg border bg-card ${harness ? "" : "border-dashed"}`}
+                    open={isOpen}
+                    onToggle={(event) => setIsOpen(event.currentTarget.open)}
+                >
+                    <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 select-none [&::-webkit-details-marker]:hidden">
+                        <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+                        {isRenaming ? (
+                            <input
+                                autoFocus
+                                type="text"
+                                name="name"
+                                aria-label="Harness name"
+                                value={harnessName}
+                                onClick={(event) => event.stopPropagation()}
+                                onBlur={() => setIsRenaming(false)}
+                                onChange={(event) => setHarnessName(event.currentTarget.value)}
+                                onKeyDown={(event) =>
+                                {
+                                    if (event.key === "Enter")
+                                    {
+                                        event.preventDefault();
+                                        setIsRenaming(false);
+                                    }
+                                    if (event.key === "Escape")
+                                    {
+                                        event.preventDefault();
+                                        setHarnessName(renameStartRef.current);
+                                        editor.handleValueChange("name", renameStartRef.current);
+                                        setIsRenaming(false);
+                                    }
+                                }}
+                                className="h-6 min-w-20 max-w-64 rounded-md bg-background px-1 font-medium outline-none ring-2 ring-ring/50"
+                                style={{ width: `${Math.max(harnessName.length + 1, 5)}ch` }}
+                            />
+                        ) : (
+                            <>
+                                <input type="hidden" name="name" value={harnessName} />
+                                <span className="min-w-0 truncate px-1 font-medium">{harnessName || "New harness"}</span>
+                            </>
+                        )}
+                    </summary>
+                    <div className="grid gap-3 border-t p-4">
+                        <FormError message={formError} />
+                        <Label className="grid gap-1 text-[12px] text-muted-foreground">config_path<Input name="configPath" defaultValue={draftText(editor.draft, "configPath", harness?.configPath ?? "")} /></Label>
+                        <Label className="grid gap-1 text-[12px] text-muted-foreground">
+                            agent file format
+                            <Select
+                                name="agentFileFormat"
+                                value={agentFileFormat}
+                                onValueChange={(value) =>
+                                {
+                                    if (value === null) return;
+                                    const nextFormat = value === "toml" ? "toml" : "md";
+                                    setAgentFileFormat(nextFormat);
+                                    editor.handleValueChange("agentFileFormat", nextFormat);
+                                }}
+                            >
+                                <SelectTrigger size="sm" className="w-full">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="md">md (YAML metadata)</SelectItem>
+                                    <SelectItem value="toml">toml</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </Label>
+                        {agentFileFormat === "toml" ? (
+                            <Label className="grid gap-1 text-[12px] text-muted-foreground">instructions_field<Input name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", harness?.instructionsField ?? "")} /></Label>
+                        ) : null}
+                    </div>
+                </details>
+        </form>
+    );
+
+    return (
+        <>
+            <ContextMenu.Root>
+                <ContextMenu.Trigger render={card} />
+                <ContextMenu.Portal>
+                    <ContextMenu.Positioner className="isolate z-50" sideOffset={4}>
+                        <ContextMenu.Popup className="min-w-36 origin-(--transform-origin) rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
+                            <ContextMenu.Item
+                                disabled={isBusy}
+                                onClick={() =>
+                                {
+                                    renameStartRef.current = harnessName;
+                                    setSelection(original ? { kind: "harness", name: original } : { kind: "harness-new" });
+                                    setIsRenaming(true);
+                                }}
+                                className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50"
+                            >
+                                <PencilIcon className="size-4" />
+                                <span>Rename</span>
+                            </ContextMenu.Item>
+                            <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+                            <ContextMenu.Item
+                                disabled={isBusy || !original}
+                                onClick={() => setDeleteOpen(true)}
+                                className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive outline-none select-none data-highlighted:bg-destructive/10 data-disabled:pointer-events-none data-disabled:opacity-50"
+                            >
+                                <Trash2Icon className="size-4" />
+                                <span>Delete</span>
+                            </ContextMenu.Item>
+                        </ContextMenu.Popup>
+                    </ContextMenu.Positioner>
+                </ContextMenu.Portal>
+            </ContextMenu.Root>
             <ConfirmDialog
                 open={deleteOpen}
                 onOpenChange={setDeleteOpen}
@@ -325,6 +421,8 @@ function HarnessForm({ workspace, original }: { workspace: Workspace; original?:
 /** Editor for creating a new profile name. */
 function ProfileNewForm({ workspace }: { workspace: Workspace })
 {
+    const isBusy = useAppStore((state) => state.isBusy);
+    const setSelection = useAppStore((state) => state.setSelection);
     const [formError, setFormError] = useState<string | undefined>();
     const editorKey = selectionKey({ kind: "profile-new" });
     const editor = useEditorForm(editorKey);
@@ -333,6 +431,7 @@ function ProfileNewForm({ workspace }: { workspace: Workspace })
         <form
             ref={editor.formRef}
             className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+            onFocusCapture={() => setSelection({ kind: "profile-new" })}
             onChange={editor.handleChange}
             onSubmit={(event) =>
             {
@@ -352,7 +451,10 @@ function ProfileNewForm({ workspace }: { workspace: Workspace })
                 });
             }}
         >
-            <h2 className="text-base font-semibold">New profile</h2>
+            <div className="flex items-center justify-between gap-3">
+                <h2 className="text-base font-semibold">New profile</h2>
+                <Button type="submit" size="sm" disabled={isBusy}>Create</Button>
+            </div>
             <FormError message={formError} />
             <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", "")} /></Label>
         </form>
@@ -363,6 +465,7 @@ function ProfileNewForm({ workspace }: { workspace: Workspace })
 function ProfileForm({ workspace, name }: { workspace: Workspace; name: string })
 {
     const isBusy = useAppStore((state) => state.isBusy);
+    const setSelection = useAppStore((state) => state.setSelection);
     const isDefault = name === workspace.config.defaultProfile;
     const [formError, setFormError] = useState<string | undefined>();
     const [deleteOpen, setDeleteOpen] = useState(false);
@@ -370,8 +473,13 @@ function ProfileForm({ workspace, name }: { workspace: Workspace; name: string }
     useEditorAction(editorKey, undefined, isDefault ? undefined : () => setDeleteOpen(true));
 
     return (
-        <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3">
-            <h2 className="text-base font-semibold">Profile {name}</h2>
+        <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3" onFocusCapture={() => setSelection({ kind: "profile", name })}>
+            <div className="flex items-center justify-between gap-3">
+                <h2 className="text-base font-semibold">Profile {name}</h2>
+                {!isDefault ? (
+                    <Button type="button" size="sm" variant="destructive" disabled={isBusy} onClick={() => setDeleteOpen(true)}>Delete</Button>
+                ) : null}
+            </div>
             <FormError message={formError} />
             {isDefault ? (
                 <Alert>
@@ -471,7 +579,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     {
                         event.preventDefault();
                         const form = new FormData(event.currentTarget);
-                        const path = String(form.get("path") ?? "").trim();
+                        const path = sharedExisting?.path ?? defaultPath;
                         const body = String(form.get("body") ?? "");
                         const original = sharedExisting?.path;
                         setFormError(undefined);
@@ -490,7 +598,6 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                 >
                     <h2 className="text-base font-semibold">Shared rule</h2>
                     <FormError message={formError} />
-                    <Label className="grid gap-1 text-[12px] text-muted-foreground">path<Input name="path" defaultValue={draftText(editor.draft, "path", sharedExisting?.path ?? defaultPath)} /></Label>
                     <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
                         body
                         <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", sharedExisting?.body ?? "# Title\n\nbody\n")} />
@@ -513,8 +620,10 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     const form = event.currentTarget;
                     const data = new FormData(form);
                     const payload = rulePayload(
-                        String(data.get("path") ?? "").trim(),
-                        Number(data.get("priority")),
+                        existing?.path ?? defaultPath,
+                        existing?.priority ?? (selection.kind === "rule-new" && selection.scope === "domain"
+                            ? (workspace.domainRules[selection.profile ?? ""] ?? []).length
+                            : workspace.rootRules.length),
                         readTargets(form),
                         String(data.get("body") ?? ""),
                     );
@@ -535,8 +644,6 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
             >
                 <h2 className="text-base font-semibold">Rule</h2>
                 <FormError message={formError} />
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">path<Input name="path" defaultValue={draftText(editor.draft, "path", existing?.path ?? defaultPath)} /></Label>
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">priority<Input name="priority" type="number" defaultValue={draftText(editor.draft, "priority", String(existing?.priority ?? 100))} /></Label>
                 <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} />
                 <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
                     body
@@ -691,6 +798,101 @@ function GeneratedEmpty()
     );
 }
 
+/** Unified Project page for config, harnesses, and profiles without contextual navigation. */
+export function ProjectEditor()
+{
+    const workspace = useAppStore((state) => state.workspace);
+    const selection = useAppStore((state) => state.selection);
+    const setSelection = useAppStore((state) => state.setSelection);
+    const isBusy = useAppStore((state) => state.isBusy);
+    const requestEditorAction = useAppStore((state) => state.requestEditorAction);
+
+    if (!workspace)
+    {
+        return (
+            <Empty className="border-0">
+                <EmptyHeader>
+                    <EmptyTitle>No workspace</EmptyTitle>
+                    <EmptyDescription>Open a directory that contains .halign/config.json.</EmptyDescription>
+                </EmptyHeader>
+            </Empty>
+        );
+    }
+
+    return (
+        <div className="mx-auto grid w-full max-w-6xl gap-6 pb-4">
+            <div className="flex items-center justify-between gap-3">
+                <div>
+                    <h1 className="text-lg font-semibold">Project</h1>
+                    <p className="text-[12px] text-muted-foreground">Manage config.json, harnesses, and profiles in one place.</p>
+                </div>
+                <Button
+                    type="button"
+                    size="sm"
+                    disabled={isBusy}
+                    onClick={() => requestEditorAction(
+                        selection.kind === "config" || selection.kind === "harness" || selection.kind === "harness-new"
+                            ? selection
+                            : { kind: "config" },
+                        "save",
+                    )}
+                >
+                    Save
+                </Button>
+            </div>
+
+            <section>
+                <ConfigForm workspace={workspace} showTitle={false} />
+            </section>
+
+            <section className="grid gap-3">
+                <div className="flex items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-base font-semibold">Harnesses</h2>
+                        <p className="text-[12px] text-muted-foreground">Configure every target harness declared by this project.</p>
+                    </div>
+                    <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => setSelection({ kind: "harness-new" })}>New harness</Button>
+                </div>
+                <div className="grid gap-3 xl:grid-cols-2">
+                    {workspace.config.harnesses.map((harness) => (
+                        <HarnessCard
+                            key={harness.name}
+                            workspace={workspace}
+                            harness={harness}
+                            isInitiallyOpen={selection.kind === "harness" && selection.name === harness.name}
+                        />
+                    ))}
+                    {selection.kind === "harness-new" ? (
+                        <HarnessCard workspace={workspace} isInitiallyOpen />
+                    ) : null}
+                </div>
+            </section>
+
+            <section className="grid gap-3">
+                <div className="flex items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-base font-semibold">Profiles</h2>
+                        <p className="text-[12px] text-muted-foreground">Manage the profile directories available to domain rules.</p>
+                    </div>
+                    <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => setSelection({ kind: "profile-new" })}>New profile</Button>
+                </div>
+                <div className="grid gap-3 xl:grid-cols-2">
+                    {workspace.config.profiles.map((profile) => (
+                        <div key={profile} className="rounded-lg border bg-card p-4">
+                            <ProfileForm workspace={workspace} name={profile} />
+                        </div>
+                    ))}
+                    {selection.kind === "profile-new" ? (
+                        <div className="rounded-lg border border-dashed bg-card p-4">
+                            <ProfileNewForm workspace={workspace} />
+                        </div>
+                    ) : null}
+                </div>
+            </section>
+        </div>
+    );
+}
+
 /** Editor pane for the current workspace selection. */
 export function WorkspaceEditor()
 {
@@ -709,8 +911,12 @@ export function WorkspaceEditor()
         );
     }
     if (selection.kind === "config") return <ConfigForm workspace={workspace} />;
-    if (selection.kind === "harness") return <HarnessForm workspace={workspace} original={selection.name} />;
-    if (selection.kind === "harness-new") return <HarnessForm workspace={workspace} />;
+    if (selection.kind === "harness")
+    {
+        const harness = workspace.config.harnesses.find((item) => item.name === selection.name);
+        return harness ? <HarnessCard workspace={workspace} harness={harness} isInitiallyOpen /> : <GeneratedEmpty />;
+    }
+    if (selection.kind === "harness-new") return <HarnessCard workspace={workspace} isInitiallyOpen />;
     if (selection.kind === "profile-new") return <ProfileNewForm workspace={workspace} />;
     if (selection.kind === "profile") return <ProfileForm workspace={workspace} name={selection.name} />;
     if (selection.kind === "rule" || selection.kind === "rule-new") return <RuleForm workspace={workspace} selection={selection} />;
