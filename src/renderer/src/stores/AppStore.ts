@@ -29,6 +29,27 @@ export type Selection =
     | { kind: "generated" }
     | { kind: "generated-file"; path: string };
 
+/** Form values captured for one editor, grouped by field name. */
+export type FormSnapshot = Record<string, string[]>;
+
+/** Unsaved editor values and the persisted baseline used for dirty checks. */
+export interface EditorDraft
+{
+    baseline: FormSnapshot;
+    current: FormSnapshot;
+}
+
+/** Commands that can be requested from a workspace tree item. */
+export type EditorAction = "save" | "delete";
+
+/** One tree or keyboard command waiting for the matching editor to handle it. */
+export interface PendingEditorAction
+{
+    id: number;
+    key: string;
+    action: EditorAction;
+}
+
 /** Stable remount key for uncontrolled forms bound to the current selection. */
 export function selectionKey(selection: Selection): string
 {
@@ -133,6 +154,9 @@ interface AppState
     isOutputDialogOpen: boolean;
     isBusy: boolean;
     theme: ThemeMode;
+    editorDrafts: Record<string, EditorDraft>;
+    pendingEditorAction: PendingEditorAction | undefined;
+    nextEditorActionId: number;
     setView: (view: AppView) => void;
     setWorkspace: (workspace: Workspace | undefined) => void;
     setSelection: (selection: Selection) => void;
@@ -142,6 +166,10 @@ interface AppState
     setOutputDialogOpen: (isOpen: boolean) => void;
     setIsBusy: (isBusy: boolean) => void;
     setTheme: (theme: ThemeMode) => void;
+    setEditorDraft: (key: string, draft: EditorDraft | undefined) => void;
+    clearEditorDraft: (key: string) => void;
+    requestEditorAction: (selection: Selection, action: EditorAction) => void;
+    consumeEditorAction: (id: number) => void;
     beginBusy: () => void;
     endBusy: () => void;
 }
@@ -160,18 +188,27 @@ export const useAppStore = create<AppState>((set) => ({
     isOutputDialogOpen: false,
     isBusy: false,
     theme: "system",
+    editorDrafts: {},
+    pendingEditorAction: undefined,
+    nextEditorActionId: 1,
     setView: (view) => set((state) => ({
         view,
         selection: view === "settings" || view === "showcase"
             ? state.selection
             : selectionForView(view, state.selection, state.workspace, state.profile),
     })),
-    setWorkspace: (workspace) => set((state) => ({
-        workspace,
-        selection: state.view === "settings" || state.view === "showcase"
-            ? state.selection
-            : selectionForView(state.view, state.selection, workspace, state.profile),
-    })),
+    setWorkspace: (workspace) => set((state) =>
+    {
+        const isDifferentRoot = state.workspace?.root !== workspace?.root;
+        return {
+            workspace,
+            selection: state.view === "settings" || state.view === "showcase"
+                ? state.selection
+                : selectionForView(state.view, state.selection, workspace, state.profile),
+            editorDrafts: isDifferentRoot ? {} : state.editorDrafts,
+            pendingEditorAction: isDifferentRoot ? undefined : state.pendingEditorAction,
+        };
+    }),
     setSelection: (selection) => set({ selection }),
     setProfile: (profile) => set((state) => ({
         profile,
@@ -190,6 +227,32 @@ export const useAppStore = create<AppState>((set) => ({
     setOutputDialogOpen: (isOutputDialogOpen) => set({ isOutputDialogOpen }),
     setIsBusy: (isBusy) => set({ isBusy }),
     setTheme: (theme) => set({ theme }),
+    setEditorDraft: (key, draft) => set((state) =>
+    {
+        const editorDrafts = { ...state.editorDrafts };
+        if (draft) editorDrafts[key] = draft;
+        else delete editorDrafts[key];
+        return { editorDrafts };
+    }),
+    clearEditorDraft: (key) => set((state) =>
+    {
+        if (!(key in state.editorDrafts)) return state;
+        const editorDrafts = { ...state.editorDrafts };
+        delete editorDrafts[key];
+        return { editorDrafts };
+    }),
+    requestEditorAction: (selection, action) => set((state) => ({
+        selection,
+        pendingEditorAction: {
+            id: state.nextEditorActionId,
+            key: selectionKey(selection),
+            action,
+        },
+        nextEditorActionId: state.nextEditorActionId + 1,
+    })),
+    consumeEditorAction: (id) => set((state) => ({
+        pendingEditorAction: state.pendingEditorAction?.id === id ? undefined : state.pendingEditorAction,
+    })),
     beginBusy: () => set({ isBusy: true }),
     endBusy: () => set({ isBusy: false }),
 }));

@@ -1,8 +1,22 @@
+import { useEffect } from "react";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { WorkspaceEditor } from "@/features/workspace/WorkspaceEditor";
 import { WorkspaceTree } from "@/features/workspace/WorkspaceTree";
-import { selectionKey, useAppStore, type WorkspaceView } from "@/stores/AppStore";
+import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
+
+/** Return whether the selected editor owns a saveable form. */
+function canSaveSelection(selection: Selection): boolean
+{
+    return selection.kind === "config"
+        || selection.kind === "harness"
+        || selection.kind === "harness-new"
+        || selection.kind === "profile-new"
+        || selection.kind === "rule"
+        || selection.kind === "rule-new"
+        || selection.kind === "agent"
+        || selection.kind === "agent-new";
+}
 
 /** Props for the split workspace module page. */
 export interface WorkspacePageProps
@@ -14,6 +28,21 @@ export interface WorkspacePageProps
 export function WorkspacePage({ view }: WorkspacePageProps)
 {
     const selection = useAppStore((state) => state.selection);
+    const workspaceRoot = useAppStore((state) => state.workspace?.root);
+    const isBusy = useAppStore((state) => state.isBusy);
+    const requestEditorAction = useAppStore((state) => state.requestEditorAction);
+
+    useEffect(() =>
+    {
+        const handleKeyDown = (event: KeyboardEvent): void =>
+        {
+            if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s" || !workspaceRoot || isBusy || !canSaveSelection(selection)) return;
+            event.preventDefault();
+            requestEditorAction(selection, "save");
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [isBusy, requestEditorAction, selection, workspaceRoot]);
 
     return (
         <ResizablePanelGroup orientation="horizontal" className="h-full min-h-0">
@@ -23,7 +52,7 @@ export function WorkspacePage({ view }: WorkspacePageProps)
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize="76" minSize="40" className="min-h-0">
                 <ScrollArea className="h-full">
-                    <div className="h-full min-w-0 p-4" key={selectionKey(selection)}>
+                    <div className="h-full min-w-0 p-4" key={`${workspaceRoot ?? ""}:${selectionKey(selection)}`}>
                         <WorkspaceEditor />
                     </div>
                 </ScrollArea>

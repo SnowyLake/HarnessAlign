@@ -4,9 +4,8 @@
  */
 
 import type { AgentFormat, Config, HarnessConfig, RuleInput, Workspace } from "@shared/models/Workspace";
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type RefObject } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
@@ -15,7 +14,99 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
 import { refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { useAppStore, type Selection } from "@/stores/AppStore";
+import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
+
+/** Form bindings that preserve drafts and respond to tree or keyboard commands. */
+interface EditorFormBinding
+{
+    draft: EditorDraft | undefined;
+    formRef: RefObject<HTMLFormElement | null>;
+    handleChange: FormEventHandler<HTMLFormElement>;
+    handleValueChange: (name: string, value: string) => void;
+}
+
+/** Capture text form fields and checked checkbox values in deterministic key order. */
+function formSnapshot(form: HTMLFormElement): FormSnapshot
+{
+    const values: Record<string, string[]> = {};
+    for (const [name, value] of new FormData(form))
+    {
+        if (typeof value !== "string") continue;
+        (values[name] ??= []).push(value);
+    }
+    return Object.fromEntries(Object.entries(values).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+/** Compare normalized form snapshots without depending on object identity. */
+function snapshotsEqual(left: FormSnapshot, right: FormSnapshot): boolean
+{
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** Read one text field from a saved draft, falling back to the workspace value. */
+function draftText(draft: EditorDraft | undefined, name: string, fallback: string): string
+{
+    return draft?.current[name]?.[0] ?? fallback;
+}
+
+/** Read one repeated field from a saved draft, falling back to workspace values. */
+function draftValues(draft: EditorDraft | undefined, name: string, fallback: string[] | undefined): string[] | undefined
+{
+    return draft ? draft.current[name] : fallback;
+}
+
+/** Consume the next matching tree command with the handlers owned by the mounted editor. */
+function useEditorAction(editorKey: string, onSave: (() => void) | undefined, onDelete: (() => void) | undefined): void
+{
+    const pending = useAppStore((state) => state.pendingEditorAction);
+    const consumeEditorAction = useAppStore((state) => state.consumeEditorAction);
+    const saveRef = useRef(onSave);
+    const deleteRef = useRef(onDelete);
+    saveRef.current = onSave;
+    deleteRef.current = onDelete;
+
+    useEffect(() =>
+    {
+        if (!pending || pending.key !== editorKey) return;
+        consumeEditorAction(pending.id);
+        if (pending.action === "save") saveRef.current?.();
+        else deleteRef.current?.();
+    }, [consumeEditorAction, editorKey, pending]);
+}
+
+/** Bind an uncontrolled form to persistent drafts and external save or delete commands. */
+function useEditorForm(editorKey: string, onDelete?: () => void): EditorFormBinding
+{
+    const draft = useAppStore((state) => state.editorDrafts[editorKey]);
+    const setEditorDraft = useAppStore((state) => state.setEditorDraft);
+    const formRef = useRef<HTMLFormElement>(null);
+    const baselineRef = useRef<FormSnapshot | undefined>(draft?.baseline);
+
+    useLayoutEffect(() =>
+    {
+        if (!formRef.current) return;
+        baselineRef.current = draft?.baseline ?? formSnapshot(formRef.current);
+    }, [editorKey]);
+
+    const handleChange: FormEventHandler<HTMLFormElement> = (event) =>
+    {
+        const current = formSnapshot(event.currentTarget);
+        const baseline = baselineRef.current ?? current;
+        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { baseline, current });
+    };
+
+    const handleValueChange = (name: string, value: string): void =>
+    {
+        if (!formRef.current) return;
+        const current = formSnapshot(formRef.current);
+        current[name] = [value];
+        const baseline = baselineRef.current ?? current;
+        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { baseline, current });
+    };
+
+    useEditorAction(editorKey, () => formRef.current?.requestSubmit(), onDelete);
+    return { draft, formRef, handleChange, handleValueChange };
+}
 
 /** Build a rule payload, omitting `targets` when every harness is selected. */
 function rulePayload(path: string, priority: number, targets: string[] | undefined, body: string): RuleInput
@@ -32,7 +123,7 @@ function TargetBoxes({ selected }: { selected: string[] | undefined })
             <legend className="text-[12px] text-muted-foreground">targets (none means all)</legend>
             {(workspace?.config.harnesses ?? []).map((harness) => (
                 <label key={harness.name} className="flex items-center gap-2 text-foreground">
-                    <input type="checkbox" value={harness.name} defaultChecked={selected?.includes(harness.name) ?? false} />
+                    <input type="checkbox" name="targets" value={harness.name} defaultChecked={selected?.includes(harness.name) ?? false} />
                     {harness.name}
                 </label>
             ))}
@@ -64,12 +155,15 @@ function FormError({ message }: { message: string | undefined })
 /** Editor for `config.json` title and default profile. */
 function ConfigForm({ workspace }: { workspace: Workspace })
 {
-    const isBusy = useAppStore((state) => state.isBusy);
     const [formError, setFormError] = useState<string | undefined>();
+    const editorKey = selectionKey({ kind: "config" });
+    const editor = useEditorForm(editorKey);
 
     return (
         <form
+            ref={editor.formRef}
             className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+            onChange={editor.handleChange}
             onSubmit={(event) =>
             {
                 event.preventDefault();
@@ -83,6 +177,7 @@ function ConfigForm({ workspace }: { workspace: Workspace })
                         defaultProfile: String(form.get("defaultProfile") ?? ""),
                     };
                     await window.appApi.workspace.saveConfig(workspace.root, next);
+                    useAppStore.getState().clearEditorDraft(editorKey);
                     await refreshWorkspace({ kind: "config" });
                     toast.add({ title: "Saved config.json", type: "success" });
                 }).then((result) =>
@@ -93,10 +188,17 @@ function ConfigForm({ workspace }: { workspace: Workspace })
         >
             <h2 className="text-base font-semibold">config.json</h2>
             <FormError message={formError} />
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={workspace.config.name} /></Label>
+            <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", workspace.config.name)} /></Label>
             <Label className="grid gap-1 text-[12px] text-muted-foreground">
                 default_profile
-                <Select name="defaultProfile" defaultValue={workspace.config.defaultProfile}>
+                <Select
+                    name="defaultProfile"
+                    defaultValue={draftText(editor.draft, "defaultProfile", workspace.config.defaultProfile)}
+                    onValueChange={(value) =>
+                    {
+                        if (value !== null) editor.handleValueChange("defaultProfile", value);
+                    }}
+                >
                     <SelectTrigger size="sm" className="w-full">
                         <SelectValue />
                     </SelectTrigger>
@@ -107,9 +209,6 @@ function ConfigForm({ workspace }: { workspace: Workspace })
                     </SelectContent>
                 </Select>
             </Label>
-            <div className="mt-auto flex shrink-0 justify-end gap-2">
-                <Button type="submit" size="sm" disabled={isBusy}>Save</Button>
-            </div>
         </form>
     );
 }
@@ -121,11 +220,15 @@ function HarnessForm({ workspace, original }: { workspace: Workspace; original?:
     const existing = workspace.config.harnesses.find((harness) => harness.name === original);
     const [formError, setFormError] = useState<string | undefined>();
     const [deleteOpen, setDeleteOpen] = useState(false);
+    const editorKey = selectionKey(original ? { kind: "harness", name: original } : { kind: "harness-new" });
+    const editor = useEditorForm(editorKey, original ? () => setDeleteOpen(true) : undefined);
 
     return (
         <>
             <form
+                ref={editor.formRef}
                 className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+                onChange={editor.handleChange}
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
@@ -156,6 +259,7 @@ function HarnessForm({ workspace, original }: { workspace: Workspace; original?:
                             const harnesses = current.config.harnesses.map((item) => (item.name === harness.name ? harness : item));
                             await window.appApi.workspace.saveConfig(current.root, { ...current.config, harnesses });
                         }
+                        useAppStore.getState().clearEditorDraft(editorKey);
                         await refreshWorkspace({ kind: "harness", name: harness.name });
                         toast.add({ title: `Saved harness ${harness.name}`, type: "success" });
                     }).then((result) =>
@@ -166,11 +270,18 @@ function HarnessForm({ workspace, original }: { workspace: Workspace; original?:
             >
                 <h2 className="text-base font-semibold">{original ? `Harness ${original}` : "New harness"}</h2>
                 <FormError message={formError} />
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={existing?.name ?? ""} /></Label>
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">config_path<Input name="configPath" defaultValue={existing?.configPath ?? ""} /></Label>
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", existing?.name ?? "")} /></Label>
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">config_path<Input name="configPath" defaultValue={draftText(editor.draft, "configPath", existing?.configPath ?? "")} /></Label>
                 <Label className="grid gap-1 text-[12px] text-muted-foreground">
                     agent_format
-                    <Select name="agentFormat" defaultValue={existing?.agentFormat ?? "yaml"}>
+                    <Select
+                        name="agentFormat"
+                        defaultValue={draftText(editor.draft, "agentFormat", existing?.agentFormat ?? "yaml")}
+                        onValueChange={(value) =>
+                        {
+                            if (value !== null) editor.handleValueChange("agentFormat", value);
+                        }}
+                    >
                         <SelectTrigger size="sm" className="w-full">
                             <SelectValue />
                         </SelectTrigger>
@@ -180,16 +291,8 @@ function HarnessForm({ workspace, original }: { workspace: Workspace; original?:
                         </SelectContent>
                     </Select>
                 </Label>
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">agent_extension<Input name="agentExtension" defaultValue={existing?.agentExtension ?? "md"} /></Label>
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">instructions_field (TOML only)<Input name="instructionsField" defaultValue={existing?.instructionsField ?? ""} /></Label>
-                <div className="mt-auto flex shrink-0 justify-end gap-2">
-                    <Button type="submit" size="sm" disabled={isBusy}>Save</Button>
-                    {original ? (
-                        <Button type="button" size="sm" variant="destructive" disabled={isBusy} onClick={() => setDeleteOpen(true)}>
-                            Delete
-                        </Button>
-                    ) : null}
-                </div>
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">agent_extension<Input name="agentExtension" defaultValue={draftText(editor.draft, "agentExtension", existing?.agentExtension ?? "md")} /></Label>
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">instructions_field (TOML only)<Input name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", existing?.instructionsField ?? "")} /></Label>
             </form>
             <ConfirmDialog
                 open={deleteOpen}
@@ -206,7 +309,8 @@ function HarnessForm({ workspace, original }: { workspace: Workspace; original?:
                     void runMutation(async () =>
                     {
                         await window.appApi.workspace.removeHarness(workspace.root, original);
-                        await refreshWorkspace({ kind: "config" });
+                        useAppStore.getState().clearEditorDraft(editorKey);
+                        await refreshWorkspace();
                         toast.add({ title: `Deleted harness ${original}`, type: "success" });
                     }).then((result) =>
                     {
@@ -221,12 +325,15 @@ function HarnessForm({ workspace, original }: { workspace: Workspace; original?:
 /** Editor for creating a new profile name. */
 function ProfileNewForm({ workspace }: { workspace: Workspace })
 {
-    const isBusy = useAppStore((state) => state.isBusy);
     const [formError, setFormError] = useState<string | undefined>();
+    const editorKey = selectionKey({ kind: "profile-new" });
+    const editor = useEditorForm(editorKey);
 
     return (
         <form
+            ref={editor.formRef}
             className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+            onChange={editor.handleChange}
             onSubmit={(event) =>
             {
                 event.preventDefault();
@@ -236,6 +343,7 @@ function ProfileNewForm({ workspace }: { workspace: Workspace })
                 void runMutation(async () =>
                 {
                     await window.appApi.workspace.addProfile(workspace.root, name);
+                    useAppStore.getState().clearEditorDraft(editorKey);
                     await refreshWorkspace({ kind: "profile", name });
                     toast.add({ title: `Created profile ${name}`, type: "success" });
                 }).then((result) =>
@@ -246,10 +354,7 @@ function ProfileNewForm({ workspace }: { workspace: Workspace })
         >
             <h2 className="text-base font-semibold">New profile</h2>
             <FormError message={formError} />
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue="" /></Label>
-            <div className="mt-auto flex shrink-0 justify-end gap-2">
-                <Button type="submit" size="sm" disabled={isBusy}>Save</Button>
-            </div>
+            <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", "")} /></Label>
         </form>
     );
 }
@@ -261,6 +366,8 @@ function ProfileForm({ workspace, name }: { workspace: Workspace; name: string }
     const isDefault = name === workspace.config.defaultProfile;
     const [formError, setFormError] = useState<string | undefined>();
     const [deleteOpen, setDeleteOpen] = useState(false);
+    const editorKey = selectionKey({ kind: "profile", name });
+    useEditorAction(editorKey, undefined, isDefault ? undefined : () => setDeleteOpen(true));
 
     return (
         <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3">
@@ -277,76 +384,30 @@ function ProfileForm({ workspace, name }: { workspace: Workspace; name: string }
                 <p className="text-muted-foreground">{`Deleting removes .halign/domains/${name}/.`}</p>
             )}
             {!isDefault ? (
-                <>
-                    <div className="mt-auto flex shrink-0 justify-end gap-2">
-                        <Button type="button" size="sm" variant="destructive" disabled={isBusy} onClick={() => setDeleteOpen(true)}>
-                            Delete
-                        </Button>
-                    </div>
-                    <ConfirmDialog
-                        open={deleteOpen}
-                        onOpenChange={setDeleteOpen}
-                        title={`Delete profile ${name}?`}
-                        description={`This removes .halign/domains/${name}/.`}
-                        confirmLabel="Delete"
-                        destructive
-                        confirmDisabled={isBusy}
-                        onConfirm={() =>
+                <ConfirmDialog
+                    open={deleteOpen}
+                    onOpenChange={setDeleteOpen}
+                    title={`Delete profile ${name}?`}
+                    description={`This removes .halign/domains/${name}/.`}
+                    confirmLabel="Delete"
+                    destructive
+                    confirmDisabled={isBusy}
+                    onConfirm={() =>
+                    {
+                        setFormError(undefined);
+                        void runMutation(async () =>
                         {
-                            setFormError(undefined);
-                            void runMutation(async () =>
-                            {
-                                await window.appApi.workspace.removeProfile(workspace.root, name);
-                                await refreshWorkspace({ kind: "config" });
-                                toast.add({ title: `Deleted profile ${name}`, type: "success" });
-                            }).then((result) =>
-                            {
-                                if (!result.ok) setFormError(result.message);
-                            });
-                        }}
-                    />
-                </>
+                            await window.appApi.workspace.removeProfile(workspace.root, name);
+                            await refreshWorkspace();
+                            toast.add({ title: `Deleted profile ${name}`, type: "success" });
+                        }).then((result) =>
+                        {
+                            if (!result.ok) setFormError(result.message);
+                        });
+                    }}
+                />
             ) : null}
         </div>
-    );
-}
-
-/** Confirm then delete a `.halign` source file through Main. */
-function DeleteSourceButton({ root, path }: { root: string; path: string })
-{
-    const isBusy = useAppStore((state) => state.isBusy);
-    const [open, setOpen] = useState(false);
-    const [formError, setFormError] = useState<string | undefined>();
-
-    return (
-        <>
-            <FormError message={formError} />
-            <Button type="button" size="sm" variant="destructive" disabled={isBusy} onClick={() => setOpen(true)}>
-                Delete
-            </Button>
-            <ConfirmDialog
-                open={open}
-                onOpenChange={setOpen}
-                title={`Delete ${path}?`}
-                description="This permanently deletes the source file from the workspace."
-                confirmLabel="Delete"
-                destructive
-                confirmDisabled={isBusy}
-                onConfirm={() =>
-                {
-                    setFormError(undefined);
-                    void runMutation(async () =>
-                    {
-                        await window.appApi.workspace.deleteSource(root, path);
-                        await refreshWorkspace({ kind: "config" });
-                        toast.add({ title: `Deleted ${path}`, type: "success" });
-                    }).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
-                    });
-                }}
-            />
-        </>
     );
 }
 
@@ -355,6 +416,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
 {
     const isBusy = useAppStore((state) => state.isBusy);
     const [formError, setFormError] = useState<string | undefined>();
+    const [deleteOpen, setDeleteOpen] = useState(false);
     const isShared = (selection.kind === "rule-new" && selection.scope === "shared")
         || (selection.kind === "rule" && workspace.sharedRules.some((rule) => rule.path === selection.path));
     const defaultPath = selection.kind === "rule"
@@ -365,93 +427,124 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                 ? ".halign/rules/shared/new-rule.md"
                 : `.halign/domains/${selection.profile ?? "profile"}/rules/new-rule.md`;
     const sharedExisting = workspace.sharedRules.find((rule) => selection.kind === "rule" && rule.path === selection.path);
+    const existing = selection.kind === "rule"
+        ? [...workspace.rootRules, ...Object.values(workspace.domainRules).flat()].find((rule) => rule.path === selection.path)
+        : undefined;
+    const existingPath = sharedExisting?.path ?? existing?.path;
+    const editorKey = selectionKey(selection);
+    const editor = useEditorForm(editorKey, existingPath ? () => setDeleteOpen(true) : undefined);
+    const deleteDialog = existingPath ? (
+        <ConfirmDialog
+            open={deleteOpen}
+            onOpenChange={setDeleteOpen}
+            title={`Delete ${existingPath}?`}
+            description="This permanently deletes the source file from the workspace."
+            confirmLabel="Delete"
+            destructive
+            confirmDisabled={isBusy}
+            onConfirm={() =>
+            {
+                setFormError(undefined);
+                void runMutation(async () =>
+                {
+                    await window.appApi.workspace.deleteSource(workspace.root, existingPath);
+                    useAppStore.getState().clearEditorDraft(editorKey);
+                    await refreshWorkspace();
+                    toast.add({ title: `Deleted ${existingPath}`, type: "success" });
+                }).then((result) =>
+                {
+                    if (!result.ok) setFormError(result.message);
+                });
+            }}
+        />
+    ) : null;
 
     if (isShared)
     {
         return (
+            <>
+                <form
+                    ref={editor.formRef}
+                    className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+                    onChange={editor.handleChange}
+                    onSubmit={(event) =>
+                    {
+                        event.preventDefault();
+                        const form = new FormData(event.currentTarget);
+                        const path = String(form.get("path") ?? "").trim();
+                        const body = String(form.get("body") ?? "");
+                        const original = sharedExisting?.path;
+                        setFormError(undefined);
+                        void runMutation(async () =>
+                        {
+                            await window.appApi.workspace.saveSharedRule(workspace.root, path, body);
+                            if (original && original !== path) await window.appApi.workspace.deleteSource(workspace.root, original);
+                            useAppStore.getState().clearEditorDraft(editorKey);
+                            await refreshWorkspace({ kind: "rule", path });
+                            toast.add({ title: `Saved ${path}`, type: "success" });
+                        }).then((result) =>
+                        {
+                            if (!result.ok) setFormError(result.message);
+                        });
+                    }}
+                >
+                    <h2 className="text-base font-semibold">Shared rule</h2>
+                    <FormError message={formError} />
+                    <Label className="grid gap-1 text-[12px] text-muted-foreground">path<Input name="path" defaultValue={draftText(editor.draft, "path", sharedExisting?.path ?? defaultPath)} /></Label>
+                    <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
+                        body
+                        <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", sharedExisting?.body ?? "# Title\n\nbody\n")} />
+                    </Label>
+                </form>
+                {deleteDialog}
+            </>
+        );
+    }
+
+    return (
+        <>
             <form
+                ref={editor.formRef}
                 className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+                onChange={editor.handleChange}
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
-                    const form = new FormData(event.currentTarget);
-                    const path = String(form.get("path") ?? "").trim();
-                    const body = String(form.get("body") ?? "");
-                    const original = sharedExisting?.path;
+                    const form = event.currentTarget;
+                    const data = new FormData(form);
+                    const payload = rulePayload(
+                        String(data.get("path") ?? "").trim(),
+                        Number(data.get("priority")),
+                        readTargets(form),
+                        String(data.get("body") ?? ""),
+                    );
+                    const original = existing?.path;
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        await window.appApi.workspace.saveSharedRule(workspace.root, path, body);
-                        if (original && original !== path) await window.appApi.workspace.deleteSource(workspace.root, original);
-                        await refreshWorkspace({ kind: "rule", path });
-                        toast.add({ title: `Saved ${path}`, type: "success" });
+                        await window.appApi.workspace.saveRule(workspace.root, payload);
+                        if (original && original !== payload.path) await window.appApi.workspace.deleteSource(workspace.root, original);
+                        useAppStore.getState().clearEditorDraft(editorKey);
+                        await refreshWorkspace({ kind: "rule", path: payload.path });
+                        toast.add({ title: `Saved ${payload.path}`, type: "success" });
                     }).then((result) =>
                     {
                         if (!result.ok) setFormError(result.message);
                     });
                 }}
             >
-                <h2 className="text-base font-semibold">Shared rule</h2>
+                <h2 className="text-base font-semibold">Rule</h2>
                 <FormError message={formError} />
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">path<Input name="path" defaultValue={sharedExisting?.path ?? defaultPath} /></Label>
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">path<Input name="path" defaultValue={draftText(editor.draft, "path", existing?.path ?? defaultPath)} /></Label>
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">priority<Input name="priority" type="number" defaultValue={draftText(editor.draft, "priority", String(existing?.priority ?? 100))} /></Label>
+                <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} />
                 <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
                     body
-                    <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={sharedExisting?.body ?? "# Title\n\nbody\n"} />
+                    <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", existing?.body ?? "# Title\n\nbody\n")} />
                 </Label>
-                <div className="mt-auto flex shrink-0 justify-end gap-2">
-                    <Button type="submit" size="sm" disabled={isBusy}>Save</Button>
-                    {sharedExisting ? <DeleteSourceButton root={workspace.root} path={sharedExisting.path} /> : null}
-                </div>
             </form>
-        );
-    }
-
-    const existing = selection.kind === "rule"
-        ? [...workspace.rootRules, ...Object.values(workspace.domainRules).flat()].find((rule) => rule.path === selection.path)
-        : undefined;
-
-    return (
-        <form
-            className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
-            onSubmit={(event) =>
-            {
-                event.preventDefault();
-                const form = event.currentTarget;
-                const data = new FormData(form);
-                const payload = rulePayload(
-                    String(data.get("path") ?? "").trim(),
-                    Number(data.get("priority")),
-                    readTargets(form),
-                    String(data.get("body") ?? ""),
-                );
-                const original = existing?.path;
-                setFormError(undefined);
-                void runMutation(async () =>
-                {
-                    await window.appApi.workspace.saveRule(workspace.root, payload);
-                    if (original && original !== payload.path) await window.appApi.workspace.deleteSource(workspace.root, original);
-                    await refreshWorkspace({ kind: "rule", path: payload.path });
-                    toast.add({ title: `Saved ${payload.path}`, type: "success" });
-                }).then((result) =>
-                {
-                    if (!result.ok) setFormError(result.message);
-                });
-            }}
-        >
-            <h2 className="text-base font-semibold">Rule</h2>
-            <FormError message={formError} />
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">path<Input name="path" defaultValue={existing?.path ?? defaultPath} /></Label>
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">priority<Input name="priority" type="number" defaultValue={String(existing?.priority ?? 100)} /></Label>
-            <TargetBoxes selected={existing?.targets} />
-            <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
-                body
-                <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={existing?.body ?? "# Title\n\nbody\n"} />
-            </Label>
-            <div className="mt-auto flex shrink-0 justify-end gap-2">
-                <Button type="submit" size="sm" disabled={isBusy}>Save</Button>
-                {existing ? <DeleteSourceButton root={workspace.root} path={existing.path} /> : null}
-            </div>
-        </form>
+            {deleteDialog}
+        </>
     );
 }
 
@@ -461,67 +554,96 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
     const isBusy = useAppStore((state) => state.isBusy);
     const existing = selection.kind === "agent" ? workspace.agents.find((agent) => agent.path === selection.path) : undefined;
     const [formError, setFormError] = useState<string | undefined>();
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const editorKey = selectionKey(selection);
+    const editor = useEditorForm(editorKey, existing ? () => setDeleteOpen(true) : undefined);
 
     return (
-        <form
-            className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
-            onSubmit={(event) =>
-            {
-                event.preventDefault();
-                const form = new FormData(event.currentTarget);
-                const harnesses: Record<string, Record<string, unknown>> = {};
-                try
+        <>
+            <form
+                ref={editor.formRef}
+                className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+                onChange={editor.handleChange}
+                onSubmit={(event) =>
                 {
-                    for (const harness of workspace.config.harnesses)
+                    event.preventDefault();
+                    const form = new FormData(event.currentTarget);
+                    const harnesses: Record<string, Record<string, unknown>> = {};
+                    try
                     {
-                        harnesses[harness.name] = JSON.parse(String(form.get(`meta-${harness.name}`) ?? "{}")) as Record<string, unknown>;
+                        for (const harness of workspace.config.harnesses)
+                        {
+                            harnesses[harness.name] = JSON.parse(String(form.get(`meta-${harness.name}`) ?? "{}")) as Record<string, unknown>;
+                        }
                     }
-                }
-                catch (error)
-                {
-                    setFormError(error instanceof Error ? error.message : String(error));
-                    return;
-                }
-                const agent = {
-                    path: String(form.get("path") ?? "").trim(),
-                    name: String(form.get("name") ?? "").trim(),
-                    description: String(form.get("description") ?? "").trim(),
-                    harnesses,
-                    body: String(form.get("body") ?? ""),
-                };
-                setFormError(undefined);
-                void runMutation(async () =>
-                {
-                    await window.appApi.workspace.saveAgent(workspace.root, agent);
-                    if (existing && existing.path !== agent.path) await window.appApi.workspace.deleteSource(workspace.root, existing.path);
-                    await refreshWorkspace({ kind: "agent", path: agent.path });
-                    toast.add({ title: `Saved ${agent.path}`, type: "success" });
-                }).then((result) =>
-                {
-                    if (!result.ok) setFormError(result.message);
-                });
-            }}
-        >
-            <h2 className="text-base font-semibold">{existing ? `Agent ${existing.name}` : "New agent"}</h2>
-            <FormError message={formError} />
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">path<Input name="path" defaultValue={existing?.path ?? ".halign/agents/new-agent.md"} /></Label>
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={existing?.name ?? ""} /></Label>
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">description<Input name="description" defaultValue={existing?.description ?? ""} /></Label>
-            {workspace.config.harnesses.map((harness) => (
-                <Label key={harness.name} className="grid gap-1 text-[12px] text-muted-foreground">
-                    {harness.name} metadata (JSON)
-                    <Textarea name={`meta-${harness.name}`} className="min-h-28" defaultValue={JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2)} />
+                    catch (error)
+                    {
+                        setFormError(error instanceof Error ? error.message : String(error));
+                        return;
+                    }
+                    const agent = {
+                        path: String(form.get("path") ?? "").trim(),
+                        name: String(form.get("name") ?? "").trim(),
+                        description: String(form.get("description") ?? "").trim(),
+                        harnesses,
+                        body: String(form.get("body") ?? ""),
+                    };
+                    setFormError(undefined);
+                    void runMutation(async () =>
+                    {
+                        await window.appApi.workspace.saveAgent(workspace.root, agent);
+                        if (existing && existing.path !== agent.path) await window.appApi.workspace.deleteSource(workspace.root, existing.path);
+                        useAppStore.getState().clearEditorDraft(editorKey);
+                        await refreshWorkspace({ kind: "agent", path: agent.path });
+                        toast.add({ title: `Saved ${agent.path}`, type: "success" });
+                    }).then((result) =>
+                    {
+                        if (!result.ok) setFormError(result.message);
+                    });
+                }}
+            >
+                <h2 className="text-base font-semibold">{existing ? `Agent ${existing.name}` : "New agent"}</h2>
+                <FormError message={formError} />
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">path<Input name="path" defaultValue={draftText(editor.draft, "path", existing?.path ?? ".halign/agents/new-agent.md")} /></Label>
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", existing?.name ?? "")} /></Label>
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">description<Input name="description" defaultValue={draftText(editor.draft, "description", existing?.description ?? "")} /></Label>
+                {workspace.config.harnesses.map((harness) => (
+                    <Label key={harness.name} className="grid gap-1 text-[12px] text-muted-foreground">
+                        {harness.name} metadata (JSON)
+                        <Textarea name={`meta-${harness.name}`} className="min-h-28" defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))} />
+                    </Label>
+                ))}
+                <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
+                    body
+                    <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", existing?.body ?? "Instructions.\n")} />
                 </Label>
-            ))}
-            <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
-                body
-                <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={existing?.body ?? "Instructions.\n"} />
-            </Label>
-            <div className="mt-auto flex shrink-0 justify-end gap-2">
-                <Button type="submit" size="sm" disabled={isBusy}>Save</Button>
-                {existing ? <DeleteSourceButton root={workspace.root} path={existing.path} /> : null}
-            </div>
-        </form>
+            </form>
+            {existing ? (
+                <ConfirmDialog
+                    open={deleteOpen}
+                    onOpenChange={setDeleteOpen}
+                    title={`Delete ${existing.path}?`}
+                    description="This permanently deletes the source file from the workspace."
+                    confirmLabel="Delete"
+                    destructive
+                    confirmDisabled={isBusy}
+                    onConfirm={() =>
+                    {
+                        setFormError(undefined);
+                        void runMutation(async () =>
+                        {
+                            await window.appApi.workspace.deleteSource(workspace.root, existing.path);
+                            useAppStore.getState().clearEditorDraft(editorKey);
+                            await refreshWorkspace();
+                            toast.add({ title: `Deleted ${existing.path}`, type: "success" });
+                        }).then((result) =>
+                        {
+                            if (!result.ok) setFormError(result.message);
+                        });
+                    }}
+                />
+            ) : null}
+        </>
     );
 }
 
