@@ -6,7 +6,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { AppApi } from "../shared/contracts/AppApi.js";
 import { IPC_CHANNELS } from "../shared/contracts/IpcChannels.js";
 import type { AppSettings } from "../shared/models/AppSettings.js";
-import type { Agent, Config, HarnessConfig, RuleInput } from "../shared/models/Workspace.js";
+import type { Agent, Config, HarnessConfig, LayerOptionInput, RuleInput } from "../shared/models/Workspace.js";
 
 /** Renderer-facing capability API bridged onto `window.appApi`. */
 const appApi: AppApi = {
@@ -35,17 +35,22 @@ const appApi: AppApi = {
         load: (root) => ipcRenderer.invoke(IPC_CHANNELS.workspaceLoad, root),
         saveConfig: (root, config: Config) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveConfig, root, config),
         saveRule: (root, input: RuleInput) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveRule, root, input),
+        saveLayerOption: (root, input: LayerOptionInput) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveLayerOption, root, input),
         saveSharedRule: (root, path, body) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveSharedRule, root, path, body),
         saveAgent: (root, agent: Agent) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveAgent, root, agent),
         deleteSource: (root, path) => ipcRenderer.invoke(IPC_CHANNELS.workspaceDeleteSource, root, path),
-        addProfile: (root, profile) => ipcRenderer.invoke(IPC_CHANNELS.workspaceAddProfile, root, profile),
-        removeProfile: (root, profile) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRemoveProfile, root, profile),
+        addLayer: (root, name, initialOption) => ipcRenderer.invoke(IPC_CHANNELS.workspaceAddLayer, root, name, initialOption),
+        removeLayer: (root, name) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRemoveLayer, root, name),
+        renameLayer: (root, from, to) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRenameLayer, root, from, to),
+        addLayerOption: (root, layer, option) => ipcRenderer.invoke(IPC_CHANNELS.workspaceAddLayerOption, root, layer, option),
+        removeLayerOption: (root, layer, option) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRemoveLayerOption, root, layer, option),
+        renameLayerOption: (root, layer, from, to) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRenameLayerOption, root, layer, from, to),
         addHarness: (root, harness: HarnessConfig) => ipcRenderer.invoke(IPC_CHANNELS.workspaceAddHarness, root, harness),
         removeHarness: (root, name) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRemoveHarness, root, name),
         renameHarness: (root, from, to) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRenameHarness, root, from, to),
-        generate: (root, profile) => ipcRenderer.invoke(IPC_CHANNELS.workspaceGenerate, root, profile),
-        check: (root, profile) => ipcRenderer.invoke(IPC_CHANNELS.workspaceCheck, root, profile),
-        setup: (root, profile) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetup, root, profile),
+        generate: (root, selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceGenerate, root, selection),
+        check: (root, selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceCheck, root, selection),
+        setup: (root, selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetup, root, selection),
     },
 };
 

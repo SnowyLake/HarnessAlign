@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
     Sidebar,
     SidebarContent,
@@ -41,7 +40,7 @@ interface NavItem
 const WORKSPACE_NAV_ITEMS: NavItem[] = [
     { view: "project", label: "Project", icon: FolderCogIcon },
     { view: "rules", label: "Rules", icon: ScrollTextIcon },
-    { view: "domain", label: "Domain", icon: Layers3Icon },
+    { view: "layers", label: "Layers", icon: Layers3Icon },
     { view: "agents", label: "Agents", icon: BotIcon },
     { view: "generated", label: "Generated", icon: FileOutputIcon },
 ];
@@ -62,8 +61,6 @@ export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: App
     const view = useAppStore((state) => state.view);
     const setView = useAppStore((state) => state.setView);
     const workspace = useAppStore((state) => state.workspace);
-    const profile = useAppStore((state) => state.profile);
-    const setProfile = useAppStore((state) => state.setProfile);
     const isBusy = useAppStore((state) => state.isBusy);
     const { toggleSidebar } = useSidebar();
     const [version, setVersion] = useState("");
@@ -155,23 +152,6 @@ export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: App
                         </span>
                     </div>
                     <div className="ml-auto flex shrink-0 items-center gap-2">
-                        <Select
-                            value={profile || undefined}
-                            onValueChange={(value) =>
-                            {
-                                if (value !== null) setProfile(value);
-                            }}
-                            disabled={!workspace || isBusy}
-                        >
-                            <SelectTrigger size="sm" className="w-36">
-                                <SelectValue placeholder="Profile" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {(workspace?.config.profiles ?? []).map((item) => (
-                                    <SelectItem key={item} value={item}>{item}</SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
                         <Button size="sm" variant={workspace ? "default" : "secondary"} disabled={!workspace || isBusy} onClick={onGenerate}>
                             Generate
                         </Button>

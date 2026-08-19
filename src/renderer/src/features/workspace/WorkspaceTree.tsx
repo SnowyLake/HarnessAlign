@@ -1,5 +1,5 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
-import type { RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
+import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
 import { useState } from "react";
 import { PencilIcon, SaveIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -242,7 +242,7 @@ async function renameRuleFromTree(workspace: Workspace, rule: RuleInput | Shared
     const result = await runMutation(async () =>
     {
         nextPath = renamedRulePath(rule.path, name);
-        const allRules = [...workspace.rootRules, ...Object.values(workspace.domainRules).flat(), ...workspace.sharedRules];
+        const allRules = [...workspace.rootRules, ...workspace.sharedRules];
         if (nextPath !== rule.path && allRules.some((item) => item.path === nextPath)) throw new Error(`${nextPath}: rule already exists`);
         if (nextPath !== rule.path)
         {
@@ -279,19 +279,14 @@ function moveRule(rules: readonly RuleInput[], sourcePath: string | undefined, t
     return next;
 }
 
-/** Identify the workspace rule collection being reordered. */
-type RuleOrderScope = { kind: "root" } | { kind: "domain"; profile: string };
-
 /** Persist a drag result by assigning priorities from zero in visible row order. */
-async function persistRuleOrder(workspace: Workspace, rules: readonly RuleInput[], sourcePath: string | undefined, targetPath: string, position: RuleDropPosition, scope: RuleOrderScope, selection: Selection): Promise<void>
+async function persistRuleOrder(workspace: Workspace, rules: readonly RuleInput[], sourcePath: string | undefined, targetPath: string, position: RuleDropPosition, selection: Selection): Promise<void>
 {
     const next = moveRule(rules, sourcePath, targetPath, position);
     if (!next) return;
     const ordered = next.map((rule, priority) => ({ ...rule, priority }));
     const updates = ordered.filter((rule) => rules.find((current) => current.path === rule.path)?.priority !== rule.priority);
-    useAppStore.getState().setWorkspace(scope.kind === "root"
-        ? { ...workspace, rootRules: ordered }
-        : { ...workspace, domainRules: { ...workspace.domainRules, [scope.profile]: ordered } });
+    useAppStore.getState().setWorkspace({ ...workspace, rootRules: ordered });
     const result = await runMutation(async () =>
     {
         for (const rule of updates) await window.appApi.workspace.saveRule(workspace.root, rule);
@@ -299,6 +294,29 @@ async function persistRuleOrder(workspace: Workspace, rules: readonly RuleInput[
     });
     if (result.ok) toast.add({ title: "Rule order updated", type: "success" });
     else useAppStore.getState().setWorkspace(workspace);
+}
+
+/** Rename one layer option through the cascade-aware engine operation. */
+async function renameLayerOptionFromTree(workspace: Workspace, option: LayerOption, name: string): Promise<boolean>
+{
+    const nextName = name.trim().toLowerCase().endsWith(".md") ? name.trim().slice(0, -3) : name.trim();
+    const result = await runMutation(async () =>
+    {
+        await window.appApi.workspace.renameLayerOption(workspace.root, option.layer, option.name, nextName);
+        const state = useAppStore.getState();
+        state.setLayerSelection(state.layerSelection.map((selection) => selection.name === option.layer && selection.option === option.name
+            ? { ...selection, option: nextName }
+            : selection));
+        const nextPath = `.halign/layers/${option.layer}/${nextName}.md`;
+        const previousKey = selectionKey({ kind: "layer-option", path: option.path });
+        const nextKey = selectionKey({ kind: "layer-option", path: nextPath });
+        const draft = state.editorDrafts[previousKey];
+        if (draft) state.setEditorDraft(nextKey, draft);
+        state.clearEditorDraft(previousKey);
+        await refreshWorkspace({ kind: "layer-option", path: nextPath });
+    });
+    if (result.ok) toast.add({ title: `Renamed to ${nextName}.md`, type: "success" });
+    return result.ok;
 }
 
 /** Props for a tree section heading. */
@@ -330,13 +348,12 @@ export interface WorkspaceTreeProps
     view: WorkspaceView;
 }
 
-/** Contextual tree for Project, Rules, Domain, Agents, or Generated. */
+/** Contextual tree for Project, Rules, Layers, Agents, or Generated. */
 export function WorkspaceTree({ view }: WorkspaceTreeProps)
 {
     const workspace = useAppStore((state) => state.workspace);
     const selection = useAppStore((state) => state.selection);
     const setSelection = useAppStore((state) => state.setSelection);
-    const profile = useAppStore((state) => state.profile);
     const isBusy = useAppStore((state) => state.isBusy);
     const editorDrafts = useAppStore((state) => state.editorDrafts);
     const [draggedRulePath, setDraggedRulePath] = useState<string>();
@@ -344,7 +361,6 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
     if (!workspace) return <p className="p-3 text-muted-foreground">No project open.</p>;
     const rootRuleTabs = sortRuleTabs(workspace.rootRules);
-    const domainRuleTabs = sortRuleTabs(workspace.domainRules[profile] ?? []);
 
     return (
         <ScrollArea className="h-full">
@@ -383,26 +399,26 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                 onClick={() => setSelection({ kind: "harness-new" })}
                             />
                         ) : null}
-                        <Section title="Profiles" disabled={isBusy} onNew={() => setSelection({ kind: "profile-new" })} />
-                        {workspace.config.profiles.map((item) => (
+                        <Section title="Layers" disabled={isBusy} onNew={() => setSelection({ kind: "layer-new" })} />
+                        {workspace.config.layers.map((item) => (
                             <TreeButton
-                                key={item}
-                                label={item}
-                                active={selection.kind === "profile" && selection.name === item}
+                                key={item.name}
+                                label={item.name}
+                                active={selection.kind === "layer" && selection.name === item.name}
                                 disabled={isBusy}
-                                selection={{ kind: "profile", name: item }}
-                                canDelete={item !== workspace.config.defaultProfile}
-                                onClick={() => setSelection({ kind: "profile", name: item })}
+                                selection={{ kind: "layer", name: item.name }}
+                                canDelete
+                                onClick={() => setSelection({ kind: "layer", name: item.name })}
                             />
                         ))}
-                        {(selection.kind === "profile-new" || Boolean(editorDrafts[selectionKey({ kind: "profile-new" })])) ? (
+                        {(selection.kind === "layer-new" || Boolean(editorDrafts[selectionKey({ kind: "layer-new" })])) ? (
                             <TreeButton
-                                label="New profile"
-                                active={selection.kind === "profile-new"}
+                                label="New layer"
+                                active={selection.kind === "layer-new"}
                                 disabled={isBusy}
-                                selection={{ kind: "profile-new" }}
+                                selection={{ kind: "layer-new" }}
                                 canSave
-                                onClick={() => setSelection({ kind: "profile-new" })}
+                                onClick={() => setSelection({ kind: "layer-new" })}
                             />
                         ) : null}
                     </>
@@ -450,7 +466,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                     const sourcePath = draggedRulePath;
                                     setDraggedRulePath(undefined);
                                     setRuleDropTarget(undefined);
-                                    void persistRuleOrder(workspace, rootRuleTabs, sourcePath, rule.path, position, { kind: "root" }, selection);
+                                    void persistRuleOrder(workspace, rootRuleTabs, sourcePath, rule.path, position, selection);
                                 }}
                                 onClick={() => setSelection({ kind: "rule", path: rule.path })}
                             />
@@ -492,68 +508,39 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                     </>
                 ) : null}
 
-                {view === "domain" ? (
+                {view === "layers" ? (
                     <>
-                        <Section
-                            title={`${profile} rules`}
-                            disabled={isBusy}
-                            onNew={() => setSelection({ kind: "rule-new", scope: "domain", profile })}
-                        />
-                        {domainRuleTabs.map((rule) => (
-                            <TreeButton
-                                key={rule.path}
-                                label={ruleDisplayName(rule.path)}
-                                active={selection.kind === "rule" && selection.path === rule.path}
-                                disabled={isBusy}
-                                selection={{ kind: "rule", path: rule.path }}
-                                canSave
-                                canDelete
-                                isDraggable
-                                isDragging={draggedRulePath === rule.path}
-                                dropPosition={draggedRulePath !== rule.path && ruleDropTarget?.path === rule.path ? ruleDropTarget.position : undefined}
-                                onRename={(name) => renameRuleFromTree(workspace, rule, name)}
-                                onDragStart={() =>
-                                {
-                                    setDraggedRulePath(rule.path);
-                                    setRuleDropTarget(undefined);
-                                }}
-                                onDragEnd={() =>
-                                {
-                                    setDraggedRulePath(undefined);
-                                    setRuleDropTarget(undefined);
-                                }}
-                                onDragPositionChange={(position) =>
-                                {
-                                    if (!draggedRulePath || draggedRulePath === rule.path) return;
-                                    if (!moveRule(domainRuleTabs, draggedRulePath, rule.path, position))
-                                    {
-                                        setRuleDropTarget(undefined);
-                                        return;
-                                    }
-                                    setRuleDropTarget((current) => current?.path === rule.path && current.position === position ? current : { path: rule.path, position });
-                                }}
-                                onDragLeave={() => setRuleDropTarget((current) => current?.path === rule.path ? undefined : current)}
-                                onDrop={(position) =>
-                                {
-                                    const sourcePath = draggedRulePath;
-                                    setDraggedRulePath(undefined);
-                                    setRuleDropTarget(undefined);
-                                    void persistRuleOrder(workspace, domainRuleTabs, sourcePath, rule.path, position, { kind: "domain", profile }, selection);
-                                }}
-                                onClick={() => setSelection({ kind: "rule", path: rule.path })}
-                            />
+                        {workspace.config.layers.map((layer) => (
+                            <div key={layer.name}>
+                                <Section title={layer.name} disabled={isBusy} onNew={() => setSelection({ kind: "layer-option-new", layer: layer.name })} />
+                                {(workspace.layerOptions[layer.name] ?? []).map((option) => (
+                                    <TreeButton
+                                        key={option.path}
+                                        label={option.name}
+                                        indent
+                                        active={selection.kind === "layer-option" && selection.path === option.path}
+                                        disabled={isBusy}
+                                        selection={{ kind: "layer-option", path: option.path }}
+                                        canSave
+                                        canDelete={option.name !== layer.selected && (workspace.layerOptions[layer.name]?.length ?? 0) > 1}
+                                        onRename={(name) => renameLayerOptionFromTree(workspace, option, name)}
+                                        onClick={() => setSelection({ kind: "layer-option", path: option.path })}
+                                    />
+                                ))}
+                                {(selection.kind === "layer-option-new" && selection.layer === layer.name)
+                                    || Boolean(editorDrafts[selectionKey({ kind: "layer-option-new", layer: layer.name })]) ? (
+                                        <TreeButton
+                                            label="new-option"
+                                            indent
+                                            active={selection.kind === "layer-option-new" && selection.layer === layer.name}
+                                            disabled={isBusy}
+                                            selection={{ kind: "layer-option-new", layer: layer.name }}
+                                            canSave
+                                            onClick={() => setSelection({ kind: "layer-option-new", layer: layer.name })}
+                                        />
+                                    ) : null}
+                            </div>
                         ))}
-                        {(selection.kind === "rule-new" && selection.scope === "domain" && selection.profile === profile)
-                            || Boolean(editorDrafts[selectionKey({ kind: "rule-new", scope: "domain", profile })]) ? (
-                                <TreeButton
-                                    label="new-rule"
-                                    active={selection.kind === "rule-new" && selection.scope === "domain" && selection.profile === profile}
-                                    disabled={isBusy}
-                                    selection={{ kind: "rule-new", scope: "domain", profile }}
-                                    canSave
-                                    onClick={() => setSelection({ kind: "rule-new", scope: "domain", profile })}
-                                />
-                            ) : null}
                     </>
                 ) : null}
 

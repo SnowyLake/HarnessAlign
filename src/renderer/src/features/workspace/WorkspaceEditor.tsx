@@ -3,10 +3,10 @@
  * Saves go through Main path checks; this module never imports Node or Electron.
  */
 
-import type { AgentFormat, Config, HarnessConfig, RuleInput, Workspace } from "@shared/models/Workspace";
+import type { AgentFormat, Config, HarnessConfig, LayerOptionInput, LayerSelection, RuleInput, Workspace } from "@shared/models/Workspace";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { ChevronRightIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { ChevronRightIcon, GripVerticalIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
@@ -155,10 +155,11 @@ function FormError({ message }: { message: string | undefined })
     );
 }
 
-/** Editor for `config.json` title and default profile. */
+/** Editor for `config.json` title and saved ordered layer selection. */
 function ConfigForm({ workspace, showTitle = true }: { workspace: Workspace; showTitle?: boolean })
 {
     const setSelection = useAppStore((state) => state.setSelection);
+    const layerSelection = useAppStore((state) => state.layerSelection);
     const [formError, setFormError] = useState<string | undefined>();
     const editorKey = selectionKey({ kind: "config" });
     const editor = useEditorForm(editorKey);
@@ -179,7 +180,7 @@ function ConfigForm({ workspace, showTitle = true }: { workspace: Workspace; sho
                     const next: Config = {
                         ...workspace.config,
                         name: String(form.get("name") ?? "").trim(),
-                        defaultProfile: String(form.get("defaultProfile") ?? ""),
+                        layers: layerSelection.map((selection) => ({ name: selection.name, selected: selection.option })),
                     };
                     await window.appApi.workspace.saveConfig(workspace.root, next);
                     useAppStore.getState().clearEditorDraft(editorKey);
@@ -194,26 +195,6 @@ function ConfigForm({ workspace, showTitle = true }: { workspace: Workspace; sho
             {showTitle ? <h2 className="text-base font-semibold">config.json</h2> : null}
             <FormError message={formError} />
             <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", workspace.config.name)} /></Label>
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">
-                default_profile
-                <Select
-                    name="defaultProfile"
-                    defaultValue={draftText(editor.draft, "defaultProfile", workspace.config.defaultProfile)}
-                    onValueChange={(value) =>
-                    {
-                        if (value !== null) editor.handleValueChange("defaultProfile", value);
-                    }}
-                >
-                    <SelectTrigger size="sm" className="w-full">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {workspace.config.profiles.map((profile) => (
-                            <SelectItem key={profile} value={profile}>{profile}</SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-            </Label>
         </form>
     );
 }
@@ -418,33 +399,35 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
     );
 }
 
-/** Editor for creating a new profile name. */
-function ProfileNewForm({ workspace }: { workspace: Workspace })
+/** Editor for creating a layer with its first empty option. */
+function LayerNewForm({ workspace }: { workspace: Workspace })
 {
     const isBusy = useAppStore((state) => state.isBusy);
     const setSelection = useAppStore((state) => state.setSelection);
     const [formError, setFormError] = useState<string | undefined>();
-    const editorKey = selectionKey({ kind: "profile-new" });
+    const editorKey = selectionKey({ kind: "layer-new" });
     const editor = useEditorForm(editorKey);
 
     return (
         <form
             ref={editor.formRef}
             className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
-            onFocusCapture={() => setSelection({ kind: "profile-new" })}
+            onFocusCapture={() => setSelection({ kind: "layer-new" })}
             onChange={editor.handleChange}
             onSubmit={(event) =>
             {
                 event.preventDefault();
                 const form = new FormData(event.currentTarget);
                 const name = String(form.get("name") ?? "").trim();
+                const initialOption = String(form.get("initialOption") ?? "").trim();
                 setFormError(undefined);
                 void runMutation(async () =>
                 {
-                    await window.appApi.workspace.addProfile(workspace.root, name);
+                    await window.appApi.workspace.addLayer(workspace.root, name, initialOption);
                     useAppStore.getState().clearEditorDraft(editorKey);
-                    await refreshWorkspace({ kind: "profile", name });
-                    toast.add({ title: `Created profile ${name}`, type: "success" });
+                    await refreshWorkspace({ kind: "layer-option", path: `.halign/layers/${name}/${initialOption}.md` });
+                    useAppStore.getState().setView("layers");
+                    toast.add({ title: `Created layer ${name}`, type: "success" });
                 }).then((result) =>
                 {
                     if (!result.ok) setFormError(result.message);
@@ -452,74 +435,186 @@ function ProfileNewForm({ workspace }: { workspace: Workspace })
             }}
         >
             <div className="flex items-center justify-between gap-3">
-                <h2 className="text-base font-semibold">New profile</h2>
+                <h2 className="text-base font-semibold">New layer</h2>
                 <Button type="submit" size="sm" disabled={isBusy}>Create</Button>
             </div>
             <FormError message={formError} />
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", "")} /></Label>
+            <Label className="grid gap-1 text-[12px] text-muted-foreground">layer name<Input name="name" defaultValue={draftText(editor.draft, "name", "")} /></Label>
+            <Label className="grid gap-1 text-[12px] text-muted-foreground">initial option<Input name="initialOption" defaultValue={draftText(editor.draft, "initialOption", "")} /></Label>
         </form>
     );
 }
 
-/** Editor pane for an existing profile (delete only). */
-function ProfileForm({ workspace, name }: { workspace: Workspace; name: string })
+/** Props for one ordered Layer card on the Project page. */
+interface LayerCardProps
+{
+    workspace: Workspace;
+    selection: LayerSelection;
+    isDragging: boolean;
+    onDragStart: () => void;
+    onDragEnd: () => void;
+    onDrop: () => void;
+}
+
+/** Project card for selecting, renaming, deleting, and reordering one Layer. */
+function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, onDrop }: LayerCardProps)
 {
     const isBusy = useAppStore((state) => state.isBusy);
     const setSelection = useAppStore((state) => state.setSelection);
-    const isDefault = name === workspace.config.defaultProfile;
+    const setLayerSelection = useAppStore((state) => state.setLayerSelection);
     const [formError, setFormError] = useState<string | undefined>();
     const [deleteOpen, setDeleteOpen] = useState(false);
-    const editorKey = selectionKey({ kind: "profile", name });
-    useEditorAction(editorKey, undefined, isDefault ? undefined : () => setDeleteOpen(true));
+    const [isRenaming, setIsRenaming] = useState(false);
+    const [name, setName] = useState(selection.name);
+    const options = workspace.layerOptions[selection.name] ?? [];
+
+    /** Persist a Layer rename and preserve the current unsaved option choice. */
+    const commitRename = (): void =>
+    {
+        const nextName = name.trim();
+        if (!nextName || nextName === selection.name)
+        {
+            setName(selection.name);
+            setIsRenaming(false);
+            return;
+        }
+        setFormError(undefined);
+        void runMutation(async () =>
+        {
+            await window.appApi.workspace.renameLayer(workspace.root, selection.name, nextName);
+            const state = useAppStore.getState();
+            const previousOptionPrefix = `layer-option:.halign/layers/${selection.name}/`;
+            const nextOptionPrefix = `layer-option:.halign/layers/${nextName}/`;
+            for (const [key, draft] of Object.entries(state.editorDrafts))
+            {
+                if (!key.startsWith(previousOptionPrefix)) continue;
+                state.setEditorDraft(nextOptionPrefix + key.slice(previousOptionPrefix.length), draft);
+                state.clearEditorDraft(key);
+            }
+            const previousNewOptionKey = selectionKey({ kind: "layer-option-new", layer: selection.name });
+            const nextNewOptionKey = selectionKey({ kind: "layer-option-new", layer: nextName });
+            const newOptionDraft = state.editorDrafts[previousNewOptionKey];
+            if (newOptionDraft) state.setEditorDraft(nextNewOptionKey, newOptionDraft);
+            state.clearEditorDraft(previousNewOptionKey);
+            if (state.selection.kind === "layer-option" && state.selection.path.startsWith(`.halign/layers/${selection.name}/`))
+            {
+                state.setSelection({ kind: "layer-option", path: `.halign/layers/${nextName}/${state.selection.path.slice(`.halign/layers/${selection.name}/`.length)}` });
+            }
+            else if (state.selection.kind === "layer-option-new" && state.selection.layer === selection.name)
+            {
+                state.setSelection({ kind: "layer-option-new", layer: nextName });
+            }
+            state.setLayerSelection(state.layerSelection.map((item) => item.name === selection.name ? { ...item, name: nextName } : item));
+            await refreshWorkspace();
+            setIsRenaming(false);
+            toast.add({ title: `Renamed layer to ${nextName}`, type: "success" });
+        }).then((result) =>
+        {
+            if (!result.ok) setFormError(result.message);
+        });
+    };
 
     return (
-        <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3" onFocusCapture={() => setSelection({ kind: "profile", name })}>
-            <div className="flex items-center justify-between gap-3">
-                <h2 className="text-base font-semibold">Profile {name}</h2>
-                {!isDefault ? (
-                    <Button type="button" size="sm" variant="destructive" disabled={isBusy} onClick={() => setDeleteOpen(true)}>Delete</Button>
+        <div
+            draggable={!isBusy && !isRenaming}
+            onDragStart={(event) =>
+            {
+                event.dataTransfer.effectAllowed = "move";
+                onDragStart();
+            }}
+            onDragEnd={onDragEnd}
+            onDragOver={(event) =>
+            {
+                event.preventDefault();
+            }}
+            onDrop={(event) =>
+            {
+                event.preventDefault();
+                onDrop();
+            }}
+            onFocusCapture={() => setSelection({ kind: "config" })}
+            className={`grid gap-3 rounded-lg border bg-card p-4 ${isDragging ? "opacity-40" : ""}`}
+        >
+            <div className="flex items-center gap-2">
+                <GripVerticalIcon className="size-4 shrink-0 cursor-grab text-muted-foreground" />
+                {isRenaming ? (
+                    <Input
+                        autoFocus
+                        value={name}
+                        disabled={isBusy}
+                        onChange={(event) => setName(event.currentTarget.value)}
+                        onBlur={commitRename}
+                        onKeyDown={(event) =>
+                        {
+                            if (event.key === "Enter")
+                            {
+                                event.preventDefault();
+                                commitRename();
+                            }
+                            if (event.key === "Escape")
+                            {
+                                setName(selection.name);
+                                setIsRenaming(false);
+                            }
+                        }}
+                        className="h-8 max-w-64"
+                    />
+                ) : <h3 className="min-w-0 flex-1 truncate font-medium">{selection.name}</h3>}
+                {!isRenaming ? (
+                    <Button type="button" size="sm" variant="ghost" disabled={isBusy} onClick={() => setIsRenaming(true)}>
+                        <PencilIcon className="size-4" />
+                    </Button>
                 ) : null}
+                <Button type="button" size="sm" variant="ghost" disabled={isBusy} onClick={() => setDeleteOpen(true)}>
+                    <Trash2Icon className="size-4 text-destructive" />
+                </Button>
             </div>
             <FormError message={formError} />
-            {isDefault ? (
-                <Alert>
-                    <AlertTitle>Cannot delete default profile</AlertTitle>
-                    <AlertDescription>
-                        This is default_profile and cannot be removed until you change it in config.json.
-                    </AlertDescription>
-                </Alert>
-            ) : (
-                <p className="text-muted-foreground">{`Deleting removes .halign/domains/${name}/.`}</p>
-            )}
-            {!isDefault ? (
-                <ConfirmDialog
-                    open={deleteOpen}
-                    onOpenChange={setDeleteOpen}
-                    title={`Delete profile ${name}?`}
-                    description={`This removes .halign/domains/${name}/.`}
-                    confirmLabel="Delete"
-                    destructive
-                    confirmDisabled={isBusy}
-                    onConfirm={() =>
+            <Label className="grid gap-1 text-[12px] text-muted-foreground">
+                selected option
+                <Select
+                    value={selection.option}
+                    onValueChange={(value) =>
                     {
-                        setFormError(undefined);
-                        void runMutation(async () =>
-                        {
-                            await window.appApi.workspace.removeProfile(workspace.root, name);
-                            await refreshWorkspace();
-                            toast.add({ title: `Deleted profile ${name}`, type: "success" });
-                        }).then((result) =>
-                        {
-                            if (!result.ok) setFormError(result.message);
-                        });
+                        if (value === null) return;
+                        setLayerSelection(useAppStore.getState().layerSelection.map((item) => item.name === selection.name ? { ...item, option: value } : item));
                     }}
-                />
-            ) : null}
+                >
+                    <SelectTrigger size="sm" className="w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        {options.map((option) => <SelectItem key={option.name} value={option.name}>{option.name}</SelectItem>)}
+                    </SelectContent>
+                </Select>
+            </Label>
+            <ConfirmDialog
+                open={deleteOpen}
+                onOpenChange={setDeleteOpen}
+                title={`Delete layer ${selection.name}?`}
+                description={`This permanently removes .halign/layers/${selection.name}/ and every option inside it.`}
+                confirmLabel="Delete"
+                destructive
+                confirmDisabled={isBusy}
+                onConfirm={() =>
+                {
+                    setFormError(undefined);
+                    void runMutation(async () =>
+                    {
+                        await window.appApi.workspace.removeLayer(workspace.root, selection.name);
+                        const state = useAppStore.getState();
+                        state.setLayerSelection(state.layerSelection.filter((item) => item.name !== selection.name));
+                        await refreshWorkspace();
+                        toast.add({ title: `Deleted layer ${selection.name}`, type: "success" });
+                    }).then((result) =>
+                    {
+                        if (!result.ok) setFormError(result.message);
+                    });
+                }}
+            />
         </div>
     );
 }
 
-/** Editor for a root, domain, or shared rule. */
+/** Editor for a root or shared rule. */
 function RuleForm({ workspace, selection }: { workspace: Workspace; selection: Extract<Selection, { kind: "rule" } | { kind: "rule-new" }> })
 {
     const isBusy = useAppStore((state) => state.isBusy);
@@ -531,12 +626,10 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
         ? selection.path
         : selection.scope === "root"
             ? ".halign/rules/new-rule.md"
-            : selection.scope === "shared"
-                ? ".halign/rules/shared/new-rule.md"
-                : `.halign/domains/${selection.profile ?? "profile"}/rules/new-rule.md`;
+            : ".halign/rules/shared/new-rule.md";
     const sharedExisting = workspace.sharedRules.find((rule) => selection.kind === "rule" && rule.path === selection.path);
     const existing = selection.kind === "rule"
-        ? [...workspace.rootRules, ...Object.values(workspace.domainRules).flat()].find((rule) => rule.path === selection.path)
+        ? workspace.rootRules.find((rule) => rule.path === selection.path)
         : undefined;
     const existingPath = sharedExisting?.path ?? existing?.path;
     const editorKey = selectionKey(selection);
@@ -621,9 +714,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     const data = new FormData(form);
                     const payload = rulePayload(
                         existing?.path ?? defaultPath,
-                        existing?.priority ?? (selection.kind === "rule-new" && selection.scope === "domain"
-                            ? (workspace.domainRules[selection.profile ?? ""] ?? []).length
-                            : workspace.rootRules.length),
+                        existing?.priority ?? workspace.rootRules.length,
                         readTargets(form),
                         String(data.get("body") ?? ""),
                     );
@@ -651,6 +742,124 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                 </Label>
             </form>
             {deleteDialog}
+        </>
+    );
+}
+
+/** Editor for creating or modifying a single selectable Layer option file. */
+function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selection: Extract<Selection, { kind: "layer-option" } | { kind: "layer-option-new" }> })
+{
+    const isBusy = useAppStore((state) => state.isBusy);
+    const [formError, setFormError] = useState<string | undefined>();
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const existing = selection.kind === "layer-option"
+        ? Object.values(workspace.layerOptions).flat().find((option) => option.path === selection.path)
+        : undefined;
+    const layer = selection.kind === "layer-option-new" ? selection.layer : existing?.layer;
+    const layerConfig = workspace.config.layers.find((candidate) => candidate.name === layer);
+    const canDelete = Boolean(existing && layerConfig?.selected !== existing.name && (workspace.layerOptions[existing.layer]?.length ?? 0) > 1);
+    const editorKey = selectionKey(selection);
+    const editor = useEditorForm(editorKey, canDelete ? () => setDeleteOpen(true) : undefined);
+
+    if (selection.kind === "layer-option-new")
+    {
+        return (
+            <form
+                ref={editor.formRef}
+                className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+                onChange={editor.handleChange}
+                onSubmit={(event) =>
+                {
+                    event.preventDefault();
+                    const name = String(new FormData(event.currentTarget).get("name") ?? "").trim();
+                    setFormError(undefined);
+                    void runMutation(async () =>
+                    {
+                        await window.appApi.workspace.addLayerOption(workspace.root, selection.layer, name);
+                        useAppStore.getState().clearEditorDraft(editorKey);
+                        await refreshWorkspace({ kind: "layer-option", path: `.halign/layers/${selection.layer}/${name}.md` });
+                        toast.add({ title: `Created option ${name}`, type: "success" });
+                    }).then((result) =>
+                    {
+                        if (!result.ok) setFormError(result.message);
+                    });
+                }}
+            >
+                <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-base font-semibold">New option in {selection.layer}</h2>
+                    <Button type="submit" size="sm" disabled={isBusy}>Create</Button>
+                </div>
+                <FormError message={formError} />
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", "")} /></Label>
+            </form>
+        );
+    }
+
+    if (!existing) return <GeneratedEmpty />;
+    const payloadPath = existing.path;
+    return (
+        <>
+            <form
+                ref={editor.formRef}
+                className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+                onChange={editor.handleChange}
+                onSubmit={(event) =>
+                {
+                    event.preventDefault();
+                    const form = event.currentTarget;
+                    const targets = readTargets(form);
+                    const payload: LayerOptionInput = {
+                        path: payloadPath,
+                        body: String(new FormData(form).get("body") ?? ""),
+                        ...(targets ? { targets } : {}),
+                    };
+                    setFormError(undefined);
+                    void runMutation(async () =>
+                    {
+                        await window.appApi.workspace.saveLayerOption(workspace.root, payload);
+                        useAppStore.getState().clearEditorDraft(editorKey);
+                        await refreshWorkspace({ kind: "layer-option", path: payloadPath });
+                        toast.add({ title: `Saved ${payloadPath}`, type: "success" });
+                    }).then((result) =>
+                    {
+                        if (!result.ok) setFormError(result.message);
+                    });
+                }}
+            >
+                <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-base font-semibold">{existing.layer} / {existing.name}</h2>
+                    {canDelete ? <Button type="button" size="sm" variant="destructive" disabled={isBusy} onClick={() => setDeleteOpen(true)}>Delete</Button> : null}
+                </div>
+                <FormError message={formError} />
+                <TargetBoxes selected={draftValues(editor.draft, "targets", existing.targets)} />
+                <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
+                    body
+                    <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", existing.body)} />
+                </Label>
+            </form>
+            <ConfirmDialog
+                open={deleteOpen}
+                onOpenChange={setDeleteOpen}
+                title={`Delete ${existing.name}?`}
+                description="This permanently deletes the Layer option file."
+                confirmLabel="Delete"
+                destructive
+                confirmDisabled={isBusy}
+                onConfirm={() =>
+                {
+                    setFormError(undefined);
+                    void runMutation(async () =>
+                    {
+                        await window.appApi.workspace.removeLayerOption(workspace.root, existing.layer, existing.name);
+                        useAppStore.getState().clearEditorDraft(editorKey);
+                        await refreshWorkspace();
+                        toast.add({ title: `Deleted ${existing.name}`, type: "success" });
+                    }).then((result) =>
+                    {
+                        if (!result.ok) setFormError(result.message);
+                    });
+                }}
+            />
         </>
     );
 }
@@ -798,7 +1007,21 @@ function GeneratedEmpty()
     );
 }
 
-/** Unified Project page for config, harnesses, and profiles without contextual navigation. */
+/** Move one Layer around the current ordered generation selection. */
+function moveLayerSelection(selection: readonly LayerSelection[], sourceName: string, targetName: string): LayerSelection[]
+{
+    const sourceIndex = selection.findIndex((item) => item.name === sourceName);
+    const targetIndex = selection.findIndex((item) => item.name === targetName);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return [...selection];
+    const next = [...selection];
+    const [source] = next.splice(sourceIndex, 1);
+    if (!source) return [...selection];
+    const nextTargetIndex = next.findIndex((item) => item.name === targetName);
+    next.splice(sourceIndex < targetIndex ? nextTargetIndex + 1 : nextTargetIndex, 0, source);
+    return next;
+}
+
+/** Unified Project page for config, harnesses, and ordered Layers without contextual navigation. */
 export function ProjectEditor()
 {
     const workspace = useAppStore((state) => state.workspace);
@@ -806,6 +1029,9 @@ export function ProjectEditor()
     const setSelection = useAppStore((state) => state.setSelection);
     const isBusy = useAppStore((state) => state.isBusy);
     const requestEditorAction = useAppStore((state) => state.requestEditorAction);
+    const layerSelection = useAppStore((state) => state.layerSelection);
+    const setLayerSelection = useAppStore((state) => state.setLayerSelection);
+    const [draggedLayer, setDraggedLayer] = useState<string>();
 
     if (!workspace)
     {
@@ -824,14 +1050,14 @@ export function ProjectEditor()
             <div className="flex items-center justify-between gap-3">
                 <div>
                     <h1 className="text-lg font-semibold">Project</h1>
-                    <p className="text-[12px] text-muted-foreground">Manage config.json, harnesses, and profiles in one place.</p>
+                    <p className="text-[12px] text-muted-foreground">Manage config.json, harnesses, and ordered generation Layers in one place.</p>
                 </div>
                 <Button
                     type="button"
                     size="sm"
                     disabled={isBusy}
                     onClick={() => requestEditorAction(
-                        selection.kind === "config" || selection.kind === "harness" || selection.kind === "harness-new"
+                        selection.kind === "config" || selection.kind === "harness" || selection.kind === "harness-new" || selection.kind === "layer-new"
                             ? selection
                             : { kind: "config" },
                         "save",
@@ -871,20 +1097,35 @@ export function ProjectEditor()
             <section className="grid gap-3">
                 <div className="flex items-center justify-between gap-3">
                     <div>
-                        <h2 className="text-base font-semibold">Profiles</h2>
-                        <p className="text-[12px] text-muted-foreground">Manage the profile directories available to domain rules.</p>
+                        <h2 className="text-base font-semibold">Layers</h2>
+                        <p className="text-[12px] text-muted-foreground">Choose one option per Layer and drag Layers into generation order.</p>
                     </div>
-                    <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => setSelection({ kind: "profile-new" })}>New profile</Button>
+                    <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => setSelection({ kind: "layer-new" })}>New layer</Button>
                 </div>
-                <div className="grid gap-3 xl:grid-cols-2">
-                    {workspace.config.profiles.map((profile) => (
-                        <div key={profile} className="rounded-lg border bg-card p-4">
-                            <ProfileForm workspace={workspace} name={profile} />
-                        </div>
+                <div className="grid gap-3">
+                    {layerSelection.map((layer) => (
+                        <LayerCard
+                            key={layer.name}
+                            workspace={workspace}
+                            selection={layer}
+                            isDragging={draggedLayer === layer.name}
+                            onDragStart={() =>
+                            {
+                                setSelection({ kind: "config" });
+                                setDraggedLayer(layer.name);
+                            }}
+                            onDragEnd={() => setDraggedLayer(undefined)}
+                            onDrop={() =>
+                            {
+                                if (!draggedLayer || draggedLayer === layer.name) return;
+                                setLayerSelection(moveLayerSelection(useAppStore.getState().layerSelection, draggedLayer, layer.name));
+                                setDraggedLayer(undefined);
+                            }}
+                        />
                     ))}
-                    {selection.kind === "profile-new" ? (
+                    {selection.kind === "layer-new" ? (
                         <div className="rounded-lg border border-dashed bg-card p-4">
-                            <ProfileNewForm workspace={workspace} />
+                            <LayerNewForm workspace={workspace} />
                         </div>
                     ) : null}
                 </div>
@@ -917,8 +1158,8 @@ export function WorkspaceEditor()
         return harness ? <HarnessCard workspace={workspace} harness={harness} isInitiallyOpen /> : <GeneratedEmpty />;
     }
     if (selection.kind === "harness-new") return <HarnessCard workspace={workspace} isInitiallyOpen />;
-    if (selection.kind === "profile-new") return <ProfileNewForm workspace={workspace} />;
-    if (selection.kind === "profile") return <ProfileForm workspace={workspace} name={selection.name} />;
+    if (selection.kind === "layer-new") return <LayerNewForm workspace={workspace} />;
+    if (selection.kind === "layer-option" || selection.kind === "layer-option-new") return <LayerOptionForm workspace={workspace} selection={selection} />;
     if (selection.kind === "rule" || selection.kind === "rule-new") return <RuleForm workspace={workspace} selection={selection} />;
     if (selection.kind === "agent" || selection.kind === "agent-new") return <AgentForm workspace={workspace} selection={selection} />;
     if (selection.kind === "generated-file") return <GeneratedFileView workspace={workspace} path={selection.path} />;

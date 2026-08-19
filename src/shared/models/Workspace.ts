@@ -18,21 +18,52 @@ export interface HarnessConfig
     instructionsField?: string;
 }
 
+/** One ordered layer and its project-selected option. */
+export interface LayerConfig
+{
+    name: string;
+    selected: string;
+}
+
+/** One ordered layer choice used for a generation command. */
+export interface LayerSelection
+{
+    name: string;
+    option: string;
+}
+
 /** Validated `.halign/config.json` document. */
 export interface Config
 {
-    version: 2;
+    version: 1;
     name: string;
-    defaultProfile: string;
-    profiles: string[];
+    layers: LayerConfig[];
     harnesses: HarnessConfig[];
 }
 
-/** Editor payload for a root or domain rule. */
+/** Editor payload for a root rule. */
 export interface RuleInput
 {
     path: string;
     priority: number;
+    targets?: string[];
+    body: string;
+}
+
+/** Selectable layer Markdown source shown in the desktop editor. */
+export interface LayerOption
+{
+    path: string;
+    layer: string;
+    name: string;
+    targets?: string[];
+    body: string;
+}
+
+/** Editor payload for a layer option Markdown source. */
+export interface LayerOptionInput
+{
+    path: string;
     targets?: string[];
     body: string;
 }
@@ -67,7 +98,7 @@ export interface Workspace
     root: string;
     config: Config;
     rootRules: RuleInput[];
-    domainRules: Record<string, RuleInput[]>;
+    layerOptions: Record<string, LayerOption[]>;
     sharedRules: SharedRule[];
     agents: Agent[];
     generatedFiles: GeneratedFile[];

@@ -12,9 +12,7 @@ export async function refreshWorkspace(next?: Selection): Promise<void>
     const current = useAppStore.getState().workspace;
     if (!current) return;
     const workspace = await window.appApi.workspace.load(current.root);
-    const profile = useAppStore.getState().profile;
     useAppStore.getState().setWorkspace(workspace);
-    useAppStore.getState().setProfile(workspace.config.profiles.includes(profile) ? profile : workspace.config.defaultProfile);
     if (next) useAppStore.getState().setSelection(next);
 }
 

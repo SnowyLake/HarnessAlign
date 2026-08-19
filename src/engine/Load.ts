@@ -17,6 +17,10 @@ import {
     type HarnessConfig,
     HARNESS_FIELDS,
     HARNESS_NAME,
+    type LayerConfig,
+    LAYER_FIELDS,
+    LAYER_NAME,
+    type LayerOption,
     type Metadata,
     RULE_FIELDS,
     type Rule,
@@ -202,37 +206,52 @@ export function validateConfig(value: unknown): Config
 {
     const path = ".halign/config.json";
     if (!isRecord(value)) throw new HalignError(`${path}: expected a mapping`);
-    for (const field of ["version", "default_profile", "profiles", "harnesses"])
+    const knownFields = new Set(["version", "name", "layers", "harnesses"]);
+    const unknownFields = Object.keys(value).filter((field) => !knownFields.has(field));
+    if (unknownFields.length > 0) throw new HalignError(`${path}: unknown field ${valueText(firstSorted(unknownFields))}`);
+    for (const field of ["version", "layers", "harnesses"])
     {
         if (!hasOwn(value, field)) throw new HalignError(`${path}: ${field} is required`);
     }
-    if (typeof value.version !== "number" || !Number.isInteger(value.version) || value.version !== 2)
+    if (typeof value.version !== "number" || !Number.isInteger(value.version) || value.version !== 1)
     {
-        throw new HalignError(`${path}: version must be integer 2, got ${valueText(value.version)}`);
-    }
-    if (typeof value.default_profile !== "string" || !value.default_profile)
-    {
-        throw new HalignError(`${path}: default_profile must be a non-empty string, got ${valueText(value.default_profile)}`);
+        throw new HalignError(`${path}: version must be integer 1, got ${valueText(value.version)}`);
     }
     const name = hasOwn(value, "name") ? value.name : "AGENTS";
     if (typeof name !== "string" || !name.trim() || /[\r\n]/u.test(name))
     {
         throw new HalignError(`${path}: name must be a non-empty single-line string, got ${valueText(name)}`);
     }
-    const profiles = stringArray(value.profiles, path, "profiles");
+    if (!Array.isArray(value.layers)) throw new HalignError(`${path}: layers must be a mapping array, got ${valueText(value.layers)}`);
+    const layers: LayerConfig[] = value.layers.map((layer, index) =>
+    {
+        const context = `${path}: layers[${index}]`;
+        if (!isRecord(layer)) throw new HalignError(`${context} must be a mapping, got ${typeText(layer)}`);
+        const unknown = Object.keys(layer).filter((field) => field !== "name" && field !== "selected");
+        if (unknown.length > 0) throw new HalignError(`${context}: unknown field ${valueText(firstSorted(unknown))}`);
+        if (!hasOwn(layer, "name")) throw new HalignError(`${context}: name is required`);
+        if (!hasOwn(layer, "selected")) throw new HalignError(`${context}: selected is required`);
+        const layerName = validateString(context, "name", layer.name);
+        const selected = validateString(context, "selected", layer.selected);
+        if (!LAYER_NAME.test(layerName)) throw new HalignError(`${context}: name must match ${LAYER_NAME.source}, got ${valueText(layerName)}`);
+        if (!LAYER_NAME.test(selected)) throw new HalignError(`${context}: selected must match ${LAYER_NAME.source}, got ${valueText(selected)}`);
+        return { name: layerName, selected };
+    });
     if (!Array.isArray(value.harnesses) || value.harnesses.length === 0)
     {
         throw new HalignError(`${path}: harnesses must be a non-empty mapping array, got ${valueText(value.harnesses)}`);
     }
     const harnesses = value.harnesses.map((harness, index) => validateHarnessConfig(harness, path, index));
-    if (!profiles.includes(value.default_profile))
+    const layerNames = new Map<string, string>();
+    for (const layer of layers)
     {
-        throw new HalignError(`${path}: default_profile must be included in profiles, got ${valueText(value.default_profile)}`);
-    }
-    const unsafeProfile = profiles.find((profile) => profile === "." || profile === ".." || /[\\/]/u.test(profile));
-    if (unsafeProfile !== undefined)
-    {
-        throw new HalignError(`${path}: profiles must contain single directory names, got ${valueText(unsafeProfile)}`);
+        const folded = layer.name.toLowerCase();
+        const existing = layerNames.get(folded);
+        if (existing !== undefined)
+        {
+            throw new HalignError(`${path}: layer names must be unique without case sensitivity, got ${valueText(layer.name)} after ${valueText(existing)}`);
+        }
+        layerNames.set(folded, layer.name);
     }
     const names = new Map<string, string>();
     const configPaths = new Map<string, string>();
@@ -271,7 +290,7 @@ export function validateConfig(value: unknown): Config
             }
         }
     }
-    return { version: 2, name, defaultProfile: value.default_profile, profiles, harnesses };
+    return { version: 1, name, layers, harnesses };
 }
 
 /** Read and validate `.halign/config.json`. */
@@ -296,15 +315,13 @@ export async function loadConfig(root: string): Promise<Config>
     return validateConfig(parsed);
 }
 
-/** Load root and selected-profile rules, filtered later by harness targets. */
-export async function loadRules(root: string, profile: string, harnesses: HarnessConfig[]): Promise<Rule[]>
+/** Load root rules, filtered later by harness targets. */
+export async function loadRules(root: string, harnesses: HarnessConfig[]): Promise<Rule[]>
 {
     const halign = join(root, ".halign");
     const rulesDirectory = join(halign, "rules");
-    const paths = [
-        ...(await markdownFiles(root, rulesDirectory, true, [join(rulesDirectory, "shared")])),
-        ...(await markdownFiles(root, join(halign, "domains", profile, "rules"), true)),
-    ].sort((left, right) => codePointCompare(display(root, left), display(root, right)));
+    const paths = (await markdownFiles(root, rulesDirectory, true, [join(rulesDirectory, "shared")]))
+        .sort((left, right) => codePointCompare(display(root, left), display(root, right)));
     const folded = new Map<string, string>();
     const rules: Rule[] = [];
 
@@ -346,6 +363,122 @@ export async function loadRules(root: string, profile: string, harnesses: Harnes
         rules.push({ path, priority, targets, body: normalizedBody(body) });
     }
     return rules;
+}
+
+/** Parse optional layer frontmatter while allowing an empty Markdown body. */
+async function parseLayerSource(root: string, path: string): Promise<[Record<string, unknown>, string]>
+{
+    const text = await readUtf8(root, path);
+    if (!/^---\r?\n/u.test(text)) return [{}, text];
+    const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)(?:\r?\n)?/u.exec(text);
+    if (!match) throw new HalignError(`${display(root, path)}: invalid YAML frontmatter`);
+    let metadata: unknown;
+    try
+    {
+        metadata = parseYaml(match[1] ?? "");
+    }
+    catch (error)
+    {
+        throw new HalignError(`${display(root, path)}: invalid YAML frontmatter: ${errorText(error)}`);
+    }
+    if (metadata === null) metadata = {};
+    if (!isRecord(metadata))
+    {
+        throw new HalignError(`${display(root, path)}: frontmatter must be a mapping, got ${typeText(metadata)}`);
+    }
+    return [metadata, text.slice(match[0].length)];
+}
+
+/** Load one configured layer directory and validate every direct option file. */
+async function loadLayerDirectory(root: string, directory: string, layer: LayerConfig, harnesses: HarnessConfig[]): Promise<LayerOption[]>
+{
+    await ensureRegularSource(root, directory);
+    const stats = await lstatIfExists(directory);
+    if (!stats) throw new HalignError(`${display(root, directory)}: configured layer directory is required`);
+    if (!stats.isDirectory()) throw new HalignError(`${display(root, directory)}: expected a directory`);
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => codePointCompare(left.name, right.name));
+    const foldedNames = new Map<string, string>();
+    const options: LayerOption[] = [];
+    for (const entry of entries)
+    {
+        const sourcePath = join(directory, entry.name);
+        await ensureRegularSource(root, sourcePath);
+        const entryStats = await lstatIfExists(sourcePath);
+        if (!entryStats) continue;
+        if (entryStats.isSymbolicLink()) throw reparseError(root, sourcePath, false);
+        if (!entryStats.isFile() || !entry.name.endsWith(".md"))
+        {
+            throw new HalignError(`${display(root, sourcePath)}: layer directories may only contain direct Markdown files`);
+        }
+        const name = entry.name.slice(0, -3);
+        if (!LAYER_NAME.test(name))
+        {
+            throw new HalignError(`${display(root, sourcePath)}: layer option name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
+        }
+        const folded = name.toLowerCase();
+        const existing = foldedNames.get(folded);
+        if (existing !== undefined)
+        {
+            throw new HalignError(`${display(root, sourcePath)}: option names must be unique without case sensitivity, got ${valueText(name)} after ${valueText(existing)}`);
+        }
+        foldedNames.set(folded, name);
+        const path = display(root, sourcePath);
+        const [metadata, body] = await parseLayerSource(root, sourcePath);
+        const unknown = Object.keys(metadata).filter((field) => !LAYER_FIELDS.has(field));
+        if (unknown.length > 0) throw new HalignError(`${path}: unknown layer field ${valueText(firstSorted(unknown))}`);
+        const targets = hasOwn(metadata, "targets")
+            ? stringArray(metadata.targets, path, "targets")
+            : harnesses.map((harness) => harness.name);
+        const configured = new Set(harnesses.map((harness) => harness.name));
+        const invalid = targets.find((target) => !configured.has(target));
+        if (invalid !== undefined)
+        {
+            throw new HalignError(`${path}: targets may only contain configured harness names, got ${valueText(invalid)}`);
+        }
+        options.push({ path, layer: layer.name, name, targets, body: body ? normalizedBody(body) : "" });
+    }
+    if (options.length === 0) throw new HalignError(`${display(root, directory)}: configured layer must contain at least one Markdown option`);
+    if (!options.some((option) => option.name === layer.selected))
+    {
+        throw new HalignError(`.halign/config.json: layer ${valueText(layer.name)} selected option does not exist, got ${valueText(layer.selected)}`);
+    }
+    return options;
+}
+
+/** Strictly discover every configured layer and reject orphaned source entries. */
+export async function loadLayerOptions(root: string, config: Config): Promise<Record<string, LayerOption[]>>
+{
+    const layersRoot = join(root, ".halign", "layers");
+    await ensureRegularSource(root, layersRoot);
+    const stats = await lstatIfExists(layersRoot);
+    if (!stats)
+    {
+        if (config.layers.length === 0) return {};
+        throw new HalignError(".halign/layers: directory is required when layers are configured");
+    }
+    if (!stats.isDirectory()) throw new HalignError(".halign/layers: expected a directory");
+    const configured = new Map(config.layers.map((layer) => [layer.name, layer]));
+    const entries = await fs.readdir(layersRoot, { withFileTypes: true });
+    entries.sort((left, right) => codePointCompare(left.name, right.name));
+    const discovered = new Set<string>();
+    const options = Object.create(null) as Record<string, LayerOption[]>;
+    for (const entry of entries)
+    {
+        const directory = join(layersRoot, entry.name);
+        await ensureRegularSource(root, directory);
+        const entryStats = await lstatIfExists(directory);
+        if (!entryStats) continue;
+        if (entryStats.isSymbolicLink()) throw reparseError(root, directory, false);
+        const layer = configured.get(entry.name);
+        if (!layer) throw new HalignError(`${display(root, directory)}: layer directory is not declared in .halign/config.json`);
+        if (!entryStats.isDirectory()) throw new HalignError(`${display(root, directory)}: expected a layer directory`);
+        discovered.add(layer.name);
+        options[layer.name] = await loadLayerDirectory(root, directory, layer, config.harnesses);
+    }
+    const missing = config.layers.find((layer) => !discovered.has(layer.name));
+    if (missing) throw new HalignError(`.halign/layers/${missing.name}: configured layer directory is required`);
+    return options;
 }
 
 /** Require a non-empty string field. */

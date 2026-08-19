@@ -12,6 +12,7 @@ import {
     type Harness,
     type HarnessConfig,
     HalignError,
+    type LayerOption,
     MARKER,
     type Metadata,
     type Rule,
@@ -124,14 +125,18 @@ export function renderMarkdownToc(bodies: string[], name: string): string
     return `## 目录\n\n${items.join("\n")}`;
 }
 
-/** Render one harness AGENTS.md from filtered rules. */
-export function renderAgentsMarkdown(rules: Rule[], harness: Harness, name: string): Buffer
+/** Render one harness AGENTS.md from ordered root rules and selected layer files. */
+export function renderAgentsMarkdown(rules: Rule[], layers: LayerOption[], harness: Harness, name: string): Buffer
 {
-    const bodies = rules
+    const rootBodies = rules
         .slice()
         .sort((left, right) => left.priority - right.priority || codePointCompare(left.path, right.path))
         .filter((rule) => rule.targets.includes(harness))
         .map((rule) => downgradeMarkdownHeadings(rule.body.replace(/\n+$/u, "")));
+    const layerBodies = layers
+        .filter((layer) => layer.targets.includes(harness) && layer.body.trim())
+        .map((layer) => downgradeMarkdownHeadings(layer.body.replace(/\n+$/u, "")));
+    const bodies = [...rootBodies, ...layerBodies];
     let content = `${MARKER}\n\n# ${name}\n\n${renderMarkdownToc(bodies, name)}`;
     if (bodies.length > 0) content += `\n\n${bodies.join("\n\n")}`;
     return Buffer.from(`${content}\n`, "utf8");

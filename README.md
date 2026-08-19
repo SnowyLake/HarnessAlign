@@ -20,7 +20,7 @@
 
 Harness Align 是一个使用 TypeScript 编写的本地 CLI, 并附带可选的 Electron 管理窗口. 它从统一的 `.halign` 配置为任意已声明 Harness 生成 `AGENTS.md` 与 Subagent 文件, 并能检查生成结果或部署到当前用户的 Harness 配置目录.
 
-CLI 命令名是 `halign`. 工具成功时会输出简短摘要, 失败时返回非零退出码并给出错误原因. 桌面壳调用同一套生成与部署函数, 用来可视化管理 Rule, Agent, Domain, Harness 和配置字段.
+CLI 命令名是 `halign`. 工具成功时会输出简短摘要, 失败时返回非零退出码并给出错误原因. 桌面壳调用同一套生成与部署函数, 用来可视化管理 Rule, Agent, Layer, Harness 和配置字段.
 
 ## 工程与配置分离
 
@@ -98,13 +98,15 @@ halign setup
 | `halign setup` | 先生成, 再部署到当前用户已经启用的 Harness | `0` |
 | `halign --help` | 显示命令用法 | `0` |
 
-三个业务命令都支持选择 Profile:
+三个业务命令都支持通过可重复的 `--layer <layer>=<option>` 覆盖部分 Layer 选择:
 
 ```powershell
-halign generate --profile kei
-halign check --profile=kei
-halign setup --profile kei
+halign generate --layer soul=kei
+halign check --layer soul=arona --layer workflow=fast
+halign setup --layer soul=kei
 ```
+
+未指定的 Layer 使用 `config.json` 中保存的 `selected`. 同一个 Layer 不得重复传入, 未知 Layer 或不存在的选项会直接报错.
 
 `check` 发现缺失, 修改或额外文件时会列出差异并返回 `1`. 无效命令或参数返回 `2`. `generate` 和 `setup` 成功时会列出写入的文件以及目标目录.
 
@@ -128,9 +130,10 @@ npm run dev
 窗口可以:
 
 - 打开包含 `.halign` 的配置目录, 并记住上次路径和主题 (保存在 Electron `userData`, 不写入本仓库).
-- 编辑 `config.json` 的标题, 默认 Profile 和 Harness 列表.
-- 新建, 修改或删除 Profile / Domain, 根 Rule, Domain Rule, shared-rules 和 Subagent.
-- 选择 Profile 后执行 `Generate`, `Check` 和 `Setup`.
+- 编辑 `config.json` 的标题, 有序 Layer 选择和 Harness 列表.
+- 新建, 修改, 重命名或删除 Layer, Layer 选项, 根 Rule, shared-rules 和 Subagent.
+- 在 Project 页面拖拽 Layer 并为每个 Layer 选择一个选项, 使用当前未保存选择执行 `Generate`, `Check` 和 `Setup`.
+- 点击 Project 页面的 `Save` 后, 把当前 Layer 顺序与选择写回 `config.json`.
 
 桌面壳不创建 `%USERPROFILE%` 下缺失的 Harness 根目录. `Setup` 的部署规则与 CLI 相同. Renderer 只通过 `window.appApi` 请求能力, 不直接访问文件系统.
 
@@ -143,29 +146,38 @@ npm run dev
 ├─ config.json
 ├─ rules\
 │  └─ shared\
-├─ domains\
-│  └─ <profile>\rules\
+├─ layers\
+│  └─ <layer>\
+│     └─ <option>.md
 ├─ agents\
 └─ generated\
 ```
 
-- `.halign/config.json` 定义格式版本, 输出标题, 默认 Profile, 可用 Profile 和 Harness 配置.
+- `.halign/config.json` 定义格式版本, 输出标题, 有序 Layer 选择和 Harness 配置.
 - `.halign/rules/` 保存参与各 Harness `AGENTS.md` 的公共 Rule.
-- `.halign/domains/<profile>/rules/` 保存 Profile 专属 Rule.
+- `.halign/layers/<layer>/<option>.md` 保存一个 Layer 的可选 Markdown 文件. 每次生成从每个 Layer 选择一个文件.
 - `.halign/rules/shared/` 保存独立部署到 `%USERPROFILE%\.agents\shared-rules` 的共享规则.
 - `.halign/agents/` 保存 Subagent 的共享正文与各 Harness 原生 metadata.
 - `.halign/generated/` 保存生成结果和所有权 manifest, 不应手工编辑.
 
 ## 配置文件
 
-`.halign/config.json` 当前使用版本 `2`. 版本 `1` 的字符串 Harness 数组不再接受, 每个 Harness 必须声明名称, 用户配置路径和 Subagent 输出格式.
+`.halign/config.json` 在当前本地开发阶段使用版本 `1`. 每个 Harness 必须声明名称, 用户配置路径和 Subagent 输出格式.
 
 ```json
 {
-  "version": 2,
+  "version": 1,
   "name": "AGENTS",
-  "default_profile": "arona",
-  "profiles": ["arona", "kei"],
+  "layers": [
+    {
+      "name": "soul",
+      "selected": "arona"
+    },
+    {
+      "name": "workflow",
+      "selected": "strict"
+    }
+  ],
   "harnesses": [
     {
       "name": "codex",
@@ -190,6 +202,31 @@ npm run dev
 }
 ```
 
+Layer 配置字段如下:
+
+| 字段 | 约束 | 用途 |
+| --- | --- | --- |
+| `name` | 匹配 `[a-z0-9][a-z0-9_-]*` 且忽略大小写后唯一 | `.halign/layers/<layer>/` 目录名, UI 与 CLI 标识符 |
+| `selected` | 匹配 `[a-z0-9][a-z0-9_-]*` 且必须存在对应 `.md` 文件 | CLI 无覆盖参数时使用的项目选择 |
+
+`layers` 可以为空. 一旦声明 Layer, 对应目录必须存在并至少包含一个直接 `.md` 文件. `.halign/layers` 采用严格校验, 未声明目录, 非 Markdown 文件, 嵌套目录, symlink 和 junction 都会导致加载失败.
+
+Layer 选项是纯 Markdown, 也可以使用只包含可选 `targets` 的 YAML frontmatter. Layer 文件不使用 `priority`, 允许空文件作为显式 no-op:
+
+```markdown
+---
+targets:
+  - codex
+  - cursor
+---
+
+# Soul
+
+Arona soul content.
+```
+
+公共 Rule 先按 UI 写入的 `priority` 排序, 然后每个 Layer 按 `config.json` 或当前 Project 界面的顺序贡献一个选项文件. Layer 选项自身没有内部排序.
+
 Harness 配置字段如下:
 
 | 字段 | 约束 | 用途 |
@@ -206,8 +243,8 @@ Subagent 文件仍使用公共 `name`, `description`, `harnesses` 和 Markdown �
 
 1. npm 通过全局 bin 启动 `dist/src/engine/Halign.js`, 或通过 `npm run dev` 启动 `out/main/index.js`.
 2. CLI 使用 `process.cwd()` 确定当前配置根目录. 桌面壳使用用户选择的目录.
-3. 读取并验证 `.halign/config.json`, Rule frontmatter, Profile 和 Subagent metadata.
-4. 按配置的 Harness 名称和 Subagent 格式构建确定性的内存输出.
+3. 读取并验证 `.halign/config.json`, Root Rule, Layer 目录和 Subagent metadata.
+4. 合并有序 Root Rule 与当前 Layer 选择, 再按 Harness 名称和 Subagent 格式构建确定性的内存输出.
 5. `generate` 在完整预检后原子写入变化文件, 清理 manifest 管理的过期文件, 最后提交新 manifest.
 6. `check` 重新构建期望输出并按字节比较实际生成目录.
 7. `setup` 先执行生成, 再对用户部署目标完成路径与 reparse point 预检, 最后替换已启用 Harness 的文件.

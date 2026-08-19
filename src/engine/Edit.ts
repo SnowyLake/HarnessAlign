@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { assertContained, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError } from "./FsSafe.js";
-import { loadAgents, loadConfig, loadRules, loadSharedRules, type SharedRule, validateConfig } from "./Load.js";
+import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, type SharedRule, validateConfig } from "./Load.js";
 import {
     AGENT_NAME,
     type Agent,
@@ -19,6 +19,8 @@ import {
     HalignError,
     hasOwn,
     isRecord,
+    LAYER_NAME,
+    type LayerOption,
     type Metadata,
     normalizedBody,
     type Rule,
@@ -34,7 +36,7 @@ export interface Workspace
     root: string;
     config: Config;
     rootRules: Rule[];
-    domainRules: Record<string, Rule[]>;
+    layerOptions: Record<string, LayerOption[]>;
     sharedRules: SharedRule[];
     agents: Agent[];
 }
@@ -44,6 +46,14 @@ export interface RuleInput
 {
     path: string;
     priority: number;
+    targets?: string[];
+    body: string;
+}
+
+/** Editor payload for creating or updating a layer option source file. */
+export interface LayerOptionInput
+{
+    path: string;
     targets?: string[];
     body: string;
 }
@@ -58,10 +68,9 @@ function sortEditableRules(rules: Rule[]): Rule[]
 function configDocument(config: Config): Record<string, unknown>
 {
     return {
-        version: 2,
+        version: 1,
         name: config.name,
-        default_profile: config.defaultProfile,
-        profiles: config.profiles,
+        layers: config.layers.map((layer) => ({ name: layer.name, selected: layer.selected })),
         harnesses: config.harnesses.map((harness) =>
         {
             const document: Record<string, unknown> = {
@@ -92,7 +101,7 @@ function managedRelative(value: string, label: string): string
     {
         throw new HalignError(`${label}: path must stay inside managed .halign sources, got ${valueText(value)}`);
     }
-    if (value !== ".halign/config.json" && !value.startsWith(".halign/rules/") && !value.startsWith(".halign/domains/") && !value.startsWith(".halign/agents/"))
+    if (value !== ".halign/config.json" && !value.startsWith(".halign/rules/") && !value.startsWith(".halign/layers/") && !value.startsWith(".halign/agents/"))
     {
         throw new HalignError(`${label}: path must stay inside managed .halign sources, got ${valueText(value)}`);
     }
@@ -141,17 +150,22 @@ function serializeFrontmatter(metadata: Record<string, unknown>, body: string, p
     return Buffer.from(`---\n${yamlText}\n---\n\n${markdown}`, "utf8");
 }
 
+/** Serialize optional layer targets plus a possibly empty Markdown body. */
+function serializeLayerOption(targets: string[] | undefined, body: string): Buffer
+{
+    const markdown = body.trim() ? normalizedBody(body) : "";
+    if (targets === undefined) return Buffer.from(markdown, "utf8");
+    const yamlText = stringifyYaml({ targets }, { lineWidth: 0, sortMapEntries: false }).trimEnd();
+    return Buffer.from(`---\n${yamlText}\n---\n\n${markdown}`, "utf8");
+}
+
 /** Require a rule path under the expected `.halign` subtree. */
-function assertRulePath(path: string, kind: "root" | "domain" | "shared"): void
+function assertRulePath(path: string, kind: "root" | "shared"): void
 {
     if (!path.endsWith(".md")) throw new HalignError(`${path}: rule path must end with .md`);
     if (kind === "root" && (path.startsWith(".halign/rules/shared/") || !path.startsWith(".halign/rules/")))
     {
         throw new HalignError(`${path}: root rule path must stay under .halign/rules and outside shared`);
-    }
-    if (kind === "domain" && !/^\.halign\/domains\/[^/]+\/rules\/.+\.md$/u.test(path))
-    {
-        throw new HalignError(`${path}: domain rule path must stay under .halign/domains/<profile>/rules`);
     }
     if (kind === "shared" && !path.startsWith(".halign/rules/shared/"))
     {
@@ -159,12 +173,22 @@ function assertRulePath(path: string, kind: "root" | "domain" | "shared"): void
     }
 }
 
-/** Classify a rule path as root, domain, or shared. */
-function ruleKind(path: string): "root" | "domain" | "shared"
+/** Classify a root or shared rule path. */
+function ruleKind(path: string): "root" | "shared"
 {
     if (path.startsWith(".halign/rules/shared/")) return "shared";
-    if (path.startsWith(".halign/domains/")) return "domain";
     return "root";
+}
+
+/** Require a direct option path under one configured layer directory. */
+function layerOptionParts(path: string): { layer: string; option: string }
+{
+    const match = /^\.halign\/layers\/([^/]+)\/([^/]+)\.md$/u.exec(path);
+    if (!match || !LAYER_NAME.test(match[1]!) || !LAYER_NAME.test(match[2]!))
+    {
+        throw new HalignError(`${path}: layer option path must match .halign/layers/<layer>/<option>.md`);
+    }
+    return { layer: match[1]!, option: match[2]! };
 }
 
 /** Require a subagent path under `.halign/agents`. */
@@ -233,57 +257,37 @@ function assertAgentInput(agent: Agent, harnesses: HarnessConfig[]): void
     }
 }
 
-/** Load root and every profile's domain rules. */
-async function loadAllRules(root: string, config: Config): Promise<Rule[]>
-{
-    const seen = new Set<string>();
-    const rules: Rule[] = [];
-    for (const profile of config.profiles)
-    {
-        for (const rule of await loadRules(root, profile, config.harnesses))
-        {
-            if (seen.has(rule.path)) continue;
-            seen.add(rule.path);
-            rules.push(rule);
-        }
-    }
-    return rules;
-}
-
-/** Load config, rules, shared-rules, and agents from a config root. */
+/** Load config, root rules, layer options, shared-rules, and agents from a config root. */
 export async function loadWorkspace(rootPath: string): Promise<Workspace>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    const agents = await loadAgents(root, config.harnesses);
-    const firstProfile = config.profiles[0]!;
-    const rootRules = sortEditableRules((await loadRules(root, firstProfile, config.harnesses))
-        .filter((rule) => rule.path.startsWith(".halign/rules/") && !rule.path.startsWith(".halign/rules/shared/")));
-    const domainRules: Record<string, Rule[]> = {};
-    for (const profile of config.profiles)
-    {
-        const prefix = `.halign/domains/${profile}/rules/`;
-        domainRules[profile] = sortEditableRules((await loadRules(root, profile, config.harnesses)).filter((rule) => rule.path.startsWith(prefix)));
-    }
-    return { root, config, rootRules, domainRules, sharedRules: await loadSharedRules(root), agents };
+    const [agents, rules, layerOptions, sharedRules] = await Promise.all([
+        loadAgents(root, config.harnesses),
+        loadRules(root, config.harnesses),
+        loadLayerOptions(root, config),
+        loadSharedRules(root),
+    ]);
+    return { root, config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents };
 }
 
-/** Validate and atomically write `config.json`. */
+/** Atomically write an already validated config document. */
+async function writeConfig(root: string, config: Config): Promise<void>
+{
+    await writeManaged(root, ".halign/config.json", Buffer.from(`${JSON.stringify(configDocument(config), null, 2)}\n`, "utf8"));
+}
+
+/** Validate sources and atomically write `config.json`. */
 export async function saveConfig(rootPath: string, config: Config): Promise<Config>
 {
     const root = resolve(rootPath);
     const validated = validateConfig(configDocument(config));
-    await writeManaged(root, ".halign/config.json", Buffer.from(`${JSON.stringify(configDocument(validated), null, 2)}\n`, "utf8"));
-    for (const profile of validated.profiles)
-    {
-        const directory = join(root, ".halign", "domains", profile, "rules");
-        await ensureRegularSource(root, directory);
-        await fs.mkdir(directory, { recursive: true });
-    }
+    await loadLayerOptions(root, validated);
+    await writeConfig(root, validated);
     return validated;
 }
 
-/** Validate and atomically write a root or domain rule. */
+/** Validate and atomically write a root rule. */
 export async function saveRule(rootPath: string, input: RuleInput): Promise<void>
 {
     const root = resolve(rootPath);
@@ -292,14 +296,6 @@ export async function saveRule(rootPath: string, input: RuleInput): Promise<void
     const kind = ruleKind(path);
     if (kind === "shared") throw new HalignError(`${path}: shared rules are saved with saveSharedRule`);
     assertRulePath(path, kind);
-    if (kind === "domain")
-    {
-        const profile = path.split("/")[2];
-        if (!profile || !config.profiles.includes(profile))
-        {
-            throw new HalignError(`${path}: domain profile must be configured, got ${valueText(profile)}`);
-        }
-    }
     if (!Number.isInteger(input.priority) || input.priority < 0)
     {
         throw new HalignError(`${path}: priority must be a non-negative integer, got ${valueText(input.priority)}`);
@@ -308,6 +304,21 @@ export async function saveRule(rootPath: string, input: RuleInput): Promise<void
     const metadata: Record<string, unknown> = { priority: input.priority };
     if (targets !== undefined) metadata.targets = targets;
     await writeManaged(root, path, serializeFrontmatter(metadata, input.body, path));
+}
+
+/** Validate and atomically write a layer option Markdown file. */
+export async function saveLayerOption(rootPath: string, input: LayerOptionInput): Promise<void>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const path = managedRelative(input.path, input.path);
+    const { layer } = layerOptionParts(path);
+    if (!config.layers.some((candidate) => candidate.name === layer))
+    {
+        throw new HalignError(`${path}: layer must be configured, got ${valueText(layer)}`);
+    }
+    const targets = assertTargets(path, input.targets, config.harnesses);
+    await writeManaged(root, path, serializeLayerOption(targets, input.body));
 }
 
 /** Validate and atomically write a shared-rule markdown file. */
@@ -340,6 +351,7 @@ export async function deleteSource(rootPath: string, relativePath: string): Prom
     const root = resolve(rootPath);
     const relative = managedRelative(relativePath, relativePath);
     if (relative === ".halign/config.json") throw new HalignError(`${relative}: config.json cannot be deleted`);
+    if (relative.startsWith(".halign/layers/")) throw new HalignError(`${relative}: layer options are deleted with removeLayerOption`);
     const path = await resolveManaged(root, relative, relative);
     const stats = await lstatIfExists(path);
     if (!stats) throw new HalignError(`${relative}: file does not exist`);
@@ -348,41 +360,163 @@ export async function deleteSource(rootPath: string, relativePath: string): Prom
     await fs.unlink(path);
 }
 
-/** Create a profile directory and add it to config. */
-export async function addProfile(rootPath: string, profile: string): Promise<Config>
+/** Create a layer with its first empty option and select it. */
+export async function addLayer(rootPath: string, name: string, initialOption: string): Promise<Config>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    if (config.profiles.some((existing) => existing.toLowerCase() === profile.toLowerCase()))
+    await loadLayerOptions(root, config);
+    if (!LAYER_NAME.test(name)) throw new HalignError(`.halign/config.json: layer name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
+    if (!LAYER_NAME.test(initialOption)) throw new HalignError(`.halign/config.json: selected must match ${LAYER_NAME.source}, got ${valueText(initialOption)}`);
+    if (config.layers.some((layer) => layer.name.toLowerCase() === name.toLowerCase()))
     {
-        throw new HalignError(`.halign/config.json: profile already exists, got ${valueText(profile)}`);
+        throw new HalignError(`.halign/config.json: layer already exists, got ${valueText(name)}`);
     }
-    return saveConfig(root, { ...config, profiles: [...config.profiles, profile] });
+    const layersRoot = join(root, ".halign", "layers");
+    const directory = join(layersRoot, name);
+    await ensureRegularSource(root, directory);
+    if (await lstatIfExists(directory)) throw new HalignError(`${display(root, directory)}: path already exists`);
+    const next = validateConfig(configDocument({ ...config, layers: [...config.layers, { name, selected: initialOption }] }));
+    await fs.mkdir(layersRoot, { recursive: true });
+    await fs.mkdir(directory);
+    try
+    {
+        await atomicWrite(join(directory, `${initialOption}.md`), Buffer.alloc(0));
+        await writeConfig(root, next);
+        return next;
+    }
+    catch (error)
+    {
+        await fs.rm(directory, { recursive: true, force: true });
+        throw error;
+    }
 }
 
-/** Remove an unused profile from config. */
-export async function removeProfile(rootPath: string, profile: string): Promise<Config>
+/** Remove a layer declaration and its entire validated source directory. */
+export async function removeLayer(rootPath: string, name: string): Promise<Config>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    if (profile === config.defaultProfile)
+    await loadLayerOptions(root, config);
+    if (!config.layers.some((layer) => layer.name === name))
     {
-        throw new HalignError(`.halign/config.json: default_profile cannot be removed, got ${valueText(profile)}`);
+        throw new HalignError(`.halign/config.json: layer is not configured, got ${valueText(name)}`);
     }
-    if (!config.profiles.includes(profile))
-    {
-        throw new HalignError(`.halign/config.json: profile is not configured, got ${valueText(profile)}`);
-    }
-    const next = await saveConfig(root, { ...config, profiles: config.profiles.filter((existing) => existing !== profile) });
-    const directory = join(root, ".halign", "domains", profile);
-    await ensureRegularSource(root, directory);
-    const stats = await lstatIfExists(directory);
-    if (!stats) return next;
-    if (stats.isSymbolicLink()) throw reparseError(root, directory, false);
-    if (!stats.isDirectory()) throw new HalignError(`${display(root, directory)}: expected a directory`);
+    const directory = join(root, ".halign", "layers", name);
     await assertNoReparseTree(root, directory);
-    await fs.rm(directory, { recursive: true, force: true });
+    const temporary = join(root, ".halign", `.remove-layer-${name}-${process.pid}`);
+    if (await lstatIfExists(temporary)) throw new HalignError(`${display(root, temporary)}: temporary path already exists`);
+    const next = validateConfig(configDocument({ ...config, layers: config.layers.filter((layer) => layer.name !== name) }));
+    await fs.rename(directory, temporary);
+    try
+    {
+        await writeConfig(root, next);
+    }
+    catch (error)
+    {
+        await fs.rename(temporary, directory);
+        throw error;
+    }
+    await fs.rm(temporary, { recursive: true, force: true });
     return next;
+}
+
+/** Rename a layer directory and cascade its config declaration. */
+export async function renameLayer(rootPath: string, from: string, to: string): Promise<Config>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    await loadLayerOptions(root, config);
+    if (!config.layers.some((layer) => layer.name === from)) throw new HalignError(`.halign/config.json: layer is not configured, got ${valueText(from)}`);
+    if (!LAYER_NAME.test(to)) throw new HalignError(`.halign/config.json: layer name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
+    if (from.toLowerCase() !== to.toLowerCase() && config.layers.some((layer) => layer.name.toLowerCase() === to.toLowerCase()))
+    {
+        throw new HalignError(`.halign/config.json: layer names must be unique without case sensitivity, got ${valueText(to)}`);
+    }
+    const source = join(root, ".halign", "layers", from);
+    const destination = join(root, ".halign", "layers", to);
+    await ensureRegularSource(root, destination);
+    if (from !== to && await lstatIfExists(destination)) throw new HalignError(`${display(root, destination)}: path already exists`);
+    const next = validateConfig(configDocument({
+        ...config,
+        layers: config.layers.map((layer) => (layer.name === from ? { ...layer, name: to } : layer)),
+    }));
+    if (source !== destination) await fs.rename(source, destination);
+    try
+    {
+        await writeConfig(root, next);
+        return next;
+    }
+    catch (error)
+    {
+        if (source !== destination) await fs.rename(destination, source);
+        throw error;
+    }
+}
+
+/** Create an empty option file under an existing layer. */
+export async function addLayerOption(rootPath: string, layer: string, option: string): Promise<void>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const options = await loadLayerOptions(root, config);
+    if (!config.layers.some((candidate) => candidate.name === layer)) throw new HalignError(`.halign/config.json: layer is not configured, got ${valueText(layer)}`);
+    if (!LAYER_NAME.test(option)) throw new HalignError(`layer option name must match ${LAYER_NAME.source}, got ${valueText(option)}`);
+    if (options[layer]!.some((candidate) => candidate.name.toLowerCase() === option.toLowerCase()))
+    {
+        throw new HalignError(`.halign/layers/${layer}: option already exists, got ${valueText(option)}`);
+    }
+    await writeManaged(root, `.halign/layers/${layer}/${option}.md`, Buffer.alloc(0));
+}
+
+/** Delete a non-selected layer option while preserving the layer invariant. */
+export async function removeLayerOption(rootPath: string, layer: string, option: string): Promise<void>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const options = await loadLayerOptions(root, config);
+    const layerConfig = config.layers.find((candidate) => candidate.name === layer);
+    if (!layerConfig) throw new HalignError(`.halign/config.json: layer is not configured, got ${valueText(layer)}`);
+    const layerOptions = options[layer]!;
+    if (!layerOptions.some((candidate) => candidate.name === option)) throw new HalignError(`.halign/layers/${layer}: option does not exist, got ${valueText(option)}`);
+    if (layerOptions.length === 1) throw new HalignError(`.halign/layers/${layer}: the final layer option cannot be removed`);
+    if (layerConfig.selected === option) throw new HalignError(`.halign/config.json: selected layer option cannot be removed, got ${valueText(option)}`);
+    await fs.unlink(join(root, ".halign", "layers", layer, `${option}.md`));
+}
+
+/** Rename a layer option and cascade the saved selection when necessary. */
+export async function renameLayerOption(rootPath: string, layer: string, from: string, to: string): Promise<Config>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const options = await loadLayerOptions(root, config);
+    const layerConfig = config.layers.find((candidate) => candidate.name === layer);
+    if (!layerConfig) throw new HalignError(`.halign/config.json: layer is not configured, got ${valueText(layer)}`);
+    if (!options[layer]!.some((candidate) => candidate.name === from)) throw new HalignError(`.halign/layers/${layer}: option does not exist, got ${valueText(from)}`);
+    if (!LAYER_NAME.test(to)) throw new HalignError(`layer option name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
+    if (from.toLowerCase() !== to.toLowerCase() && options[layer]!.some((candidate) => candidate.name.toLowerCase() === to.toLowerCase()))
+    {
+        throw new HalignError(`.halign/layers/${layer}: option names must be unique without case sensitivity, got ${valueText(to)}`);
+    }
+    const source = join(root, ".halign", "layers", layer, `${from}.md`);
+    const destination = join(root, ".halign", "layers", layer, `${to}.md`);
+    await ensureRegularSource(root, destination);
+    if (source !== destination && await lstatIfExists(destination)) throw new HalignError(`${display(root, destination)}: path already exists`);
+    const next = validateConfig(configDocument({
+        ...config,
+        layers: config.layers.map((candidate) => candidate.name === layer && candidate.selected === from ? { ...candidate, selected: to } : candidate),
+    }));
+    if (source !== destination) await fs.rename(source, destination);
+    try
+    {
+        if (layerConfig.selected === from) await writeConfig(root, next);
+        return next;
+    }
+    catch (error)
+    {
+        if (source !== destination) await fs.rename(destination, source);
+        throw error;
+    }
 }
 
 /** Replace a harness name inside a rule target list. */
@@ -413,9 +547,13 @@ export async function renameHarness(rootPath: string, from: string, to: string):
         harnesses: config.harnesses.map((harness) => (harness.name === from ? { ...harness, name: to } : harness)),
     };
     validateConfig(configDocument(nextConfig));
-    const rules = await loadAllRules(root, config);
-    const agents = await loadAgents(root, config.harnesses);
+    const [rules, layerOptions, agents] = await Promise.all([
+        loadRules(root, config.harnesses),
+        loadLayerOptions(root, config),
+        loadAgents(root, config.harnesses),
+    ]);
     const nextRules = rules.map((rule) => ({ ...rule, targets: replaceHarnessName(rule.targets, from, to) }));
+    const nextLayerOptions = Object.values(layerOptions).flat().map((option) => ({ ...option, targets: replaceHarnessName(option.targets, from, to) }));
     const nextAgents = agents.map((agent) =>
     {
         const harnesses: Record<string, Metadata> = {};
@@ -426,8 +564,9 @@ export async function renameHarness(rootPath: string, from: string, to: string):
         return { ...agent, harnesses };
     });
     for (const agent of nextAgents) assertAgentInput(agent, nextConfig.harnesses);
-    await saveConfig(root, nextConfig);
+    await writeConfig(root, nextConfig);
     for (const rule of nextRules) await saveRule(root, rule);
+    for (const option of nextLayerOptions) await saveLayerOption(root, option);
     for (const agent of nextAgents) await saveAgent(root, agent);
 }
 
@@ -446,8 +585,11 @@ export async function removeHarness(rootPath: string, name: string): Promise<voi
     }
     const nextConfig: Config = { ...config, harnesses: config.harnesses.filter((harness) => harness.name !== name) };
     validateConfig(configDocument(nextConfig));
-    const rules = await loadAllRules(root, config);
-    const agents = await loadAgents(root, config.harnesses);
+    const [rules, layerOptions, agents] = await Promise.all([
+        loadRules(root, config.harnesses),
+        loadLayerOptions(root, config),
+        loadAgents(root, config.harnesses),
+    ]);
     const nextRules: RuleInput[] = [];
     for (const rule of rules)
     {
@@ -457,6 +599,16 @@ export async function removeHarness(rootPath: string, name: string): Promise<voi
             throw new HalignError(`${rule.path}: targets would be empty after removing ${valueText(name)}`);
         }
         nextRules.push({ ...rule, targets });
+    }
+    const nextLayerOptions: LayerOptionInput[] = [];
+    for (const option of Object.values(layerOptions).flat())
+    {
+        const targets = option.targets.filter((target) => target !== name);
+        if (targets.length === 0)
+        {
+            throw new HalignError(`${option.path}: targets would be empty after removing ${valueText(name)}`);
+        }
+        nextLayerOptions.push({ ...option, targets });
     }
     const nextAgents: Agent[] = [];
     for (const agent of agents)
@@ -469,8 +621,9 @@ export async function removeHarness(rootPath: string, name: string): Promise<voi
         }
         nextAgents.push({ ...agent, harnesses });
     }
-    await saveConfig(root, nextConfig);
+    await writeConfig(root, nextConfig);
     for (const rule of nextRules) await saveRule(root, rule);
+    for (const option of nextLayerOptions) await saveLayerOption(root, option);
     for (const agent of nextAgents) await saveAgent(root, agent);
 }
 

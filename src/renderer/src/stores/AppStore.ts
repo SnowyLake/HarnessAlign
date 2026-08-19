@@ -4,10 +4,10 @@
 
 import { create } from "zustand";
 import type { ThemeMode } from "@shared/models/AppSettings";
-import type { Workspace } from "@shared/models/Workspace";
+import type { LayerSelection, Workspace } from "@shared/models/Workspace";
 
 /** Workspace modules available from the primary navigation. */
-export type WorkspaceView = "project" | "rules" | "domain" | "agents" | "generated";
+export type WorkspaceView = "project" | "rules" | "layers" | "agents" | "generated";
 
 /** Top-level desktop shell view. */
 export type AppView = WorkspaceView | "settings" | "showcase";
@@ -20,10 +20,12 @@ export type Selection =
     | { kind: "config" }
     | { kind: "harness"; name: string }
     | { kind: "harness-new" }
-    | { kind: "profile"; name: string }
-    | { kind: "profile-new" }
+    | { kind: "layer"; name: string }
+    | { kind: "layer-new" }
+    | { kind: "layer-option"; path: string }
+    | { kind: "layer-option-new"; layer: string }
     | { kind: "rule"; path: string }
-    | { kind: "rule-new"; scope: "root" | "domain" | "shared"; profile?: string }
+    | { kind: "rule-new"; scope: "root" | "shared" }
     | { kind: "agent"; path: string }
     | { kind: "agent-new" }
     | { kind: "generated" }
@@ -61,14 +63,18 @@ export function selectionKey(selection: Selection): string
             return `harness:${selection.name}`;
         case "harness-new":
             return "harness-new";
-        case "profile":
-            return `profile:${selection.name}`;
-        case "profile-new":
-            return "profile-new";
+        case "layer":
+            return `layer:${selection.name}`;
+        case "layer-new":
+            return "layer-new";
+        case "layer-option":
+            return `layer-option:${selection.path}`;
+        case "layer-option-new":
+            return `layer-option-new:${selection.layer}`;
         case "rule":
             return `rule:${selection.path}`;
         case "rule-new":
-            return `rule-new:${selection.scope}:${selection.profile ?? ""}`;
+            return `rule-new:${selection.scope}`;
         case "agent":
             return `agent:${selection.path}`;
         case "agent-new":
@@ -81,7 +87,7 @@ export function selectionKey(selection: Selection): string
 }
 
 /** Return whether a selection belongs to the requested workspace module and still exists. */
-function selectionMatchesView(view: WorkspaceView, selection: Selection, workspace: Workspace, profile: string): boolean
+function selectionMatchesView(view: WorkspaceView, selection: Selection, workspace: Workspace): boolean
 {
     switch (view)
     {
@@ -89,14 +95,14 @@ function selectionMatchesView(view: WorkspaceView, selection: Selection, workspa
             return selection.kind === "config"
                 || selection.kind === "harness-new"
                 || (selection.kind === "harness" && workspace.config.harnesses.some((item) => item.name === selection.name))
-                || selection.kind === "profile-new"
-                || (selection.kind === "profile" && workspace.config.profiles.includes(selection.name));
+                || selection.kind === "layer-new"
+                || (selection.kind === "layer" && workspace.config.layers.some((item) => item.name === selection.name));
         case "rules":
-            return (selection.kind === "rule-new" && selection.scope !== "domain")
+            return selection.kind === "rule-new"
                 || (selection.kind === "rule" && [...workspace.rootRules, ...workspace.sharedRules].some((item) => item.path === selection.path));
-        case "domain":
-            return (selection.kind === "rule-new" && selection.scope === "domain" && selection.profile === profile)
-                || (selection.kind === "rule" && (workspace.domainRules[profile] ?? []).some((item) => item.path === selection.path));
+        case "layers":
+            return (selection.kind === "layer-option-new" && workspace.config.layers.some((layer) => layer.name === selection.layer))
+                || (selection.kind === "layer-option" && Object.values(workspace.layerOptions).flat().some((item) => item.path === selection.path));
         case "agents":
             return selection.kind === "agent-new"
                 || (selection.kind === "agent" && workspace.agents.some((item) => item.path === selection.path));
@@ -107,11 +113,10 @@ function selectionMatchesView(view: WorkspaceView, selection: Selection, workspa
 }
 
 /** Choose the first useful editor target when entering a workspace module. */
-function selectionForView(view: WorkspaceView, selection: Selection, workspace: Workspace | undefined, profile: string): Selection
+function selectionForView(view: WorkspaceView, selection: Selection, workspace: Workspace | undefined): Selection
 {
     if (!workspace) return view === "generated" ? { kind: "generated" } : { kind: "config" };
-    const selectedProfile = workspace.config.profiles.includes(profile) ? profile : workspace.config.defaultProfile;
-    if (selectionMatchesView(view, selection, workspace, selectedProfile)) return selection;
+    if (selectionMatchesView(view, selection, workspace)) return selection;
     switch (view)
     {
         case "project":
@@ -121,10 +126,12 @@ function selectionForView(view: WorkspaceView, selection: Selection, workspace: 
             const rule = workspace.rootRules[0] ?? workspace.sharedRules[0];
             return rule ? { kind: "rule", path: rule.path } : { kind: "rule-new", scope: "root" };
         }
-        case "domain":
+        case "layers":
         {
-            const rule = workspace.domainRules[selectedProfile]?.[0];
-            return rule ? { kind: "rule", path: rule.path } : { kind: "rule-new", scope: "domain", profile: selectedProfile };
+            const layer = workspace.config.layers[0];
+            if (!layer) return { kind: "config" };
+            const option = workspace.layerOptions[layer.name]?.[0];
+            return option ? { kind: "layer-option", path: option.path } : { kind: "layer-option-new", layer: layer.name };
         }
         case "agents":
         {
@@ -139,13 +146,41 @@ function selectionForView(view: WorkspaceView, selection: Selection, workspace: 
     }
 }
 
+/** Build the saved ordered layer selection for a workspace. */
+function savedLayerSelection(workspace: Workspace | undefined): LayerSelection[]
+{
+    return workspace?.config.layers.map((layer) => ({ name: layer.name, option: layer.selected })) ?? [];
+}
+
+/** Preserve valid current selections while reconciling structural workspace changes. */
+function reconcileLayerSelection(current: readonly LayerSelection[], workspace: Workspace): LayerSelection[]
+{
+    const configured = new Map(workspace.config.layers.map((layer) => [layer.name, layer]));
+    const next: LayerSelection[] = [];
+    for (const selection of current)
+    {
+        const layer = configured.get(selection.name);
+        if (!layer) continue;
+        const option = workspace.layerOptions[layer.name]?.some((candidate) => candidate.name === selection.option)
+            ? selection.option
+            : layer.selected;
+        next.push({ name: layer.name, option });
+        configured.delete(layer.name);
+    }
+    for (const layer of workspace.config.layers)
+    {
+        if (configured.has(layer.name)) next.push({ name: layer.name, option: layer.selected });
+    }
+    return next;
+}
+
 /** Zustand state and setters for the desktop shell. */
 interface AppState
 {
     view: AppView;
     workspace: Workspace | undefined;
     selection: Selection;
-    profile: string;
+    layerSelection: LayerSelection[];
     output: string;
     outputTone: OutputTone;
     outputTitle: string;
@@ -160,7 +195,7 @@ interface AppState
     setView: (view: AppView) => void;
     setWorkspace: (workspace: Workspace | undefined) => void;
     setSelection: (selection: Selection) => void;
-    setProfile: (profile: string) => void;
+    setLayerSelection: (selection: LayerSelection[]) => void;
     setOutput: (output: string, tone?: OutputTone, title?: string) => void;
     dismissOutputNotice: () => void;
     setOutputDialogOpen: (isOpen: boolean) => void;
@@ -179,7 +214,7 @@ export const useAppStore = create<AppState>((set) => ({
     view: "project",
     workspace: undefined,
     selection: { kind: "config" },
-    profile: "",
+    layerSelection: [],
     output: "Open a directory that contains .halign.",
     outputTone: "neutral",
     outputTitle: "Output",
@@ -195,7 +230,7 @@ export const useAppStore = create<AppState>((set) => ({
         view,
         selection: view === "settings" || view === "showcase"
             ? state.selection
-            : selectionForView(view, state.selection, state.workspace, state.profile),
+            : selectionForView(view, state.selection, state.workspace),
     })),
     setWorkspace: (workspace) => set((state) =>
     {
@@ -204,18 +239,18 @@ export const useAppStore = create<AppState>((set) => ({
             workspace,
             selection: state.view === "settings" || state.view === "showcase"
                 ? state.selection
-                : selectionForView(state.view, state.selection, workspace, state.profile),
+                : selectionForView(state.view, state.selection, workspace),
+            layerSelection: !workspace
+                ? []
+                : isDifferentRoot
+                    ? savedLayerSelection(workspace)
+                    : reconcileLayerSelection(state.layerSelection, workspace),
             editorDrafts: isDifferentRoot ? {} : state.editorDrafts,
             pendingEditorAction: isDifferentRoot ? undefined : state.pendingEditorAction,
         };
     }),
     setSelection: (selection) => set({ selection }),
-    setProfile: (profile) => set((state) => ({
-        profile,
-        selection: state.view === "domain"
-            ? selectionForView("domain", state.selection, state.workspace, profile)
-            : state.selection,
-    })),
+    setLayerSelection: (layerSelection) => set({ layerSelection }),
     setOutput: (output, tone = "neutral", title = "Output") => set((state) => ({
         output,
         outputTone: tone,

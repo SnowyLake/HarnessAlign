@@ -5,20 +5,25 @@
 import { join, resolve } from "node:path";
 import {
     addHarness,
-    addProfile,
+    addLayer,
+    addLayerOption,
     deleteSource,
     loadWorkspace,
     removeHarness,
-    removeProfile,
+    removeLayer,
+    removeLayerOption,
     renameHarness,
+    renameLayer,
+    renameLayerOption,
     saveAgent,
     saveConfig,
+    saveLayerOption,
     saveRule,
     saveSharedRule,
 } from "../../engine/Edit.js";
 import { check, generate, readGeneratedFiles, reportGenerate } from "../../engine/Generate.js";
 import { reportSetup, setup } from "../../engine/Setup.js";
-import type { Agent, Config, HarnessConfig, RuleInput, Workspace } from "../../shared/models/Workspace.js";
+import type { Agent, Config, HarnessConfig, LayerOptionInput, LayerSelection, RuleInput, Workspace } from "../../shared/models/Workspace.js";
 import { ABSOLUTE_PATH_SCHEMA } from "../../shared/models/Schemas.js";
 
 /** Resolve and validate an absolute workspace root from the renderer. */
@@ -50,10 +55,16 @@ export class WorkspaceService
         return saveConfig(rootPath(root), config);
     }
 
-    /** Validate and write a root or domain rule. */
+    /** Validate and write a root rule. */
     saveRule(root: string, input: RuleInput): Promise<void>
     {
         return saveRule(rootPath(root), input);
+    }
+
+    /** Validate and write a layer option. */
+    saveLayerOption(root: string, input: LayerOptionInput): Promise<void>
+    {
+        return saveLayerOption(rootPath(root), input);
     }
 
     /** Validate and write a shared-rule markdown file. */
@@ -74,16 +85,40 @@ export class WorkspaceService
         return deleteSource(rootPath(root), path);
     }
 
-    /** Create a profile directory and add it to config. */
-    addProfile(root: string, profile: string): Promise<Config>
+    /** Create a layer with its first empty option. */
+    addLayer(root: string, name: string, initialOption: string): Promise<Config>
     {
-        return addProfile(rootPath(root), profile);
+        return addLayer(rootPath(root), name, initialOption);
     }
 
-    /** Remove a profile from config after it is unused. */
-    removeProfile(root: string, profile: string): Promise<Config>
+    /** Remove a layer and all of its options. */
+    removeLayer(root: string, name: string): Promise<Config>
     {
-        return removeProfile(rootPath(root), profile);
+        return removeLayer(rootPath(root), name);
+    }
+
+    /** Rename a layer and cascade its config declaration. */
+    renameLayer(root: string, from: string, to: string): Promise<Config>
+    {
+        return renameLayer(rootPath(root), from, to);
+    }
+
+    /** Create an empty option under an existing layer. */
+    addLayerOption(root: string, layer: string, option: string): Promise<void>
+    {
+        return addLayerOption(rootPath(root), layer, option);
+    }
+
+    /** Remove a non-selected option from a layer. */
+    removeLayerOption(root: string, layer: string, option: string): Promise<void>
+    {
+        return removeLayerOption(rootPath(root), layer, option);
+    }
+
+    /** Rename an option and cascade a saved selection. */
+    renameLayerOption(root: string, layer: string, from: string, to: string): Promise<Config>
+    {
+        return renameLayerOption(rootPath(root), layer, from, to);
     }
 
     /** Add a harness declaration to config. */
@@ -105,23 +140,23 @@ export class WorkspaceService
     }
 
     /** Generate outputs and return the CLI report string. */
-    async generate(root: string, profile?: string): Promise<string>
+    async generate(root: string, selection?: LayerSelection[]): Promise<string>
     {
         const resolved = rootPath(root);
-        const outputs = profile ? await generate(resolved, profile) : await generate(resolved);
+        const outputs = selection ? await generate(resolved, selection) : await generate(resolved);
         return reportGenerate(join(resolved, ".halign", "generated"), outputs);
     }
 
     /** Compare generated output with the workspace and return differences. */
-    check(root: string, profile?: string): Promise<string[]>
+    check(root: string, selection?: LayerSelection[]): Promise<string[]>
     {
-        return profile ? check(rootPath(root), profile) : check(rootPath(root));
+        return selection ? check(rootPath(root), selection) : check(rootPath(root));
     }
 
     /** Generate then deploy into existing user harness roots. */
-    async setup(root: string, profile?: string): Promise<string>
+    async setup(root: string, selection?: LayerSelection[]): Promise<string>
     {
-        return reportSetup(profile ? await setup(rootPath(root), profile) : await setup(rootPath(root)));
+        return reportSetup(selection ? await setup(rootPath(root), selection) : await setup(rootPath(root)));
     }
 }
 

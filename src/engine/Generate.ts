@@ -6,8 +6,11 @@
 import { promises as fs } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { assertContained, atomicWrite, display, lstatIfExists, readUtf8, reparseError } from "./FsSafe.js";
-import { loadAgents, loadConfig, loadRules } from "./Load.js";
+import { loadAgents, loadConfig, loadLayerOptions, loadRules } from "./Load.js";
 import {
+    type Config,
+    type LayerOption,
+    type LayerSelection,
     type OutputMap,
     codePointCompare,
     errorText,
@@ -17,22 +20,51 @@ import {
 } from "./Model.js";
 import { renderAgent, renderAgentsMarkdown } from "./Render.js";
 
+/** Resolve a complete ordered layer selection and return its source files. */
+function selectedLayerOptions(config: Config, options: Record<string, LayerOption[]>, requested?: readonly LayerSelection[]): [LayerSelection[], LayerOption[]]
+{
+    const selections = requested
+        ? requested.map((selection) => ({ ...selection }))
+        : config.layers.map((layer) => ({ name: layer.name, option: layer.selected }));
+    if (selections.length !== config.layers.length)
+    {
+        throw new HalignError(`layer selection must contain exactly ${config.layers.length} entries, got ${selections.length}`);
+    }
+    const configured = new Set(config.layers.map((layer) => layer.name));
+    const seen = new Set<string>();
+    const selected: LayerOption[] = [];
+    for (const selection of selections)
+    {
+        if (!configured.has(selection.name)) throw new HalignError(`unknown layer selection ${valueText(selection.name)}`);
+        if (seen.has(selection.name)) throw new HalignError(`layer selection must not contain duplicate ${valueText(selection.name)}`);
+        seen.add(selection.name);
+        const option = options[selection.name]?.find((candidate) => candidate.name === selection.option);
+        if (!option)
+        {
+            throw new HalignError(`layer ${valueText(selection.name)} option does not exist, got ${valueText(selection.option)}`);
+        }
+        selected.push(option);
+    }
+    const missing = config.layers.find((layer) => !seen.has(layer.name));
+    if (missing) throw new HalignError(`layer selection is missing ${valueText(missing.name)}`);
+    return [selections, selected];
+}
+
 /** Build the in-memory generated file map for a workspace. */
-export async function buildOutputs(rootPath: string, profile?: string): Promise<OutputMap>
+export async function buildOutputs(rootPath: string, selection?: readonly LayerSelection[]): Promise<OutputMap>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    const selected = profile || config.defaultProfile;
-    if (!config.profiles.includes(selected))
-    {
-        throw new HalignError(`.halign/config.json: profile must be configured, got ${valueText(selected)}`);
-    }
-    const rules = await loadRules(root, selected, config.harnesses);
-    const agents = await loadAgents(root, config.harnesses);
+    const [rules, agents, layerOptions] = await Promise.all([
+        loadRules(root, config.harnesses),
+        loadAgents(root, config.harnesses),
+        loadLayerOptions(root, config),
+    ]);
+    const [selections, selectedLayers] = selectedLayerOptions(config, layerOptions, selection);
     const outputs: OutputMap = new Map();
     for (const harness of config.harnesses)
     {
-        outputs.set(`${harness.name}/AGENTS.md`, renderAgentsMarkdown(rules, harness.name, config.name));
+        outputs.set(`${harness.name}/AGENTS.md`, renderAgentsMarkdown(rules, selectedLayers, harness.name, config.name));
         for (const agent of agents.slice().sort((left, right) => codePointCompare(left.name, right.name)))
         {
             const metadata = agent.harnesses[harness.name];
@@ -44,7 +76,7 @@ export async function buildOutputs(rootPath: string, profile?: string): Promise<
     const files = [...outputs.keys()];
     outputs.set(
         ".manifest.json",
-        Buffer.from(`${JSON.stringify({ version: 1, profile: selected, files }, null, 2)}\n`, "utf8"),
+        Buffer.from(`${JSON.stringify({ version: 1, layers: selections, files }, null, 2)}\n`, "utf8"),
     );
     return outputs;
 }
@@ -147,9 +179,9 @@ async function preflightOutputChanges(root: string, expected: OutputMap): Promis
 }
 
 /** Write generated files and replace the manifest after a successful preflight. */
-export async function generate(rootPath: string, profile?: string): Promise<OutputMap>
+export async function generate(rootPath: string, selection?: readonly LayerSelection[]): Promise<OutputMap>
 {
-    const expected = await buildOutputs(rootPath, profile);
+    const expected = await buildOutputs(rootPath, selection);
     const root = resolve(rootPath);
     const stalePaths = await preflightOutputChanges(root, expected);
     const generated = await outputRoot(root);
@@ -202,10 +234,10 @@ export async function readGeneratedFiles(rootPath: string): Promise<Map<string, 
 }
 
 /** Compare expected output with `.halign/generated` and return difference lines. */
-export async function check(rootPath: string, profile?: string): Promise<string[]>
+export async function check(rootPath: string, selection?: readonly LayerSelection[]): Promise<string[]>
 {
     const [expected, actual] = await Promise.all([
-        buildOutputs(rootPath, profile),
+        buildOutputs(rootPath, selection),
         readGeneratedFiles(rootPath),
     ]);
     const differences: string[] = [];

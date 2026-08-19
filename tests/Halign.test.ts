@@ -10,13 +10,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { atomicWrite, addHarness, addProfile, buildOutputs, check, deleteSource, downgradeMarkdownHeadings, generate, HalignError, loadConfig, loadWorkspace, removeHarness, removeProfile, renameHarness, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, saveAgent, saveConfig, saveRule, saveSharedRule, setup } from "../src/engine/Halign.js";
+import { atomicWrite, addHarness, addLayer, addLayerOption, buildOutputs, check, deleteSource, downgradeMarkdownHeadings, generate, HalignError, loadConfig, loadWorkspace, removeHarness, removeLayer, removeLayerOption, renameHarness, renameLayer, renameLayerOption, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup } from "../src/engine/Halign.js";
 
 const config = {
-    version: 2,
+    version: 1,
     name: "AGENTS",
-    default_profile: "arona",
-    profiles: ["arona", "kei"],
+    layers: [{ name: "soul", selected: "arona" }],
     harnesses: [
         { name: "codex", config_path: ".codex", agent_format: "toml", agent_extension: "toml", instructions_field: "developer_instructions" },
         { name: "cursor", config_path: ".cursor", agent_format: "yaml", agent_extension: "md" },
@@ -31,10 +30,11 @@ async function withProject(run: (root: string) => Promise<void>): Promise<void>
     try
     {
         await mkdir(join(root, ".halign", "rules"), { recursive: true });
-        await mkdir(join(root, ".halign", "domains", "arona", "rules"), { recursive: true });
-        await mkdir(join(root, ".halign", "domains", "kei", "rules"), { recursive: true });
+        await mkdir(join(root, ".halign", "layers", "soul"), { recursive: true });
         await mkdir(join(root, ".halign", "agents"), { recursive: true });
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify(config), "utf8");
+        await writeLayerOption(root, "soul", "arona", "# Soul\n\narona soul");
+        await writeLayerOption(root, "soul", "kei", "# Soul\n\nkei soul");
         await writeRule(root, "base.md", 100, "# Base\n\nbase");
         await writeAgent(root);
         await run(root);
@@ -43,6 +43,13 @@ async function withProject(run: (root: string) => Promise<void>): Promise<void>
     {
         await rm(root, { recursive: true, force: true });
     }
+}
+
+/** Write one selectable Layer option, with optional target metadata. */
+async function writeLayerOption(root: string, layer: string, option: string, body: string, targets?: string[]): Promise<void>
+{
+    const frontmatter = targets ? `---\ntargets:\n${targets.map((target) => `  - ${target}\n`).join("")}---\n\n` : "";
+    await writeFile(join(root, ".halign", "layers", layer, `${option}.md`), `${frontmatter}${body}`, "utf8");
 }
 
 /** Write a root rule markdown file under `.halign/rules`. */
@@ -122,8 +129,8 @@ test("config and metadata validation reject unsafe input", async () =>
 {
     await withProject(async (root) =>
     {
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, default_profile: "../x", profiles: ["../x"] }), "utf8");
-        await assert.rejects(buildOutputs(root), /single directory names/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, layers: [{ name: "../x", selected: "arona" }] }), "utf8");
+        await assert.rejects(buildOutputs(root), /name must match/u);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[0], config_path: "../escape" }] }), "utf8");
         await assert.rejects(buildOutputs(root), /normalized relative path/u);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
@@ -135,8 +142,10 @@ test("config and metadata validation reject unsafe input", async () =>
             { ...config.harnesses[0], config_path: ".agents/shared-rules/custom" },
         ] }), "utf8");
         await assert.rejects(buildOutputs(root), /managed shared rules target/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, version: 1 }), "utf8");
-        await assert.rejects(buildOutputs(root), /version must be integer 2/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, version: 2 }), "utf8");
+        await assert.rejects(buildOutputs(root), /version must be integer 1/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, profiles: ["legacy"] }), "utf8");
+        await assert.rejects(buildOutputs(root), /unknown field "profiles"/u);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], extra: true }] }), "utf8");
         await assert.rejects(buildOutputs(root), /unknown field/u);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], agent_format: "json" }] }), "utf8");
@@ -163,25 +172,61 @@ test("config and metadata validation reject unsafe input", async () =>
         await writeAgent(root);
         await writeFile(join(root, ".halign", "rules", "bad.md"), "---\npriority: high\n---\n\n# Bad\n\nbad\n", "utf8");
         await assert.rejects(buildOutputs(root), /priority/u);
+        await unlink(join(root, ".halign", "rules", "bad.md"));
+        await writeFile(join(root, ".halign", "layers", "soul", "arona.md"), "---\npriority: 3\n---\n\n# Soul\n", "utf8");
+        await assert.rejects(buildOutputs(root), /unknown layer field "priority"/u);
     });
 });
 
-test("rules profile selection, targets, Markdown, and all renderers are deterministic", async () =>
+test("Layer discovery is strict and empty options are valid", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await saveLayerOption(root, { path: ".halign/layers/soul/arona.md", body: "" });
+        assert.ok(!output(await buildOutputs(root), "codex/AGENTS.md").includes("arona soul"));
+        await mkdir(join(root, ".halign", "layers", "soul", "nested"));
+        await assert.rejects(buildOutputs(root), /only contain direct Markdown files/u);
+        await rm(join(root, ".halign", "layers", "soul", "nested"), { recursive: true });
+        await mkdir(join(root, ".halign", "layers", "orphan"));
+        await writeFile(join(root, ".halign", "layers", "orphan", "x.md"), "x", "utf8");
+        await assert.rejects(buildOutputs(root), /not declared/u);
+        await rm(join(root, ".halign", "layers", "orphan"), { recursive: true });
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, layers: [{ name: "soul", selected: "missing" }] }), "utf8");
+        await assert.rejects(buildOutputs(root), /selected option does not exist/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify(config), "utf8");
+        await assert.rejects(buildOutputs(root, []), /exactly 1 entries/u);
+        await assert.rejects(buildOutputs(root, [{ name: "soul", option: "missing" }]), /option does not exist/u);
+    });
+});
+
+test("root rules, ordered Layer selection, targets, Markdown, and renderers are deterministic", async () =>
 {
     await withProject(async (root) =>
     {
         await writeRule(root, "zeta.md", 10, "# Zeta\n\nzeta");
         await writeRule(root, "alpha.md", 10, "# Alpha\n\nalpha");
         await writeRule(root, "cursor.md", 1, "# Cursor\n\ncursor only", ["cursor"]);
-        await writeFile(join(root, ".halign", "domains", "kei", "rules", "soul.md"), "---\npriority: 3\n---\n\n# Soul\n\nkei soul\n", "utf8");
+        await mkdir(join(root, ".halign", "layers", "workflow"));
+        await writeLayerOption(root, "workflow", "strict", "# Workflow\n\nstrict workflow");
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({
+            ...config,
+            layers: [...config.layers, { name: "workflow", selected: "strict" }],
+        }), "utf8");
         const first = await buildOutputs(root);
         const second = await buildOutputs(root);
         assert.deepEqual([...first].map(([path, value]) => [path, value.toString("hex")]), [...second].map(([path, value]) => [path, value.toString("hex")]));
         const codex = output(first, "codex/AGENTS.md");
         assert.ok(codex.indexOf("alpha") < codex.indexOf("zeta"));
         assert.ok(!codex.includes("cursor only"));
+        assert.ok(codex.indexOf("base") < codex.indexOf("arona soul"));
+        assert.ok(codex.indexOf("arona soul") < codex.indexOf("strict workflow"));
         assert.ok(output(first, "cursor/AGENTS.md").includes("cursor only"));
-        assert.ok(output(await buildOutputs(root, "kei"), "codex/AGENTS.md").includes("kei soul"));
+        const overridden = output(await buildOutputs(root, [
+            { name: "workflow", option: "strict" },
+            { name: "soul", option: "kei" },
+        ]), "codex/AGENTS.md");
+        assert.ok(overridden.includes("kei soul"));
+        assert.ok(overridden.indexOf("strict workflow") < overridden.indexOf("kei soul"));
         assert.equal(downgradeMarkdownHeadings("# One\n\n~~~md\n# Hidden\n~~~"), "## One\n\n~~~md\n# Hidden\n~~~");
         assert.ok(!renderMarkdownToc(["## Same\n\n~~~md\n## Hidden\n~~~"], "AGENTS").includes("Hidden"));
         const tomlText = output(first, "codex/agents/explorer.toml");
@@ -380,9 +425,9 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
     {
         const loaded = await loadConfig(root);
         await saveConfig(root, { ...loaded, name: "Aligned" });
-        const written = JSON.parse(await readFile(join(root, ".halign", "config.json"), "utf8")) as { default_profile: string; name: string };
+        const written = JSON.parse(await readFile(join(root, ".halign", "config.json"), "utf8")) as { layers: Array<{ name: string; selected: string }>; name: string };
         assert.equal(written.name, "Aligned");
-        assert.equal(written.default_profile, "arona");
+        assert.deepEqual(written.layers, [{ name: "soul", selected: "arona" }]);
         const before = await readFile(join(root, ".halign", "config.json"), "utf8");
         await assert.rejects(saveConfig(root, {
             ...loaded,
@@ -395,13 +440,24 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
         assert.equal(await readFile(join(root, ".halign", "config.json"), "utf8"), before);
 
         await saveRule(root, { path: ".halign/rules/cursor.md", priority: 1, targets: ["cursor"], body: "# Cursor\n\ncursor only" });
-        await saveRule(root, { path: ".halign/domains/kei/rules/soul.md", priority: 3, body: "# Soul\n\nkei soul" });
+        await saveLayerOption(root, { path: ".halign/layers/soul/kei.md", targets: ["cursor"], body: "# Soul\n\nkei soul" });
         await saveSharedRule(root, ".halign/rules/shared/shared.md", "shared rule");
-        await addProfile(root, "sora");
-        await readdir(join(root, ".halign", "domains", "sora", "rules"));
-        await assert.rejects(removeProfile(root, "arona"), /default_profile cannot be removed/u);
-        await removeProfile(root, "sora");
-        await assert.rejects(readdir(join(root, ".halign", "domains", "sora")));
+        await addLayer(root, "mode", "strict");
+        assert.equal(await readFile(join(root, ".halign", "layers", "mode", "strict.md"), "utf8"), "");
+        await addLayerOption(root, "mode", "fast");
+        await assert.rejects(removeLayerOption(root, "mode", "strict"), /selected layer option cannot be removed/u);
+        const withFastSelected = await loadConfig(root);
+        await saveConfig(root, {
+            ...withFastSelected,
+            layers: withFastSelected.layers.map((layer) => layer.name === "mode" ? { ...layer, selected: "fast" } : layer),
+        });
+        await removeLayerOption(root, "mode", "strict");
+        await renameLayerOption(root, "mode", "fast", "quick");
+        assert.equal((await loadConfig(root)).layers.find((layer) => layer.name === "mode")?.selected, "quick");
+        await renameLayer(root, "mode", "workflow");
+        assert.equal((await loadConfig(root)).layers.find((layer) => layer.name === "workflow")?.selected, "quick");
+        await removeLayer(root, "workflow");
+        await assert.rejects(readdir(join(root, ".halign", "layers", "workflow")));
 
         await renameHarness(root, "cursor", "atlas");
         const renamed = await loadWorkspace(root);
@@ -409,6 +465,7 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
         assert.ok(!renamed.config.harnesses.some((harness) => harness.name === "cursor"));
         assert.deepEqual(renamed.rootRules.map((rule) => rule.path), [".halign/rules/cursor.md", ".halign/rules/base.md"]);
         assert.deepEqual(renamed.rootRules.find((rule) => rule.path === ".halign/rules/cursor.md")?.targets, ["atlas"]);
+        assert.deepEqual(renamed.layerOptions.soul?.find((option) => option.name === "kei")?.targets, ["atlas"]);
         assert.ok(renamed.agents[0]?.harnesses.atlas);
         assert.equal(renamed.agents[0]?.harnesses.cursor, undefined);
         assert.equal(renamed.sharedRules[0]?.body, "shared rule\n");
@@ -435,5 +492,28 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
         await assert.rejects(saveSharedRule(root, ".halign/rules/base.md", "no"), /must stay under \.halign\/rules\/shared/u);
         await assert.rejects(deleteSource(root, ".halign/config.json"), /cannot be deleted/u);
         assert.equal((await loadConfig(root)).name, "Aligned");
+    });
+});
+
+test("legal prototype property Layer names survive discovery and harness cascades", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await rm(join(root, ".halign", "layers", "soul"), { recursive: true });
+        await mkdir(join(root, ".halign", "layers", "constructor"), { recursive: true });
+        await writeLayerOption(root, "constructor", "arona", "# Soul\n\nprototype-safe soul", ["cursor"]);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({
+            ...config,
+            layers: [{ name: "constructor", selected: "arona" }],
+        }), "utf8");
+
+        const workspace = await loadWorkspace(root);
+        assert.deepEqual(Object.keys(workspace.layerOptions), ["constructor"]);
+        assert.equal(Object.values(workspace.layerOptions).length, 1);
+        assert.equal(Object.entries(workspace.layerOptions).find(([name]) => name === "constructor")?.[1][0]?.name, "arona");
+
+        await renameHarness(root, "cursor", "atlas");
+        const renamed = await loadWorkspace(root);
+        assert.deepEqual(Object.entries(renamed.layerOptions).find(([name]) => name === "constructor")?.[1][0]?.targets, ["atlas"]);
     });
 });

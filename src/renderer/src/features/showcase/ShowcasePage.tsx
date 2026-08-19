@@ -31,7 +31,7 @@ export function ShowcasePage()
                 <h2 className="font-medium">Inputs</h2>
                 <Label className="grid gap-1 text-[12px] text-muted-foreground">Name<Input defaultValue="Harness Align" /></Label>
                 <Label className="grid gap-1 text-[12px] text-muted-foreground">
-                    Profile
+                    Layer option
                     <Select defaultValue="default">
                         <SelectTrigger size="sm" className="w-full">
                             <SelectValue />

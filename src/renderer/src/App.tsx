@@ -34,7 +34,6 @@ export function App()
                 {
                     const loaded = await window.appApi.workspace.load(settings.lastWorkspaceRoot);
                     useAppStore.getState().setWorkspace(loaded);
-                    useAppStore.getState().setProfile(loaded.config.defaultProfile);
                     useAppStore.getState().setSelection({ kind: "config" });
                     useAppStore.getState().setOutput(`Opened ${loaded.root}`, "success", "Project opened");
                 }
@@ -65,21 +64,20 @@ export function App()
             if (!root) return;
             const loaded = await window.appApi.workspace.load(root);
             useAppStore.getState().setWorkspace(loaded);
-            useAppStore.getState().setProfile(loaded.config.defaultProfile);
             useAppStore.getState().setSelection({ kind: "config" });
             useAppStore.getState().setView("project");
             useAppStore.getState().setOutput(`Opened ${loaded.root}`, "success", "Project opened");
         });
     };
 
-    /** Generate outputs for the selected profile. */
+    /** Generate outputs for the current ordered layer selection. */
     const handleGenerate = (): void =>
     {
         const current = useAppStore.getState().workspace;
         if (!current) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.generate(current.root, useAppStore.getState().profile);
+            const report = await window.appApi.workspace.generate(current.root, useAppStore.getState().layerSelection);
             useAppStore.getState().setOutput(report, "success", "Generate completed");
             await refreshWorkspace();
             useAppStore.getState().setView("generated");
@@ -93,7 +91,7 @@ export function App()
         if (!current) return;
         void runCommand(async () =>
         {
-            const differences = await window.appApi.workspace.check(current.root, useAppStore.getState().profile);
+            const differences = await window.appApi.workspace.check(current.root, useAppStore.getState().layerSelection);
             if (differences.length === 0)
             {
                 useAppStore.getState().setOutput("Check passed. Generated output is up to date.", "success", "Check passed");
@@ -112,7 +110,7 @@ export function App()
         if (!current) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.setup(current.root, useAppStore.getState().profile);
+            const report = await window.appApi.workspace.setup(current.root, useAppStore.getState().layerSelection);
             useAppStore.getState().setOutput(report, "success", "Setup completed");
             await refreshWorkspace();
         });

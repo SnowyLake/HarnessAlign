@@ -8,7 +8,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { atomicWrite, lstatIfExists } from "./FsSafe.js";
 import { generate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
-import { type Harness, type OutputMap, codePointCompare, HalignError, valueText } from "./Model.js";
+import { type Harness, type LayerSelection, type OutputMap, codePointCompare, HalignError, valueText } from "./Model.js";
 
 /** Resolve `path` and throw if it escapes `root`. */
 function assertContainedWithin(root: string, path: string, label: string): string
@@ -172,11 +172,11 @@ export function reportSetup(result: SetupResult): string
 }
 
 /** Generate then deploy into existing USERPROFILE harness roots and shared-rules. */
-export async function setup(rootPath: string, profile?: string, userProfile = process.env.USERPROFILE): Promise<SetupResult>
+export async function setup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE): Promise<SetupResult>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    const outputs = await generate(root, profile);
+    const outputs = await generate(root, selection);
     const generatedRoot = join(root, ".halign", "generated");
     if (!userProfile || !isAbsolute(userProfile))
     {

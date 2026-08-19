@@ -9,16 +9,17 @@ import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { check, generate, reportGenerate } from "./Generate.js";
-import { errorText, HalignError } from "./Model.js";
+import { loadConfig } from "./Load.js";
+import { errorText, HalignError, type LayerSelection } from "./Model.js";
 import { reportSetup, setup } from "./Setup.js";
 
-export type { Agent, AgentFormat, Config, Harness, HarnessConfig, OutputMap, Rule } from "./Model.js";
+export type { Agent, AgentFormat, Config, Harness, HarnessConfig, LayerConfig, LayerOption, LayerSelection, OutputMap, Rule } from "./Model.js";
 export type { SetupResult, SetupTargetReport } from "./Setup.js";
-export type { RuleInput, SharedRule, Workspace } from "./Edit.js";
+export type { LayerOptionInput, RuleInput, SharedRule, Workspace } from "./Edit.js";
 export { HalignError } from "./Model.js";
 export { atomicWrite } from "./FsSafe.js";
-export { loadConfig, loadSharedRules, validateConfig } from "./Load.js";
-export { addHarness, addProfile, deleteSource, loadWorkspace, removeHarness, removeProfile, renameHarness, saveAgent, saveConfig, saveRule, saveSharedRule } from "./Edit.js";
+export { loadConfig, loadLayerOptions, loadSharedRules, validateConfig } from "./Load.js";
+export { addHarness, addLayer, addLayerOption, deleteSource, loadWorkspace, removeHarness, removeLayer, removeLayerOption, renameHarness, renameLayer, renameLayerOption, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule } from "./Edit.js";
 export { downgradeMarkdownHeadings, renderMarkdownToc } from "./Render.js";
 export { buildOutputs, check, generate, reportGenerate, safeOutputRelative } from "./Generate.js";
 export { reportSetup, setup } from "./Setup.js";
@@ -27,7 +28,7 @@ export { reportSetup, setup } from "./Setup.js";
 function usage(error?: string): number
 {
     if (error) process.stderr.write(`error: ${error}\n`);
-    process.stderr.write("usage: halign <generate|check|setup> [--profile <profile>]\n");
+    process.stderr.write("usage: halign <generate|check|setup> [--layer <layer>=<option>]...\n");
     return 2;
 }
 
@@ -36,44 +37,63 @@ export async function main(argv: string[], root = process.cwd()): Promise<number
 {
     if (argv.length === 1 && ["--help", "-h"].includes(argv[0]!))
     {
-        process.stdout.write("usage: halign <generate|check|setup> [--profile <profile>]\n");
+        process.stdout.write("usage: halign <generate|check|setup> [--layer <layer>=<option>]...\n");
         return 0;
     }
     const command = argv[0];
     if (command !== "generate" && command !== "check" && command !== "setup") return usage("command must be generate, check, or setup");
-    let profile: string | undefined;
+    const overrides = new Map<string, string>();
     for (let index = 1; index < argv.length; index += 1)
     {
         const argument = argv[index]!;
-        if (argument === "--profile")
+        let value: string | undefined;
+        if (argument === "--layer")
         {
-            profile = argv[index + 1];
-            if (profile === undefined) return usage("--profile requires a value");
+            value = argv[index + 1];
+            if (value === undefined) return usage("--layer requires a value");
             index += 1;
         }
-        else if (argument.startsWith("--profile="))
+        else if (argument.startsWith("--layer="))
         {
-            profile = argument.slice("--profile=".length);
+            value = argument.slice("--layer=".length);
         }
         else
         {
             return usage(`unknown argument ${argument}`);
         }
+        const separator = value.indexOf("=");
+        if (separator <= 0 || separator === value.length - 1 || value.indexOf("=", separator + 1) >= 0)
+        {
+            return usage("--layer must use <layer>=<option>");
+        }
+        const name = value.slice(0, separator);
+        const option = value.slice(separator + 1);
+        if (overrides.has(name)) return usage(`--layer must not repeat ${name}`);
+        overrides.set(name, option);
     }
     try
     {
+        let selection: LayerSelection[] | undefined;
+        if (overrides.size > 0)
+        {
+            const config = await loadConfig(root);
+            const configured = new Set(config.layers.map((layer) => layer.name));
+            const unknown = [...overrides.keys()].find((name) => !configured.has(name));
+            if (unknown !== undefined) throw new HalignError(`unknown layer selection ${JSON.stringify(unknown)}`);
+            selection = config.layers.map((layer) => ({ name: layer.name, option: overrides.get(layer.name) ?? layer.selected }));
+        }
         if (command === "generate")
         {
-            const outputs = await generate(root, profile);
+            const outputs = await generate(root, selection);
             process.stdout.write(reportGenerate(join(resolve(root), ".halign", "generated"), outputs));
             return 0;
         }
         if (command === "setup")
         {
-            process.stdout.write(reportSetup(await setup(root, profile)));
+            process.stdout.write(reportSetup(await setup(root, selection)));
             return 0;
         }
-        const differences = await check(root, profile);
+        const differences = await check(root, selection);
         if (differences.length > 0)
         {
             process.stdout.write(`Check failed:\n${differences.join("\n")}\n`);
