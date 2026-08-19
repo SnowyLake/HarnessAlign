@@ -175,8 +175,9 @@ export function reportGenerate(generatedRoot: string, outputs: OutputMap): strin
 }
 
 /** Read every file currently under the generated directory. */
-async function actualFiles(root: string): Promise<Map<string, Buffer>>
+export async function readGeneratedFiles(rootPath: string): Promise<Map<string, Buffer>>
 {
+    const root = resolve(rootPath);
     const generated = await outputRoot(root);
     if (!(await lstatIfExists(generated))) return new Map();
     const files = new Map<string, Buffer>();
@@ -203,8 +204,10 @@ async function actualFiles(root: string): Promise<Map<string, Buffer>>
 /** Compare expected output with `.halign/generated` and return difference lines. */
 export async function check(rootPath: string, profile?: string): Promise<string[]>
 {
-    const expected = await buildOutputs(rootPath, profile);
-    const actual = await actualFiles(resolve(rootPath));
+    const [expected, actual] = await Promise.all([
+        buildOutputs(rootPath, profile),
+        readGeneratedFiles(rootPath),
+    ]);
     const differences: string[] = [];
     for (const [path, content] of expected)
     {

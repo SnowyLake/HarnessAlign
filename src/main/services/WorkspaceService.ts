@@ -16,7 +16,7 @@ import {
     saveRule,
     saveSharedRule,
 } from "../../engine/Edit.js";
-import { check, generate, reportGenerate } from "../../engine/Generate.js";
+import { check, generate, readGeneratedFiles, reportGenerate } from "../../engine/Generate.js";
 import { reportSetup, setup } from "../../engine/Setup.js";
 import type { Agent, Config, HarnessConfig, RuleInput, Workspace } from "../../shared/models/Workspace.js";
 import { ABSOLUTE_PATH_SCHEMA } from "../../shared/models/Schemas.js";
@@ -31,9 +31,17 @@ function rootPath(root: string): string
 export class WorkspaceService
 {
     /** Load and validate a `.halign` workspace. */
-    load(root: string): Promise<Workspace>
+    async load(root: string): Promise<Workspace>
     {
-        return loadWorkspace(rootPath(root));
+        const resolved = rootPath(root);
+        const [workspace, generatedFiles] = await Promise.all([
+            loadWorkspace(resolved),
+            readGeneratedFiles(resolved),
+        ]);
+        return {
+            ...workspace,
+            generatedFiles: [...generatedFiles].map(([path, content]) => ({ path, content: content.toString("utf8") })),
+        };
     }
 
     /** Validate and write `config.json`. */

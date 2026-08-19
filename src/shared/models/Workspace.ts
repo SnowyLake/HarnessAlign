@@ -54,6 +54,13 @@ export interface Agent
     body: string;
 }
 
+/** One real file currently present under `.halign/generated/`. */
+export interface GeneratedFile
+{
+    path: string;
+    content: string;
+}
+
 /** Loaded `.halign` workspace shown in the desktop shell. */
 export interface Workspace
 {
@@ -63,4 +70,5 @@ export interface Workspace
     domainRules: Record<string, RuleInput[]>;
     sharedRules: SharedRule[];
     agents: Agent[];
+    generatedFiles: GeneratedFile[];
 }

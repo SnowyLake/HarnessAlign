@@ -1,97 +1,214 @@
 import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
+import {
+    BotIcon,
+    FileOutputIcon,
+    FolderCogIcon,
+    Layers3Icon,
+    LayoutDashboardIcon,
+    PaletteIcon,
+    ScrollTextIcon,
+    Settings2Icon,
+} from "lucide-react";
+import {
+    Breadcrumb,
+    BreadcrumbItem,
+    BreadcrumbList,
+    BreadcrumbPage,
+} from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/Utils";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+    Sidebar,
+    SidebarContent,
+    SidebarFooter,
+    SidebarGroup,
+    SidebarGroupContent,
+    SidebarHeader,
+    SidebarInset,
+    SidebarMenu,
+    SidebarMenuButton,
+    SidebarMenuItem,
+    SidebarRail,
+    SidebarTrigger,
+} from "@/components/ui/sidebar";
 import { useAppStore, type AppView } from "@/stores/AppStore";
 
-const NAV_ITEMS: Array<{ view: AppView; label: string }> = [
-    { view: "workspace", label: "Workspace" },
-    { view: "settings", label: "Settings" },
-    { view: "showcase", label: "UI" },
+/** Navigation item shown in the app chrome sidebar. */
+interface NavItem
+{
+    view: AppView;
+    label: string;
+    icon: typeof LayoutDashboardIcon;
+}
+
+/** Primary workspace modules shown above the bottom utility navigation. */
+const WORKSPACE_NAV_ITEMS: NavItem[] = [
+    { view: "project", label: "Project", icon: FolderCogIcon },
+    { view: "rules", label: "Rules", icon: ScrollTextIcon },
+    { view: "domain", label: "Domain", icon: Layers3Icon },
+    { view: "agents", label: "Agents", icon: BotIcon },
+    { view: "generated", label: "Generated", icon: FileOutputIcon },
 ];
 
-/** Props for the desktop chrome that wraps feature pages. */
+/** Human-readable breadcrumb label for the active shell view. */
+function viewLabel(view: AppView): string
+{
+    if (view === "settings") return "Settings";
+    if (view === "showcase") return "UI Kit";
+    return WORKSPACE_NAV_ITEMS.find((item) => item.view === view)?.label ?? "Project";
+}
+
+/** Props for the desktop chrome that wraps feature pages and owns header commands. */
 export interface AppShellProps
 {
     children: ReactNode;
-}
-
-/** Props for workspace generate / check / setup actions. */
-export interface ToolbarProps
-{
     onOpen: () => void;
     onGenerate: () => void;
     onCheck: () => void;
     onSetup: () => void;
 }
 
-/** Left navigation between workspace, settings, and the UI showcase. */
-export function Sidebar()
+/** App chrome: shadcn Sidebar inset, header actions, and page children. */
+export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: AppShellProps)
 {
     const view = useAppStore((state) => state.view);
     const setView = useAppStore((state) => state.setView);
-    return (
-        <aside className="flex w-52 shrink-0 flex-col border-r border-border bg-sidebar">
-            <div className="px-3 py-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                Harness Align
-            </div>
-            <Separator />
-            <nav className="flex flex-col gap-0.5 p-2">
-                {NAV_ITEMS.map((item) => (
-                    <button
-                        key={item.view}
-                        type="button"
-                        onClick={() => setView(item.view)}
-                        className={cn(
-                            "rounded-md px-2 py-1.5 text-left text-[13px]",
-                            view === item.view ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60",
-                        )}
-                    >
-                        {item.label}
-                    </button>
-                ))}
-            </nav>
-        </aside>
-    );
-}
-
-/** Desktop frame with a sidebar and a single content column. */
-export function AppShell({ children }: AppShellProps)
-{
-    return (
-        <div className="flex h-full min-h-0">
-            <Sidebar />
-            <div className="flex min-w-0 flex-1 flex-col">{children}</div>
-        </div>
-    );
-}
-
-/** Workspace command bar for opening a config root and running generate / check / setup. */
-export function Toolbar({ onOpen, onGenerate, onCheck, onSetup }: ToolbarProps)
-{
     const workspace = useAppStore((state) => state.workspace);
     const profile = useAppStore((state) => state.profile);
     const setProfile = useAppStore((state) => state.setProfile);
     const isBusy = useAppStore((state) => state.isBusy);
+    const [version, setVersion] = useState("");
+    const [setupOpen, setSetupOpen] = useState(false);
+    const effectiveView = view === "showcase" && !import.meta.env.DEV ? "project" : view;
+
+    useEffect(() =>
+    {
+        void window.appApi.app.getVersion().then(setVersion).catch(() => setVersion(""));
+    }, []);
+
+    useEffect(() =>
+    {
+        if (view === "showcase" && !import.meta.env.DEV) setView("project");
+    }, [view, setView]);
+
     return (
-        <header className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
-            <Button size="sm" onClick={onOpen}>Open</Button>
-            <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
-                {workspace?.root ?? "No workspace"}
-            </span>
-            <NativeSelect
-                disabled={!workspace || isBusy}
-                value={profile}
-                onChange={(event) => setProfile(event.target.value)}
-            >
-                {(workspace?.config.profiles ?? []).map((item) => (
-                    <option key={item} value={item}>{item}</option>
-                ))}
-            </NativeSelect>
-            <Button size="sm" variant="secondary" disabled={!workspace || isBusy} onClick={onGenerate}>Generate</Button>
-            <Button size="sm" variant="secondary" disabled={!workspace || isBusy} onClick={onCheck}>Check</Button>
-            <Button size="sm" variant="secondary" disabled={!workspace || isBusy} onClick={onSetup}>Setup</Button>
-        </header>
+        <>
+            <Sidebar collapsible="icon" variant="inset">
+                <SidebarHeader className="px-2 py-2">
+                    <div className="flex items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/70">
+                        <LayoutDashboardIcon size={16} />
+                        <span className="group-data-[collapsible=icon]:hidden">Harness Align</span>
+                    </div>
+                </SidebarHeader>
+                <SidebarContent>
+                    <SidebarGroup>
+                        <SidebarGroupContent>
+                            <SidebarMenu>
+                                {WORKSPACE_NAV_ITEMS.map((item) => (
+                                    <SidebarMenuItem key={item.view}>
+                                        <SidebarMenuButton
+                                            isActive={effectiveView === item.view}
+                                            tooltip={item.label}
+                                            onClick={() => setView(item.view)}
+                                        >
+                                            <item.icon size={16} />
+                                            <span>{item.label}</span>
+                                        </SidebarMenuButton>
+                                    </SidebarMenuItem>
+                                ))}
+                            </SidebarMenu>
+                        </SidebarGroupContent>
+                    </SidebarGroup>
+                </SidebarContent>
+                <SidebarFooter className="gap-1 px-2 py-2">
+                    <div className="px-2 pb-1 text-[11px] text-sidebar-foreground/70 group-data-[collapsible=icon]:hidden">
+                        {version ? `v${version}` : "—"}
+                    </div>
+                    <SidebarMenu>
+                        {import.meta.env.DEV ? (
+                            <SidebarMenuItem>
+                                <SidebarMenuButton
+                                    isActive={effectiveView === "showcase"}
+                                    tooltip="UI Kit"
+                                    onClick={() => setView("showcase")}
+                                >
+                                    <PaletteIcon size={16} />
+                                    <span>UI Kit</span>
+                                </SidebarMenuButton>
+                            </SidebarMenuItem>
+                        ) : null}
+                        <SidebarMenuItem>
+                            <SidebarMenuButton
+                                isActive={effectiveView === "settings"}
+                                tooltip="Settings"
+                                onClick={() => setView("settings")}
+                            >
+                                <Settings2Icon size={16} />
+                                <span>Settings</span>
+                            </SidebarMenuButton>
+                        </SidebarMenuItem>
+                    </SidebarMenu>
+                </SidebarFooter>
+                <SidebarRail />
+            </Sidebar>
+            <SidebarInset className="min-h-0 overflow-hidden">
+                <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
+                    <SidebarTrigger className="-ml-1" />
+                    <Breadcrumb>
+                        <BreadcrumbList>
+                            <BreadcrumbItem>
+                                <BreadcrumbPage>{viewLabel(effectiveView)}</BreadcrumbPage>
+                            </BreadcrumbItem>
+                        </BreadcrumbList>
+                    </Breadcrumb>
+                    <div className="ml-auto flex min-w-0 items-center gap-2">
+                        <Button size="sm" variant={workspace ? "outline" : "default"} disabled={isBusy} onClick={onOpen}>
+                            Open
+                        </Button>
+                        <span className="hidden min-w-0 max-w-56 truncate text-[12px] text-muted-foreground sm:inline">
+                            {workspace?.root ?? "No project"}
+                        </span>
+                        <Select
+                            value={profile || undefined}
+                            onValueChange={(value) =>
+                            {
+                                if (value !== null) setProfile(value);
+                            }}
+                            disabled={!workspace || isBusy}
+                        >
+                            <SelectTrigger size="sm" className="w-36">
+                                <SelectValue placeholder="Profile" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {(workspace?.config.profiles ?? []).map((item) => (
+                                    <SelectItem key={item} value={item}>{item}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <Button size="sm" variant={workspace ? "default" : "secondary"} disabled={!workspace || isBusy} onClick={onGenerate}>
+                            Generate
+                        </Button>
+                        <Button size="sm" variant="secondary" disabled={!workspace || isBusy} onClick={onCheck}>
+                            Check
+                        </Button>
+                        <Button size="sm" variant="secondary" disabled={!workspace || isBusy} onClick={() => setSetupOpen(true)}>
+                            Setup
+                        </Button>
+                    </div>
+                </header>
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
+            </SidebarInset>
+            <ConfirmDialog
+                open={setupOpen}
+                onOpenChange={setSetupOpen}
+                title="Run Setup?"
+                description="Setup updates existing harness directories under USERPROFILE and shared-rules. Continue?"
+                confirmLabel="Setup"
+                confirmDisabled={isBusy}
+                onConfirm={onSetup}
+            />
+        </>
     );
 }

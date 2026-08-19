@@ -1,13 +1,23 @@
-import { Separator as SeparatorPrimitive } from "@base-ui/react/separator";
-import { cn } from "@/lib/Utils";
+import { Separator as SeparatorPrimitive } from "@base-ui/react/separator"
 
-/** Horizontal or vertical divider. */
-export function Separator({ className, orientation = "horizontal" }: { className?: string; orientation?: "horizontal" | "vertical" })
-{
-    return (
-        <SeparatorPrimitive
-            orientation={orientation}
-            className={cn(orientation === "vertical" ? "h-full w-px bg-border" : "h-px w-full bg-border", className)}
-        />
-    );
+import { cn } from "@/lib/Utils"
+
+function Separator({
+  className,
+  orientation = "horizontal",
+  ...props
+}: SeparatorPrimitive.Props) {
+  return (
+    <SeparatorPrimitive
+      data-slot="separator"
+      orientation={orientation}
+      className={cn(
+        "shrink-0 bg-border data-horizontal:h-px data-horizontal:w-full data-vertical:w-px data-vertical:self-stretch",
+        className
+      )}
+      {...props}
+    />
+  )
 }
+
+export { Separator }

@@ -1,20 +1,34 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
     --background: #f4f4f5;
     --foreground: #18181b;
     --card: #ffffff;
     --card-foreground: #18181b;
-    --muted: #f4f4f5;
-    --muted-foreground: #71717a;
-    --border: #e4e4e7;
-    --accent: #e4e4e7;
-    --accent-foreground: #18181b;
+    --popover: #ffffff;
+    --popover-foreground: #18181b;
     --primary: #18181b;
     --primary-foreground: #fafafa;
+    --secondary: #f4f4f5;
+    --secondary-foreground: #18181b;
+    --muted: #f4f4f5;
+    --muted-foreground: #71717a;
+    --accent: #e4e4e7;
+    --accent-foreground: #18181b;
     --destructive: #dc2626;
+    --border: #e4e4e7;
+    --input: #e4e4e7;
     --ring: #a1a1aa;
     --sidebar: #ececee;
+    --sidebar-foreground: #18181b;
+    --sidebar-primary: #18181b;
+    --sidebar-primary-foreground: #fafafa;
+    --sidebar-accent: #e4e4e7;
+    --sidebar-accent-foreground: #18181b;
+    --sidebar-border: #e4e4e7;
+    --sidebar-ring: #a1a1aa;
     --radius: 0.5rem;
 }
 
@@ -23,16 +37,28 @@
     --foreground: #e4e4e7;
     --card: #14151a;
     --card-foreground: #e4e4e7;
-    --muted: #1c1d24;
-    --muted-foreground: #a1a1aa;
-    --border: #27272f;
-    --accent: #1f2028;
-    --accent-foreground: #e4e4e7;
+    --popover: #14151a;
+    --popover-foreground: #e4e4e7;
     --primary: #e4e4e7;
     --primary-foreground: #18181b;
+    --secondary: #1c1d24;
+    --secondary-foreground: #e4e4e7;
+    --muted: #1c1d24;
+    --muted-foreground: #a1a1aa;
+    --accent: #1f2028;
+    --accent-foreground: #e4e4e7;
     --destructive: #f87171;
+    --border: #27272f;
+    --input: #27272f;
     --ring: #52525b;
     --sidebar: #101117;
+    --sidebar-foreground: #e4e4e7;
+    --sidebar-primary: #e4e4e7;
+    --sidebar-primary-foreground: #18181b;
+    --sidebar-accent: #1f2028;
+    --sidebar-accent-foreground: #e4e4e7;
+    --sidebar-border: #27272f;
+    --sidebar-ring: #52525b;
 }
 
 @theme inline {
@@ -40,16 +66,28 @@
     --color-foreground: var(--foreground);
     --color-card: var(--card);
     --color-card-foreground: var(--card-foreground);
-    --color-muted: var(--muted);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-border: var(--border);
-    --color-accent: var(--accent);
-    --color-accent-foreground: var(--accent-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
     --color-primary: var(--primary);
     --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
     --color-destructive: var(--destructive);
+    --color-border: var(--border);
+    --color-input: var(--input);
     --color-ring: var(--ring);
     --color-sidebar: var(--sidebar);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
     --radius-sm: calc(var(--radius) - 4px);
     --radius-md: calc(var(--radius) - 2px);
     --radius-lg: var(--radius);
