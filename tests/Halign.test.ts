@@ -189,12 +189,19 @@ test("Layer discovery is strict and empty options are valid", async () =>
         await rm(join(root, ".halign", "layers", "soul", "nested"), { recursive: true });
         await mkdir(join(root, ".halign", "layers", "orphan"));
         await writeFile(join(root, ".halign", "layers", "orphan", "x.md"), "x", "utf8");
-        await assert.rejects(buildOutputs(root), /not declared/u);
+        const catalog = await loadWorkspace(root);
+        assert.ok(Object.keys(catalog.layerOptions).includes("orphan"));
+        assert.ok(!output(await buildOutputs(root), "codex/AGENTS.md").includes("x"));
+        const withOrphan = await buildOutputs(root, [{ name: "soul", option: "kei" }, { name: "orphan", option: "x" }]);
+        assert.ok(output(withOrphan, "codex/AGENTS.md").includes("x"));
+        assert.ok(output(withOrphan, "codex/AGENTS.md").includes("kei soul"));
+        const withoutSoul = await buildOutputs(root, []);
+        assert.ok(!output(withoutSoul, "codex/AGENTS.md").includes("kei soul"));
+        await assert.rejects(buildOutputs(root, [{ name: "missing", option: "x" }]), /unknown layer selection/u);
         await rm(join(root, ".halign", "layers", "orphan"), { recursive: true });
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, layers: [{ name: "soul", selected: "missing" }] }), "utf8");
         await assert.rejects(buildOutputs(root), /selected option does not exist/u);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify(config), "utf8");
-        await assert.rejects(buildOutputs(root, []), /exactly 1 entries/u);
         await assert.rejects(buildOutputs(root, [{ name: "soul", option: "missing" }]), /option does not exist/u);
     });
 });
@@ -444,13 +451,13 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
         await saveSharedRule(root, ".halign/rules/shared/shared.md", "shared rule");
         await addLayer(root, "mode", "strict");
         assert.equal(await readFile(join(root, ".halign", "layers", "mode", "strict.md"), "utf8"), "");
+        assert.deepEqual((await loadConfig(root)).layers.map((layer) => layer.name), ["soul"]);
         await addLayerOption(root, "mode", "fast");
-        await assert.rejects(removeLayerOption(root, "mode", "strict"), /selected layer option cannot be removed/u);
-        const withFastSelected = await loadConfig(root);
-        await saveConfig(root, {
-            ...withFastSelected,
-            layers: withFastSelected.layers.map((layer) => layer.name === "mode" ? { ...layer, selected: "fast" } : layer),
-        });
+        await removeLayerOption(root, "mode", "strict");
+        const withMode = await loadConfig(root);
+        await saveConfig(root, { ...withMode, layers: [...withMode.layers, { name: "mode", selected: "fast" }] });
+        await addLayerOption(root, "mode", "strict");
+        await assert.rejects(removeLayerOption(root, "mode", "fast"), /selected layer option cannot be removed/u);
         await removeLayerOption(root, "mode", "strict");
         await renameLayerOption(root, "mode", "fast", "quick");
         assert.equal((await loadConfig(root)).layers.find((layer) => layer.name === "mode")?.selected, "quick");

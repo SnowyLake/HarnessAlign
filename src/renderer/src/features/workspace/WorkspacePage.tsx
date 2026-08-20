@@ -12,6 +12,7 @@ function canSaveSelection(selection: Selection): boolean
         || selection.kind === "harness"
         || selection.kind === "harness-new"
         || selection.kind === "layer-new"
+        || selection.kind === "layer"
         || selection.kind === "layer-option"
         || selection.kind === "layer-option-new"
         || selection.kind === "rule"

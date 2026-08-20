@@ -85,19 +85,19 @@ export class WorkspaceService
         return deleteSource(rootPath(root), path);
     }
 
-    /** Create a layer with its first empty option. */
+    /** Create a layer directory with its first empty option. */
     addLayer(root: string, name: string, initialOption: string): Promise<Config>
     {
         return addLayer(rootPath(root), name, initialOption);
     }
 
-    /** Remove a layer and all of its options. */
+    /** Remove a layer directory and drop it from the project selection when present. */
     removeLayer(root: string, name: string): Promise<Config>
     {
         return removeLayer(rootPath(root), name);
     }
 
-    /** Rename a layer and cascade its config declaration. */
+    /** Rename a layer directory and cascade its project selection when present. */
     renameLayer(root: string, from: string, to: string): Promise<Config>
     {
         return renameLayer(rootPath(root), from, to);

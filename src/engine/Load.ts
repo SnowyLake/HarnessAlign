@@ -389,12 +389,12 @@ async function parseLayerSource(root: string, path: string): Promise<[Record<str
     return [metadata, text.slice(match[0].length)];
 }
 
-/** Load one configured layer directory and validate every direct option file. */
-async function loadLayerDirectory(root: string, directory: string, layer: LayerConfig, harnesses: HarnessConfig[]): Promise<LayerOption[]>
+/** Load one layer directory and validate every direct option file. */
+async function loadLayerDirectory(root: string, directory: string, layer: string, selected: string | undefined, harnesses: HarnessConfig[]): Promise<LayerOption[]>
 {
     await ensureRegularSource(root, directory);
     const stats = await lstatIfExists(directory);
-    if (!stats) throw new HalignError(`${display(root, directory)}: configured layer directory is required`);
+    if (!stats) throw new HalignError(`${display(root, directory)}: layer directory is required`);
     if (!stats.isDirectory()) throw new HalignError(`${display(root, directory)}: expected a directory`);
     const entries = await fs.readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => codePointCompare(left.name, right.name));
@@ -436,17 +436,17 @@ async function loadLayerDirectory(root: string, directory: string, layer: LayerC
         {
             throw new HalignError(`${path}: targets may only contain configured harness names, got ${valueText(invalid)}`);
         }
-        options.push({ path, layer: layer.name, name, targets, body: body ? normalizedBody(body) : "" });
+        options.push({ path, layer, name, targets, body: body ? normalizedBody(body) : "" });
     }
-    if (options.length === 0) throw new HalignError(`${display(root, directory)}: configured layer must contain at least one Markdown option`);
-    if (!options.some((option) => option.name === layer.selected))
+    if (options.length === 0) throw new HalignError(`${display(root, directory)}: layer must contain at least one Markdown option`);
+    if (selected !== undefined && !options.some((option) => option.name === selected))
     {
-        throw new HalignError(`.halign/config.json: layer ${valueText(layer.name)} selected option does not exist, got ${valueText(layer.selected)}`);
+        throw new HalignError(`.halign/config.json: layer ${valueText(layer)} selected option does not exist, got ${valueText(selected)}`);
     }
     return options;
 }
 
-/** Strictly discover every configured layer and reject orphaned source entries. */
+/** Discover every layer directory and require configured selections to exist. */
 export async function loadLayerOptions(root: string, config: Config): Promise<Record<string, LayerOption[]>>
 {
     const layersRoot = join(root, ".halign", "layers");
@@ -470,11 +470,13 @@ export async function loadLayerOptions(root: string, config: Config): Promise<Re
         const entryStats = await lstatIfExists(directory);
         if (!entryStats) continue;
         if (entryStats.isSymbolicLink()) throw reparseError(root, directory, false);
-        const layer = configured.get(entry.name);
-        if (!layer) throw new HalignError(`${display(root, directory)}: layer directory is not declared in .halign/config.json`);
         if (!entryStats.isDirectory()) throw new HalignError(`${display(root, directory)}: expected a layer directory`);
-        discovered.add(layer.name);
-        options[layer.name] = await loadLayerDirectory(root, directory, layer, config.harnesses);
+        if (!LAYER_NAME.test(entry.name))
+        {
+            throw new HalignError(`${display(root, directory)}: layer name must match ${LAYER_NAME.source}, got ${valueText(entry.name)}`);
+        }
+        discovered.add(entry.name);
+        options[entry.name] = await loadLayerDirectory(root, directory, entry.name, configured.get(entry.name)?.selected, config.harnesses);
     }
     const missing = config.layers.find((layer) => !discovered.has(layer.name));
     if (missing) throw new HalignError(`.halign/layers/${missing.name}: configured layer directory is required`);

@@ -1,12 +1,12 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
 import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
 import { useState } from "react";
-import { PencilIcon, SaveIcon, Trash2Icon } from "lucide-react";
+import { PencilIcon, PlusIcon, SaveIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/toast";
-import { refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { fileName, ruleDisplayName, uniqueRulePath } from "@/lib/Utils";
+import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { fileName, ruleDisplayName, uniqueAgentPath, uniqueRulePath, catalogLayerNames } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 
 /** Available insertion gaps around a rule row. */
@@ -276,20 +276,50 @@ async function renameLayerOptionFromTree(workspace: Workspace, option: LayerOpti
     const nextName = name.trim().toLowerCase().endsWith(".md") ? name.trim().slice(0, -3) : name.trim();
     const result = await runMutation(async () =>
     {
-        await window.appApi.workspace.renameLayerOption(workspace.root, option.layer, option.name, nextName);
-        const state = useAppStore.getState();
-        state.setLayerSelection(state.layerSelection.map((selection) => selection.name === option.layer && selection.option === option.name
-            ? { ...selection, option: nextName }
-            : selection));
-        const nextPath = `.halign/layers/${option.layer}/${nextName}.md`;
-        const previousKey = selectionKey({ kind: "layer-option", path: option.path });
-        const nextKey = selectionKey({ kind: "layer-option", path: nextPath });
-        const draft = state.editorDrafts[previousKey];
-        if (draft) state.setEditorDraft(nextKey, draft);
-        state.clearEditorDraft(previousKey);
+        const nextPath = await persistLayerOptionRename(workspace, option.layer, option.name, nextName);
         await refreshWorkspace({ kind: "layer-option", path: nextPath });
     });
     if (result.ok) toast.add({ title: `Renamed to ${nextName}.md`, type: "success" });
+    return result.ok;
+}
+
+/** Rename one catalog layer and keep editor drafts under the new name. */
+async function renameLayerFromTree(workspace: Workspace, from: string, to: string): Promise<boolean>
+{
+    const nextName = to.trim().toLowerCase().endsWith(".md") ? to.trim().slice(0, -3) : to.trim();
+    if (nextName === from) return true;
+    const result = await runMutation(async () =>
+    {
+        await persistLayerRename(workspace, from, nextName);
+    });
+    if (result.ok) toast.add({ title: `Renamed layer to ${nextName}`, type: "success" });
+    return result.ok;
+}
+
+/** Rename one agent file from the tree heading, keeping path and name aligned. */
+async function renameAgentFromTree(workspace: Workspace, path: string, name: string): Promise<boolean>
+{
+    const agent = workspace.agents.find((item) => item.path === path);
+    if (!agent) return false;
+    let nextPath = agent.path;
+    const result = await runMutation(async () =>
+    {
+        nextPath = uniqueAgentPath(agent.path, name, workspace.agents.map((item) => item.path));
+        const nextName = ruleDisplayName(nextPath);
+        if (nextPath !== agent.path || nextName !== agent.name)
+        {
+            await window.appApi.workspace.saveAgent(workspace.root, { ...agent, path: nextPath, name: nextName });
+            if (nextPath !== agent.path) await window.appApi.workspace.deleteSource(workspace.root, agent.path);
+            const state = useAppStore.getState();
+            const previousKey = selectionKey({ kind: "agent", path: agent.path });
+            const nextKey = selectionKey({ kind: "agent", path: nextPath });
+            const draft = state.editorDrafts[previousKey];
+            if (draft) state.setEditorDraft(nextKey, draft);
+            state.clearEditorDraft(previousKey);
+        }
+        await refreshWorkspace({ kind: "agent", path: nextPath });
+    });
+    if (result.ok) toast.add({ title: `Renamed to ${fileName(nextPath)}`, type: "success" });
     return result.ok;
 }
 
@@ -298,18 +328,31 @@ interface SectionProps
 {
     title: string;
     disabled?: boolean;
+    active?: boolean;
+    onClick?: () => void;
     onNew?: () => void;
 }
 
-/** Tree section heading with an optional New action. */
-function Section({ title, disabled, onNew }: SectionProps)
+/** Tree section heading with an optional New action and optional selection. */
+function Section({ title, disabled, active, onClick, onNew }: SectionProps)
 {
     return (
         <div className="mt-3 flex items-center justify-between px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-1">
-            <span>{title}</span>
+            {onClick ? (
+                <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={onClick}
+                    className={`min-w-0 truncate rounded-sm px-1 py-0.5 text-left uppercase tracking-wide disabled:opacity-50 ${active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+                >
+                    {title}
+                </button>
+            ) : (
+                <span>{title}</span>
+            )}
             {onNew ? (
-                <Button size="sm" variant="ghost" type="button" disabled={disabled} onClick={onNew}>
-                    New
+                <Button size="icon-sm" variant="ghost" type="button" disabled={disabled} aria-label="New" className="border-0 text-muted-foreground" onClick={onNew}>
+                    <PlusIcon />
                 </Button>
             ) : null}
         </div>
@@ -373,7 +416,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                 onClick={() => setSelection({ kind: "harness-new" })}
                             />
                         ) : null}
-                        <Section title="Layers" disabled={isBusy} onNew={() => setSelection({ kind: "layer-new" })} />
+                        <Section title="Layers" />
                         {workspace.config.layers.map((item) => (
                             <TreeButton
                                 key={item.name}
@@ -381,20 +424,9 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                 active={selection.kind === "layer" && selection.name === item.name}
                                 disabled={isBusy}
                                 selection={{ kind: "layer", name: item.name }}
-                                canDelete
                                 onClick={() => setSelection({ kind: "layer", name: item.name })}
                             />
                         ))}
-                        {(selection.kind === "layer-new" || Boolean(editorDrafts[selectionKey({ kind: "layer-new" })])) ? (
-                            <TreeButton
-                                label="New layer"
-                                active={selection.kind === "layer-new"}
-                                disabled={isBusy}
-                                selection={{ kind: "layer-new" }}
-                                canSave
-                                onClick={() => setSelection({ kind: "layer-new" })}
-                            />
-                        ) : null}
                     </>
                 ) : null}
 
@@ -484,37 +516,70 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
                 {view === "layers" ? (
                     <>
-                        {workspace.config.layers.map((layer) => (
-                            <div key={layer.name}>
-                                <Section title={layer.name} disabled={isBusy} onNew={() => setSelection({ kind: "layer-option-new", layer: layer.name })} />
-                                {(workspace.layerOptions[layer.name] ?? []).map((option) => (
-                                    <TreeButton
-                                        key={option.path}
-                                        label={option.name}
-                                        indent
-                                        active={selection.kind === "layer-option" && selection.path === option.path}
-                                        disabled={isBusy}
-                                        selection={{ kind: "layer-option", path: option.path }}
-                                        canSave
-                                        canDelete={option.name !== layer.selected && (workspace.layerOptions[layer.name]?.length ?? 0) > 1}
-                                        onRename={(name) => renameLayerOptionFromTree(workspace, option, name)}
-                                        onClick={() => setSelection({ kind: "layer-option", path: option.path })}
-                                    />
-                                ))}
-                                {(selection.kind === "layer-option-new" && selection.layer === layer.name)
-                                    || Boolean(editorDrafts[selectionKey({ kind: "layer-option-new", layer: layer.name })]) ? (
+                        <Section title="Layers" disabled={isBusy} onNew={() => setSelection({ kind: "layer-new" })} />
+                        {(selection.kind === "layer-new" || Boolean(editorDrafts[selectionKey({ kind: "layer-new" })])) ? (
+                            <TreeButton
+                                label="new-layer"
+                                active={selection.kind === "layer-new"}
+                                disabled={isBusy}
+                                selection={{ kind: "layer-new" }}
+                                canSave
+                                onClick={() => setSelection({ kind: "layer-new" })}
+                            />
+                        ) : null}
+                        {catalogLayerNames(workspace).map((layerName) =>
+                        {
+                            const selected = workspace.config.layers.find((layer) => layer.name === layerName)?.selected;
+                            return (
+                                <div key={layerName}>
+                                    <div className="flex items-center">
+                                        <div className="min-w-0 flex-1">
+                                            <TreeButton
+                                                label={layerName}
+                                                active={selection.kind === "layer" && selection.name === layerName}
+                                                disabled={isBusy}
+                                                selection={{ kind: "layer", name: layerName }}
+                                                canSave
+                                                canDelete
+                                                onRename={(name) => renameLayerFromTree(workspace, layerName, name)}
+                                                onClick={() => setSelection({ kind: "layer", name: layerName })}
+                                            />
+                                        </div>
+                                        {selection.kind === "layer" && selection.name === layerName ? (
+                                            <Button size="icon-sm" variant="ghost" type="button" disabled={isBusy} className="mr-3 border-0 text-muted-foreground" aria-label="New option" onClick={() => setSelection({ kind: "layer-option-new", layer: layerName })}>
+                                                <PlusIcon />
+                                            </Button>
+                                        ) : null}
+                                    </div>
+                                    {(workspace.layerOptions[layerName] ?? []).map((option) => (
                                         <TreeButton
-                                            label="new-option"
+                                            key={option.path}
+                                            label={option.name}
                                             indent
-                                            active={selection.kind === "layer-option-new" && selection.layer === layer.name}
+                                            active={selection.kind === "layer-option" && selection.path === option.path}
                                             disabled={isBusy}
-                                            selection={{ kind: "layer-option-new", layer: layer.name }}
+                                            selection={{ kind: "layer-option", path: option.path }}
                                             canSave
-                                            onClick={() => setSelection({ kind: "layer-option-new", layer: layer.name })}
+                                            canDelete={option.name !== selected && (workspace.layerOptions[layerName]?.length ?? 0) > 1}
+                                            onRename={(name) => renameLayerOptionFromTree(workspace, option, name)}
+                                            onClick={() => setSelection({ kind: "layer-option", path: option.path })}
                                         />
-                                    ) : null}
-                            </div>
-                        ))}
+                                    ))}
+                                    {(selection.kind === "layer-option-new" && selection.layer === layerName)
+                                        || Boolean(editorDrafts[selectionKey({ kind: "layer-option-new", layer: layerName })]) ? (
+                                            <TreeButton
+                                                label="new-option"
+                                                indent
+                                                active={selection.kind === "layer-option-new" && selection.layer === layerName}
+                                                disabled={isBusy}
+                                                selection={{ kind: "layer-option-new", layer: layerName }}
+                                                canSave
+                                                onClick={() => setSelection({ kind: "layer-option-new", layer: layerName })}
+                                            />
+                                        ) : null}
+                                </div>
+                            );
+                        })}
                     </>
                 ) : null}
 
@@ -530,12 +595,13 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                 selection={{ kind: "agent", path: agent.path }}
                                 canSave
                                 canDelete
+                                onRename={(name) => renameAgentFromTree(workspace, agent.path, name)}
                                 onClick={() => setSelection({ kind: "agent", path: agent.path })}
                             />
                         ))}
                         {(selection.kind === "agent-new" || Boolean(editorDrafts[selectionKey({ kind: "agent-new" })])) ? (
                             <TreeButton
-                                label="New agent"
+                                label="new-agent"
                                 active={selection.kind === "agent-new"}
                                 disabled={isBusy}
                                 selection={{ kind: "agent-new" }}

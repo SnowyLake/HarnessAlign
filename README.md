@@ -131,8 +131,9 @@ npm run dev
 
 - 打开包含 `.halign` 的配置目录, 并记住上次路径和主题 (保存在 Electron `userData`, 不写入本仓库).
 - 编辑 `config.json` 的标题, 有序 Layer 选择和 Harness 列表.
-- 新建, 修改, 重命名或删除 Layer, Layer 选项, 根 Rule, shared-rules 和 Subagent.
-- 在 Project 页面拖拽 Layer 并为每个 Layer 选择一个选项, 使用当前未保存选择执行 `Generate`, `Check` 和 `Setup`.
+- 在 Layers 页面新建, 修改, 重命名或删除 Layer 及其选项; 在 Project 页面从已有 Layer 中选择添加, 拖拽顺序, 并为每个 Layer 选择一个选项.
+- 新建, 修改, 重命名或删除根 Rule, shared-rules 和 Subagent.
+- 使用当前未保存的 Layer 选择执行 `Generate`, `Check` 和 `Setup`.
 - 点击 Project 页面的 `Save` 后, 把当前 Layer 顺序与选择写回 `config.json`.
 
 桌面壳不创建 `%USERPROFILE%` 下缺失的 Harness 根目录. `Setup` 的部署规则与 CLI 相同. Renderer 只通过 `window.appApi` 请求能力, 不直接访问文件系统.
@@ -153,9 +154,9 @@ npm run dev
 └─ generated\
 ```
 
-- `.halign/config.json` 定义格式版本, 输出标题, 有序 Layer 选择和 Harness 配置.
+- `.halign/config.json` 定义格式版本, 输出标题, 有序 Layer 选择和 Harness 配置. `layers` 是项目选择, 不必覆盖 `.halign/layers` 下的全部目录.
 - `.halign/rules/` 保存参与各 Harness `AGENTS.md` 的公共 Rule.
-- `.halign/layers/<layer>/<option>.md` 保存一个 Layer 的可选 Markdown 文件. 每次生成从每个 Layer 选择一个文件.
+- `.halign/layers/<layer>/<option>.md` 保存一个 Layer 的可选 Markdown 文件. 每次生成从项目选中的每个 Layer 选择一个文件.
 - `.halign/rules/shared/` 保存独立部署到 `%USERPROFILE%\.agents\shared-rules` 的共享规则.
 - `.halign/agents/` 保存 Subagent 的共享正文与各 Harness 原生 metadata.
 - `.halign/generated/` 保存生成结果和所有权 manifest, 不应手工编辑.
@@ -209,7 +210,7 @@ Layer 配置字段如下:
 | `name` | 匹配 `[a-z0-9][a-z0-9_-]*` 且忽略大小写后唯一 | `.halign/layers/<layer>/` 目录名, UI 与 CLI 标识符 |
 | `selected` | 匹配 `[a-z0-9][a-z0-9_-]*` 且必须存在对应 `.md` 文件 | CLI 无覆盖参数时使用的项目选择 |
 
-`layers` 可以为空. 一旦声明 Layer, 对应目录必须存在并至少包含一个直接 `.md` 文件. `.halign/layers` 采用严格校验, 未声明目录, 非 Markdown 文件, 嵌套目录, symlink 和 junction 都会导致加载失败.
+`layers` 可以为空, 表示当前项目未选择任何 Layer. `.halign/layers/<layer>/` 目录构成 Layer 目录, 每个目录必须至少包含一个直接 `.md` 文件. 未写入 `config.json` 的 Layer 目录仍然有效, 只是不参与生成. 非 Markdown 文件, 嵌套目录, symlink 和 junction 都会导致加载失败.
 
 Layer 选项是纯 Markdown, 也可以使用只包含可选 `targets` 的 YAML frontmatter. Layer 文件不使用 `priority`, 允许空文件作为显式 no-op:
 
@@ -225,7 +226,7 @@ targets:
 Arona soul content.
 ```
 
-公共 Rule 先按 UI 写入的 `priority` 排序, 然后每个 Layer 按 `config.json` 或当前 Project 界面的顺序贡献一个选项文件. Layer 选项自身没有内部排序.
+公共 Rule 先按 UI 写入的 `priority` 排序, 然后每个已选 Layer 按 `config.json` 或当前 Project 界面的顺序贡献一个选项文件. Layer 选项自身没有内部排序.
 
 Harness 配置字段如下:
 

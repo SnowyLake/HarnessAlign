@@ -94,14 +94,14 @@ function selectionMatchesView(view: WorkspaceView, selection: Selection, workspa
         case "project":
             return selection.kind === "config"
                 || selection.kind === "harness-new"
-                || (selection.kind === "harness" && workspace.config.harnesses.some((item) => item.name === selection.name))
-                || selection.kind === "layer-new"
-                || (selection.kind === "layer" && workspace.config.layers.some((item) => item.name === selection.name));
+                || (selection.kind === "harness" && workspace.config.harnesses.some((item) => item.name === selection.name));
         case "rules":
             return selection.kind === "rule-new"
                 || (selection.kind === "rule" && [...workspace.rootRules, ...workspace.sharedRules].some((item) => item.path === selection.path));
         case "layers":
-            return (selection.kind === "layer-option-new" && workspace.config.layers.some((layer) => layer.name === selection.layer))
+            return selection.kind === "layer-new"
+                || (selection.kind === "layer" && Object.hasOwn(workspace.layerOptions, selection.name))
+                || (selection.kind === "layer-option-new" && Object.hasOwn(workspace.layerOptions, selection.layer))
                 || (selection.kind === "layer-option" && Object.values(workspace.layerOptions).flat().some((item) => item.path === selection.path));
         case "agents":
             return selection.kind === "agent-new"
@@ -128,10 +128,10 @@ function selectionForView(view: WorkspaceView, selection: Selection, workspace: 
         }
         case "layers":
         {
-            const layer = workspace.config.layers[0];
-            if (!layer) return { kind: "config" };
-            const option = workspace.layerOptions[layer.name]?.[0];
-            return option ? { kind: "layer-option", path: option.path } : { kind: "layer-option-new", layer: layer.name };
+            const layer = Object.keys(workspace.layerOptions)[0];
+            if (!layer) return { kind: "layer-new" };
+            const option = workspace.layerOptions[layer]?.[0];
+            return option ? { kind: "layer-option", path: option.path } : { kind: "layer-option-new", layer };
         }
         case "agents":
         {
@@ -152,24 +152,21 @@ function savedLayerSelection(workspace: Workspace | undefined): LayerSelection[]
     return workspace?.config.layers.map((layer) => ({ name: layer.name, option: layer.selected })) ?? [];
 }
 
-/** Preserve valid current selections while reconciling structural workspace changes. */
+/** Preserve the current Project Layer membership while dropping deleted catalog entries. */
 function reconcileLayerSelection(current: readonly LayerSelection[], workspace: Workspace): LayerSelection[]
 {
-    const configured = new Map(workspace.config.layers.map((layer) => [layer.name, layer]));
     const next: LayerSelection[] = [];
     for (const selection of current)
     {
-        const layer = configured.get(selection.name);
-        if (!layer) continue;
-        const option = workspace.layerOptions[layer.name]?.some((candidate) => candidate.name === selection.option)
+        const options = Object.hasOwn(workspace.layerOptions, selection.name) ? workspace.layerOptions[selection.name] : undefined;
+        if (!options?.length) continue;
+        const saved = workspace.config.layers.find((layer) => layer.name === selection.name)?.selected;
+        const option = options.some((candidate) => candidate.name === selection.option)
             ? selection.option
-            : layer.selected;
-        next.push({ name: layer.name, option });
-        configured.delete(layer.name);
-    }
-    for (const layer of workspace.config.layers)
-    {
-        if (configured.has(layer.name)) next.push({ name: layer.name, option: layer.selected });
+            : saved && options.some((candidate) => candidate.name === saved)
+                ? saved
+                : options[0]!.name;
+        next.push({ name: selection.name, option });
     }
     return next;
 }

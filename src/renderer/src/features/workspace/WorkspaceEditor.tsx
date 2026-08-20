@@ -3,10 +3,10 @@
  * Saves go through Main path checks; this module never imports Node or Electron.
  */
 
-import type { AgentFormat, Config, HarnessConfig, LayerOptionInput, LayerSelection, RuleInput, Workspace } from "@shared/models/Workspace";
+import type { AgentFormat, Config, HarnessConfig, LayerSelection, RuleInput, Workspace } from "@shared/models/Workspace";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { ChevronRightIcon, GripVerticalIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { ChevronRightIcon, GripVerticalIcon, PencilIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
@@ -16,8 +16,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
-import { refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { ruleDisplayName, uniqueRulePath } from "@/lib/Utils";
+import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { catalogLayerNames, defaultLayerOption, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
 /** Form bindings that preserve drafts and respond to tree or keyboard commands. */
@@ -224,6 +224,17 @@ function EditableHeading({ name, value, onChange }: EditableHeadingProps)
                 {value || <span className="text-muted-foreground">{name}</span>}
             </h1>
         </>
+    );
+}
+
+/** Title row with a click-to-edit heading and Save on the right. */
+function EditorNameHeader({ name, value, onChange, isBusy }: { name: string; value: string; onChange: (value: string) => void; isBusy: boolean })
+{
+    return (
+        <div className="flex items-center justify-between gap-3">
+            <EditableHeading name={name} value={value} onChange={onChange} />
+            <Button type="submit" size="sm" disabled={isBusy} onMouseDown={(event) => event.preventDefault()}>Save</Button>
+        </div>
     );
 }
 
@@ -500,6 +511,7 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
     const [formError, setFormError] = useState<string | undefined>();
     const editorKey = selectionKey({ kind: "layer-new" });
     const editor = useEditorForm(editorKey);
+    const [layerName, setLayerName] = useState(draftText(editor.draft, "name", "new-layer"));
 
     return (
         <form
@@ -519,7 +531,6 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
                     await window.appApi.workspace.addLayer(workspace.root, name, initialOption);
                     useAppStore.getState().clearEditorDraft(editorKey);
                     await refreshWorkspace({ kind: "layer-option", path: `.halign/layers/${name}/${initialOption}.md` });
-                    useAppStore.getState().setView("layers");
                     toast.add({ title: `Created layer ${name}`, type: "success" });
                 }).then((result) =>
                 {
@@ -527,14 +538,104 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
                 });
             }}
         >
-            <div className="flex items-center justify-between gap-3">
-                <h2 className="text-base font-semibold">New layer</h2>
-                <Button type="submit" size="sm" disabled={isBusy}>Create</Button>
-            </div>
+            <EditorNameHeader
+                name="name"
+                value={layerName}
+                isBusy={isBusy}
+                onChange={(value) =>
+                {
+                    setLayerName(value);
+                    editor.handleValueChange("name", value);
+                }}
+            />
             <FormError message={formError} />
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">layer name<Input name="name" defaultValue={draftText(editor.draft, "name", "")} /></Label>
             <Label className="grid gap-1 text-[12px] text-muted-foreground">initial option<Input name="initialOption" defaultValue={draftText(editor.draft, "initialOption", "")} /></Label>
         </form>
+    );
+}
+
+/** Editor for renaming or deleting one catalog Layer. */
+function LayerForm({ workspace, name }: { workspace: Workspace; name: string })
+{
+    const isBusy = useAppStore((state) => state.isBusy);
+    const [formError, setFormError] = useState<string | undefined>();
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const options = Object.hasOwn(workspace.layerOptions, name) ? workspace.layerOptions[name] ?? [] : [];
+    const editorKey = selectionKey({ kind: "layer", name });
+    const editor = useEditorForm(editorKey, () => setDeleteOpen(true));
+    const [layerName, setLayerName] = useState(draftText(editor.draft, "name", name));
+
+    if (options.length === 0) return <GeneratedEmpty />;
+
+    return (
+        <>
+            <form
+                ref={editor.formRef}
+                className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+                onChange={editor.handleChange}
+                onSubmit={(event) =>
+                {
+                    event.preventDefault();
+                    const nextName = String(new FormData(event.currentTarget).get("name") ?? "").trim();
+                    if (!nextName || nextName === name)
+                    {
+                        setLayerName(name);
+                        editor.handleValueChange("name", name);
+                        return;
+                    }
+                    setFormError(undefined);
+                    void runMutation(async () =>
+                    {
+                        await persistLayerRename(workspace, name, nextName);
+                        useAppStore.getState().clearEditorDraft(editorKey);
+                        toast.add({ title: `Renamed layer to ${nextName}`, type: "success" });
+                    }).then((result) =>
+                    {
+                        if (!result.ok) setFormError(result.message);
+                    });
+                }}
+            >
+                <EditorNameHeader
+                    name="name"
+                    value={layerName}
+                    isBusy={isBusy}
+                    onChange={(value) =>
+                    {
+                        setLayerName(value);
+                        editor.handleValueChange("name", value);
+                    }}
+                />
+                <FormError message={formError} />
+                <p className="text-[12px] text-muted-foreground">
+                    {options.length === 1 ? "1 option" : `${options.length} options`}. Add this layer to a project from the Project page.
+                </p>
+            </form>
+            <ConfirmDialog
+                open={deleteOpen}
+                onOpenChange={setDeleteOpen}
+                title={`Delete layer ${name}?`}
+                description={`This permanently removes .halign/layers/${name}/ and every option inside it.`}
+                confirmLabel="Delete"
+                destructive
+                confirmDisabled={isBusy}
+                onConfirm={() =>
+                {
+                    setFormError(undefined);
+                    void runMutation(async () =>
+                    {
+                        await window.appApi.workspace.removeLayer(workspace.root, name);
+                        const state = useAppStore.getState();
+                        state.clearEditorDraft(editorKey);
+                        state.setLayerSelection(state.layerSelection.filter((item) => item.name !== name));
+                        await refreshWorkspace();
+                        toast.add({ title: `Deleted layer ${name}`, type: "success" });
+                    }).then((result) =>
+                    {
+                        if (!result.ok) setFormError(result.message);
+                    });
+                }}
+            />
+        </>
     );
 }
 
@@ -549,67 +650,18 @@ interface LayerCardProps
     onDrop: () => void;
 }
 
-/** Project card for selecting, renaming, deleting, and reordering one Layer. */
+/** Project card for choosing one option and reordering an existing Layer. */
 function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, onDrop }: LayerCardProps)
 {
     const isBusy = useAppStore((state) => state.isBusy);
     const setSelection = useAppStore((state) => state.setSelection);
     const setLayerSelection = useAppStore((state) => state.setLayerSelection);
-    const [formError, setFormError] = useState<string | undefined>();
-    const [deleteOpen, setDeleteOpen] = useState(false);
-    const [isRenaming, setIsRenaming] = useState(false);
-    const [name, setName] = useState(selection.name);
-    const options = workspace.layerOptions[selection.name] ?? [];
-
-    /** Persist a Layer rename and preserve the current unsaved option choice. */
-    const commitRename = (): void =>
-    {
-        const nextName = name.trim();
-        if (!nextName || nextName === selection.name)
-        {
-            setName(selection.name);
-            setIsRenaming(false);
-            return;
-        }
-        setFormError(undefined);
-        void runMutation(async () =>
-        {
-            await window.appApi.workspace.renameLayer(workspace.root, selection.name, nextName);
-            const state = useAppStore.getState();
-            const previousOptionPrefix = `layer-option:.halign/layers/${selection.name}/`;
-            const nextOptionPrefix = `layer-option:.halign/layers/${nextName}/`;
-            for (const [key, draft] of Object.entries(state.editorDrafts))
-            {
-                if (!key.startsWith(previousOptionPrefix)) continue;
-                state.setEditorDraft(nextOptionPrefix + key.slice(previousOptionPrefix.length), draft);
-                state.clearEditorDraft(key);
-            }
-            const previousNewOptionKey = selectionKey({ kind: "layer-option-new", layer: selection.name });
-            const nextNewOptionKey = selectionKey({ kind: "layer-option-new", layer: nextName });
-            const newOptionDraft = state.editorDrafts[previousNewOptionKey];
-            if (newOptionDraft) state.setEditorDraft(nextNewOptionKey, newOptionDraft);
-            state.clearEditorDraft(previousNewOptionKey);
-            if (state.selection.kind === "layer-option" && state.selection.path.startsWith(`.halign/layers/${selection.name}/`))
-            {
-                state.setSelection({ kind: "layer-option", path: `.halign/layers/${nextName}/${state.selection.path.slice(`.halign/layers/${selection.name}/`.length)}` });
-            }
-            else if (state.selection.kind === "layer-option-new" && state.selection.layer === selection.name)
-            {
-                state.setSelection({ kind: "layer-option-new", layer: nextName });
-            }
-            state.setLayerSelection(state.layerSelection.map((item) => item.name === selection.name ? { ...item, name: nextName } : item));
-            await refreshWorkspace();
-            setIsRenaming(false);
-            toast.add({ title: `Renamed layer to ${nextName}`, type: "success" });
-        }).then((result) =>
-        {
-            if (!result.ok) setFormError(result.message);
-        });
-    };
+    const [removeOpen, setRemoveOpen] = useState(false);
+    const options = Object.hasOwn(workspace.layerOptions, selection.name) ? workspace.layerOptions[selection.name] ?? [] : [];
 
     return (
         <div
-            draggable={!isBusy && !isRenaming}
+            draggable={!isBusy}
             onDragStart={(event) =>
             {
                 event.dataTransfer.effectAllowed = "move";
@@ -630,39 +682,11 @@ function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, o
         >
             <div className="flex items-center gap-2">
                 <GripVerticalIcon className="size-4 shrink-0 cursor-grab text-muted-foreground" />
-                {isRenaming ? (
-                    <Input
-                        autoFocus
-                        value={name}
-                        disabled={isBusy}
-                        onChange={(event) => setName(event.currentTarget.value)}
-                        onBlur={commitRename}
-                        onKeyDown={(event) =>
-                        {
-                            if (event.key === "Enter")
-                            {
-                                event.preventDefault();
-                                commitRename();
-                            }
-                            if (event.key === "Escape")
-                            {
-                                setName(selection.name);
-                                setIsRenaming(false);
-                            }
-                        }}
-                        className="h-8 max-w-64"
-                    />
-                ) : <h3 className="min-w-0 flex-1 truncate font-medium">{selection.name}</h3>}
-                {!isRenaming ? (
-                    <Button type="button" size="sm" variant="ghost" disabled={isBusy} onClick={() => setIsRenaming(true)}>
-                        <PencilIcon className="size-4" />
-                    </Button>
-                ) : null}
-                <Button type="button" size="sm" variant="ghost" disabled={isBusy} onClick={() => setDeleteOpen(true)}>
-                    <Trash2Icon className="size-4 text-destructive" />
+                <h3 className="min-w-0 flex-1 truncate font-medium">{selection.name}</h3>
+                <Button type="button" size="sm" variant="ghost" disabled={isBusy} onClick={() => setRemoveOpen(true)}>
+                    <XIcon className="size-4" />
                 </Button>
             </div>
-            <FormError message={formError} />
             <Label className="grid gap-1 text-[12px] text-muted-foreground">
                 selected option
                 <Select
@@ -680,27 +704,16 @@ function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, o
                 </Select>
             </Label>
             <ConfirmDialog
-                open={deleteOpen}
-                onOpenChange={setDeleteOpen}
-                title={`Delete layer ${selection.name}?`}
-                description={`This permanently removes .halign/layers/${selection.name}/ and every option inside it.`}
-                confirmLabel="Delete"
-                destructive
+                open={removeOpen}
+                onOpenChange={setRemoveOpen}
+                title={`Remove ${selection.name} from this project?`}
+                description={`The files in .halign/layers/${selection.name}/ are kept. Add the layer again from the list when you need it.`}
+                confirmLabel="Remove"
                 confirmDisabled={isBusy}
                 onConfirm={() =>
                 {
-                    setFormError(undefined);
-                    void runMutation(async () =>
-                    {
-                        await window.appApi.workspace.removeLayer(workspace.root, selection.name);
-                        const state = useAppStore.getState();
-                        state.setLayerSelection(state.layerSelection.filter((item) => item.name !== selection.name));
-                        await refreshWorkspace();
-                        toast.add({ title: `Deleted layer ${selection.name}`, type: "success" });
-                    }).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
-                    });
+                    setLayerSelection(useAppStore.getState().layerSelection.filter((item) => item.name !== selection.name));
+                    toast.add({ title: `Removed layer ${selection.name}`, type: "success" });
                 }}
             />
         </div>
@@ -733,21 +746,6 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
     /** Resolve the saved path from the heading name. */
     const pathFromName = (name: string): string => uniqueRulePath(existingPath ?? defaultPath, name, rulePaths);
 
-    /** Title row with the click-to-edit rule name and Save. */
-    const nameHeader = (
-        <div className="flex items-center justify-between gap-3">
-            <EditableHeading
-                name="name"
-                value={ruleName}
-                onChange={(value) =>
-                {
-                    setRuleName(value);
-                    editor.handleValueChange("name", value);
-                }}
-            />
-            <Button type="submit" size="sm" disabled={isBusy} onMouseDown={(event) => event.preventDefault()}>Save</Button>
-        </div>
-    );
     const deleteDialog = existingPath ? (
         <ConfirmDialog
             open={deleteOpen}
@@ -803,7 +801,16 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                         });
                     }}
                 >
-                    {nameHeader}
+                    <EditorNameHeader
+                        name="name"
+                        value={ruleName}
+                        isBusy={isBusy}
+                        onChange={(value) =>
+                        {
+                            setRuleName(value);
+                            editor.handleValueChange("name", value);
+                        }}
+                    />
                     <FormError message={formError} />
                     <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
                         body
@@ -847,7 +854,16 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     });
                 }}
             >
-                {nameHeader}
+                <EditorNameHeader
+                    name="name"
+                    value={ruleName}
+                    isBusy={isBusy}
+                    onChange={(value) =>
+                    {
+                        setRuleName(value);
+                        editor.handleValueChange("name", value);
+                    }}
+                />
                 <FormError message={formError} />
                 <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} />
                 <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
@@ -874,43 +890,11 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
     const canDelete = Boolean(existing && layerConfig?.selected !== existing.name && (workspace.layerOptions[existing.layer]?.length ?? 0) > 1);
     const editorKey = selectionKey(selection);
     const editor = useEditorForm(editorKey, canDelete ? () => setDeleteOpen(true) : undefined);
+    const [optionName, setOptionName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-option"));
 
-    if (selection.kind === "layer-option-new")
-    {
-        return (
-            <form
-                ref={editor.formRef}
-                className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
-                onChange={editor.handleChange}
-                onSubmit={(event) =>
-                {
-                    event.preventDefault();
-                    const name = String(new FormData(event.currentTarget).get("name") ?? "").trim();
-                    setFormError(undefined);
-                    void runMutation(async () =>
-                    {
-                        await window.appApi.workspace.addLayerOption(workspace.root, selection.layer, name);
-                        useAppStore.getState().clearEditorDraft(editorKey);
-                        await refreshWorkspace({ kind: "layer-option", path: `.halign/layers/${selection.layer}/${name}.md` });
-                        toast.add({ title: `Created option ${name}`, type: "success" });
-                    }).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
-                    });
-                }}
-            >
-                <div className="flex items-center justify-between gap-3">
-                    <h2 className="text-base font-semibold">New option in {selection.layer}</h2>
-                    <Button type="submit" size="sm" disabled={isBusy}>Create</Button>
-                </div>
-                <FormError message={formError} />
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", "")} /></Label>
-            </form>
-        );
-    }
+    if (selection.kind === "layer-option" && !existing) return <GeneratedEmpty />;
+    if (!layer) return <GeneratedEmpty />;
 
-    if (!existing) return <GeneratedEmpty />;
-    const payloadPath = existing.path;
     return (
         <>
             <form
@@ -921,59 +905,86 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                 {
                     event.preventDefault();
                     const form = event.currentTarget;
+                    const data = new FormData(form);
+                    const nextName = ruleDisplayName(String(data.get("name") ?? "").trim() || "new-option");
                     const targets = readTargets(form);
-                    const payload: LayerOptionInput = {
-                        path: payloadPath,
-                        body: String(new FormData(form).get("body") ?? ""),
-                        ...(targets ? { targets } : {}),
-                    };
+                    const body = String(data.get("body") ?? "");
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        await window.appApi.workspace.saveLayerOption(workspace.root, payload);
+                        if (existing)
+                        {
+                            const path = existing.name === nextName
+                                ? existing.path
+                                : await persistLayerOptionRename(workspace, existing.layer, existing.name, nextName);
+                            await window.appApi.workspace.saveLayerOption(workspace.root, {
+                                path,
+                                body,
+                                ...(targets ? { targets } : {}),
+                            });
+                            useAppStore.getState().clearEditorDraft(editorKey);
+                            await refreshWorkspace({ kind: "layer-option", path });
+                            toast.add({ title: `Saved ${path}`, type: "success" });
+                            return;
+                        }
+                        await window.appApi.workspace.addLayerOption(workspace.root, layer, nextName);
+                        const path = `.halign/layers/${layer}/${nextName}.md`;
+                        await window.appApi.workspace.saveLayerOption(workspace.root, {
+                            path,
+                            body,
+                            ...(targets ? { targets } : {}),
+                        });
                         useAppStore.getState().clearEditorDraft(editorKey);
-                        await refreshWorkspace({ kind: "layer-option", path: payloadPath });
-                        toast.add({ title: `Saved ${payloadPath}`, type: "success" });
+                        await refreshWorkspace({ kind: "layer-option", path });
+                        toast.add({ title: `Created option ${nextName}`, type: "success" });
                     }).then((result) =>
                     {
                         if (!result.ok) setFormError(result.message);
                     });
                 }}
             >
-                <div className="flex items-center justify-between gap-3">
-                    <h2 className="text-base font-semibold">{existing.layer} / {existing.name}</h2>
-                    {canDelete ? <Button type="button" size="sm" variant="destructive" disabled={isBusy} onClick={() => setDeleteOpen(true)}>Delete</Button> : null}
-                </div>
+                <EditorNameHeader
+                    name="name"
+                    value={optionName}
+                    isBusy={isBusy}
+                    onChange={(value) =>
+                    {
+                        setOptionName(value);
+                        editor.handleValueChange("name", value);
+                    }}
+                />
                 <FormError message={formError} />
-                <TargetBoxes selected={draftValues(editor.draft, "targets", existing.targets)} />
+                <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} />
                 <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
                     body
-                    <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", existing.body)} />
+                    <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", existing?.body ?? "")} />
                 </Label>
             </form>
-            <ConfirmDialog
-                open={deleteOpen}
-                onOpenChange={setDeleteOpen}
-                title={`Delete ${existing.name}?`}
-                description="This permanently deletes the Layer option file."
-                confirmLabel="Delete"
-                destructive
-                confirmDisabled={isBusy}
-                onConfirm={() =>
-                {
-                    setFormError(undefined);
-                    void runMutation(async () =>
+            {existing ? (
+                <ConfirmDialog
+                    open={deleteOpen}
+                    onOpenChange={setDeleteOpen}
+                    title={`Delete ${existing.name}?`}
+                    description="This permanently deletes the Layer option file."
+                    confirmLabel="Delete"
+                    destructive
+                    confirmDisabled={isBusy}
+                    onConfirm={() =>
                     {
-                        await window.appApi.workspace.removeLayerOption(workspace.root, existing.layer, existing.name);
-                        useAppStore.getState().clearEditorDraft(editorKey);
-                        await refreshWorkspace();
-                        toast.add({ title: `Deleted ${existing.name}`, type: "success" });
-                    }).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
-                    });
-                }}
-            />
+                        setFormError(undefined);
+                        void runMutation(async () =>
+                        {
+                            await window.appApi.workspace.removeLayerOption(workspace.root, existing.layer, existing.name);
+                            useAppStore.getState().clearEditorDraft(editorKey);
+                            await refreshWorkspace();
+                            toast.add({ title: `Deleted ${existing.name}`, type: "success" });
+                        }).then((result) =>
+                        {
+                            if (!result.ok) setFormError(result.message);
+                        });
+                    }}
+                />
+            ) : null}
         </>
     );
 }
@@ -987,6 +998,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
     const [deleteOpen, setDeleteOpen] = useState(false);
     const editorKey = selectionKey(selection);
     const editor = useEditorForm(editorKey, existing ? () => setDeleteOpen(true) : undefined);
+    const [agentName, setAgentName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-agent"));
 
     return (
         <>
@@ -1011,16 +1023,17 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                         setFormError(error instanceof Error ? error.message : String(error));
                         return;
                     }
-                    const agent = {
-                        path: String(form.get("path") ?? "").trim(),
-                        name: String(form.get("name") ?? "").trim(),
-                        description: String(form.get("description") ?? "").trim(),
-                        harnesses,
-                        body: String(form.get("body") ?? ""),
-                    };
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
+                        const path = uniqueAgentPath(existing?.path, String(form.get("name") ?? ""), workspace.agents.map((agent) => agent.path));
+                        const agent = {
+                            path,
+                            name: ruleDisplayName(path),
+                            description: String(form.get("description") ?? "").trim(),
+                            harnesses,
+                            body: String(form.get("body") ?? ""),
+                        };
                         await window.appApi.workspace.saveAgent(workspace.root, agent);
                         if (existing && existing.path !== agent.path) await window.appApi.workspace.deleteSource(workspace.root, existing.path);
                         useAppStore.getState().clearEditorDraft(editorKey);
@@ -1032,10 +1045,17 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                     });
                 }}
             >
-                <h2 className="text-base font-semibold">{existing ? `Agent ${existing.name}` : "New agent"}</h2>
+                <EditorNameHeader
+                    name="name"
+                    value={agentName}
+                    isBusy={isBusy}
+                    onChange={(value) =>
+                    {
+                        setAgentName(value);
+                        editor.handleValueChange("name", value);
+                    }}
+                />
                 <FormError message={formError} />
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">path<Input name="path" defaultValue={draftText(editor.draft, "path", existing?.path ?? ".halign/agents/new-agent.md")} /></Label>
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", existing?.name ?? "")} /></Label>
                 <Label className="grid gap-1 text-[12px] text-muted-foreground">description<Input name="description" defaultValue={draftText(editor.draft, "description", existing?.description ?? "")} /></Label>
                 {workspace.config.harnesses.map((harness) => (
                     <Label key={harness.name} className="grid gap-1 text-[12px] text-muted-foreground">
@@ -1168,7 +1188,7 @@ export function ProjectEditor()
                     disabled={isBusy}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => requestEditorAction(
-                        selection.kind === "config" || selection.kind === "harness" || selection.kind === "harness-new" || selection.kind === "layer-new"
+                        selection.kind === "config" || selection.kind === "harness" || selection.kind === "harness-new"
                             ? selection
                             : { kind: "config" },
                         "save",
@@ -1184,7 +1204,9 @@ export function ProjectEditor()
                         <h2 className="text-base font-semibold">Harnesses</h2>
                         <p className="text-[12px] text-muted-foreground">Configure every target harness declared by this project.</p>
                     </div>
-                    <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => setSelection({ kind: "harness-new" })}>New harness</Button>
+                    <Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label="New harness" className="border-0 text-muted-foreground" onClick={() => setSelection({ kind: "harness-new" })}>
+                        <PlusIcon />
+                    </Button>
                 </div>
                 <div className="grid gap-3 xl:grid-cols-2">
                     {workspace.config.harnesses.map((harness) => (
@@ -1205,9 +1227,27 @@ export function ProjectEditor()
                 <div className="flex items-center justify-between gap-3">
                     <div>
                         <h2 className="text-base font-semibold">Layers</h2>
-                        <p className="text-[12px] text-muted-foreground">Choose one option per Layer and drag Layers into generation order.</p>
+                        <p className="text-[12px] text-muted-foreground">Add existing Layers, choose one option each, and drag them into generation order.</p>
                     </div>
-                    <Button type="button" size="sm" variant="outline" disabled={isBusy} onClick={() => setSelection({ kind: "layer-new" })}>New layer</Button>
+                    <Select
+                        value={null}
+                        onValueChange={(value) =>
+                        {
+                            if (value === null) return;
+                            const option = defaultLayerOption(workspace, value);
+                            if (!option) return;
+                            setLayerSelection([...useAppStore.getState().layerSelection, { name: value, option }]);
+                        }}
+                    >
+                        <SelectTrigger size="sm" className="w-40" disabled={isBusy || catalogLayerNames(workspace).every((name) => layerSelection.some((item) => item.name === name))}>
+                            <SelectValue placeholder="Add layer" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {catalogLayerNames(workspace)
+                                .filter((name) => !layerSelection.some((item) => item.name === name))
+                                .map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+                        </SelectContent>
+                    </Select>
                 </div>
                 <div className="grid gap-3">
                     {layerSelection.map((layer) => (
@@ -1230,10 +1270,8 @@ export function ProjectEditor()
                             }}
                         />
                     ))}
-                    {selection.kind === "layer-new" ? (
-                        <div className="rounded-lg border border-dashed bg-card p-4">
-                            <LayerNewForm workspace={workspace} />
-                        </div>
+                    {catalogLayerNames(workspace).length === 0 ? (
+                        <p className="text-[12px] text-muted-foreground">Create a layer on the Layers page, then add it here.</p>
                     ) : null}
                 </div>
             </section>
@@ -1266,6 +1304,7 @@ export function WorkspaceEditor()
     }
     if (selection.kind === "harness-new") return <HarnessCard workspace={workspace} isInitiallyOpen />;
     if (selection.kind === "layer-new") return <LayerNewForm workspace={workspace} />;
+    if (selection.kind === "layer") return <LayerForm workspace={workspace} name={selection.name} />;
     if (selection.kind === "layer-option" || selection.kind === "layer-option-new") return <LayerOptionForm workspace={workspace} selection={selection} />;
     if (selection.kind === "rule" || selection.kind === "rule-new") return <RuleForm workspace={workspace} selection={selection} />;
     if (selection.kind === "agent" || selection.kind === "agent-new") return <AgentForm workspace={workspace} selection={selection} />;

@@ -26,16 +26,11 @@ function selectedLayerOptions(config: Config, options: Record<string, LayerOptio
     const selections = requested
         ? requested.map((selection) => ({ ...selection }))
         : config.layers.map((layer) => ({ name: layer.name, option: layer.selected }));
-    if (selections.length !== config.layers.length)
-    {
-        throw new HalignError(`layer selection must contain exactly ${config.layers.length} entries, got ${selections.length}`);
-    }
-    const configured = new Set(config.layers.map((layer) => layer.name));
     const seen = new Set<string>();
     const selected: LayerOption[] = [];
     for (const selection of selections)
     {
-        if (!configured.has(selection.name)) throw new HalignError(`unknown layer selection ${valueText(selection.name)}`);
+        if (!Object.hasOwn(options, selection.name)) throw new HalignError(`unknown layer selection ${valueText(selection.name)}`);
         if (seen.has(selection.name)) throw new HalignError(`layer selection must not contain duplicate ${valueText(selection.name)}`);
         seen.add(selection.name);
         const option = options[selection.name]?.find((candidate) => candidate.name === selection.option);
@@ -45,8 +40,11 @@ function selectedLayerOptions(config: Config, options: Record<string, LayerOptio
         }
         selected.push(option);
     }
-    const missing = config.layers.find((layer) => !seen.has(layer.name));
-    if (missing) throw new HalignError(`layer selection is missing ${valueText(missing.name)}`);
+    if (!requested)
+    {
+        const missing = config.layers.find((layer) => !seen.has(layer.name));
+        if (missing) throw new HalignError(`layer selection is missing ${valueText(missing.name)}`);
+    }
     return [selections, selected];
 }
 

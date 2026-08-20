@@ -180,7 +180,20 @@ function ruleKind(path: string): "root" | "shared"
     return "root";
 }
 
-/** Require a direct option path under one configured layer directory. */
+/** Return whether a discovered layer directory exists. */
+function hasCatalogLayer(options: Record<string, LayerOption[]>, name: string): boolean
+{
+    return options[name] !== undefined;
+}
+
+/** Return whether any catalog layer matches `name` without case sensitivity. */
+function catalogHasFoldedName(options: Record<string, LayerOption[]>, name: string): boolean
+{
+    const folded = name.toLowerCase();
+    return Object.keys(options).some((existing) => existing.toLowerCase() === folded);
+}
+
+/** Require a direct option path under one layer directory. */
 function layerOptionParts(path: string): { layer: string; option: string }
 {
     const match = /^\.halign\/layers\/([^/]+)\/([^/]+)\.md$/u.exec(path);
@@ -313,9 +326,12 @@ export async function saveLayerOption(rootPath: string, input: LayerOptionInput)
     const config = await loadConfig(root);
     const path = managedRelative(input.path, input.path);
     const { layer } = layerOptionParts(path);
-    if (!config.layers.some((candidate) => candidate.name === layer))
+    const directory = join(root, ".halign", "layers", layer);
+    await ensureRegularSource(root, directory);
+    const stats = await lstatIfExists(directory);
+    if (!stats?.isDirectory())
     {
-        throw new HalignError(`${path}: layer must be configured, got ${valueText(layer)}`);
+        throw new HalignError(`${path}: layer does not exist, got ${valueText(layer)}`);
     }
     const targets = assertTargets(path, input.targets, config.harnesses);
     await writeManaged(root, path, serializeLayerOption(targets, input.body));
@@ -360,30 +376,28 @@ export async function deleteSource(rootPath: string, relativePath: string): Prom
     await fs.unlink(path);
 }
 
-/** Create a layer with its first empty option and select it. */
+/** Create a layer with its first empty option without adding it to the project selection. */
 export async function addLayer(rootPath: string, name: string, initialOption: string): Promise<Config>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    await loadLayerOptions(root, config);
-    if (!LAYER_NAME.test(name)) throw new HalignError(`.halign/config.json: layer name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
-    if (!LAYER_NAME.test(initialOption)) throw new HalignError(`.halign/config.json: selected must match ${LAYER_NAME.source}, got ${valueText(initialOption)}`);
-    if (config.layers.some((layer) => layer.name.toLowerCase() === name.toLowerCase()))
+    const options = await loadLayerOptions(root, config);
+    if (!LAYER_NAME.test(name)) throw new HalignError(`.halign/layers/${name}: layer name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
+    if (!LAYER_NAME.test(initialOption)) throw new HalignError(`.halign/layers/${name}: option name must match ${LAYER_NAME.source}, got ${valueText(initialOption)}`);
+    if (catalogHasFoldedName(options, name))
     {
-        throw new HalignError(`.halign/config.json: layer already exists, got ${valueText(name)}`);
+        throw new HalignError(`.halign/layers/${name}: layer already exists, got ${valueText(name)}`);
     }
     const layersRoot = join(root, ".halign", "layers");
     const directory = join(layersRoot, name);
     await ensureRegularSource(root, directory);
     if (await lstatIfExists(directory)) throw new HalignError(`${display(root, directory)}: path already exists`);
-    const next = validateConfig(configDocument({ ...config, layers: [...config.layers, { name, selected: initialOption }] }));
     await fs.mkdir(layersRoot, { recursive: true });
     await fs.mkdir(directory);
     try
     {
         await atomicWrite(join(directory, `${initialOption}.md`), Buffer.alloc(0));
-        await writeConfig(root, next);
-        return next;
+        return config;
     }
     catch (error)
     {
@@ -392,25 +406,28 @@ export async function addLayer(rootPath: string, name: string, initialOption: st
     }
 }
 
-/** Remove a layer declaration and its entire validated source directory. */
+/** Remove a layer directory and drop it from the project selection when present. */
 export async function removeLayer(rootPath: string, name: string): Promise<Config>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    await loadLayerOptions(root, config);
-    if (!config.layers.some((layer) => layer.name === name))
+    const options = await loadLayerOptions(root, config);
+    if (!hasCatalogLayer(options, name))
     {
-        throw new HalignError(`.halign/config.json: layer is not configured, got ${valueText(name)}`);
+        throw new HalignError(`.halign/layers/${name}: layer does not exist, got ${valueText(name)}`);
     }
     const directory = join(root, ".halign", "layers", name);
     await assertNoReparseTree(root, directory);
     const temporary = join(root, ".halign", `.remove-layer-${name}-${process.pid}`);
     if (await lstatIfExists(temporary)) throw new HalignError(`${display(root, temporary)}: temporary path already exists`);
-    const next = validateConfig(configDocument({ ...config, layers: config.layers.filter((layer) => layer.name !== name) }));
+    const nextLayers = config.layers.filter((layer) => layer.name !== name);
+    const next = nextLayers.length === config.layers.length
+        ? config
+        : validateConfig(configDocument({ ...config, layers: nextLayers }));
     await fs.rename(directory, temporary);
     try
     {
-        await writeConfig(root, next);
+        if (next !== config) await writeConfig(root, next);
     }
     catch (error)
     {
@@ -421,30 +438,30 @@ export async function removeLayer(rootPath: string, name: string): Promise<Confi
     return next;
 }
 
-/** Rename a layer directory and cascade its config declaration. */
+/** Rename a layer directory and cascade its project selection when present. */
 export async function renameLayer(rootPath: string, from: string, to: string): Promise<Config>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    await loadLayerOptions(root, config);
-    if (!config.layers.some((layer) => layer.name === from)) throw new HalignError(`.halign/config.json: layer is not configured, got ${valueText(from)}`);
-    if (!LAYER_NAME.test(to)) throw new HalignError(`.halign/config.json: layer name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
-    if (from.toLowerCase() !== to.toLowerCase() && config.layers.some((layer) => layer.name.toLowerCase() === to.toLowerCase()))
+    const options = await loadLayerOptions(root, config);
+    if (!hasCatalogLayer(options, from)) throw new HalignError(`.halign/layers/${from}: layer does not exist, got ${valueText(from)}`);
+    if (!LAYER_NAME.test(to)) throw new HalignError(`.halign/layers/${to}: layer name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
+    if (from.toLowerCase() !== to.toLowerCase() && catalogHasFoldedName(options, to))
     {
-        throw new HalignError(`.halign/config.json: layer names must be unique without case sensitivity, got ${valueText(to)}`);
+        throw new HalignError(`.halign/layers/${to}: layer names must be unique without case sensitivity, got ${valueText(to)}`);
     }
     const source = join(root, ".halign", "layers", from);
     const destination = join(root, ".halign", "layers", to);
     await ensureRegularSource(root, destination);
     if (from !== to && await lstatIfExists(destination)) throw new HalignError(`${display(root, destination)}: path already exists`);
-    const next = validateConfig(configDocument({
-        ...config,
-        layers: config.layers.map((layer) => (layer.name === from ? { ...layer, name: to } : layer)),
-    }));
+    const nextLayers = config.layers.map((layer) => (layer.name === from ? { ...layer, name: to } : layer));
+    const next = nextLayers.some((layer, index) => layer !== config.layers[index])
+        ? validateConfig(configDocument({ ...config, layers: nextLayers }))
+        : config;
     if (source !== destination) await fs.rename(source, destination);
     try
     {
-        await writeConfig(root, next);
+        if (next !== config) await writeConfig(root, next);
         return next;
     }
     catch (error)
@@ -460,7 +477,7 @@ export async function addLayerOption(rootPath: string, layer: string, option: st
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
-    if (!config.layers.some((candidate) => candidate.name === layer)) throw new HalignError(`.halign/config.json: layer is not configured, got ${valueText(layer)}`);
+    if (!hasCatalogLayer(options, layer)) throw new HalignError(`.halign/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
     if (!LAYER_NAME.test(option)) throw new HalignError(`layer option name must match ${LAYER_NAME.source}, got ${valueText(option)}`);
     if (options[layer]!.some((candidate) => candidate.name.toLowerCase() === option.toLowerCase()))
     {
@@ -475,12 +492,12 @@ export async function removeLayerOption(rootPath: string, layer: string, option:
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
+    if (!hasCatalogLayer(options, layer)) throw new HalignError(`.halign/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
     const layerConfig = config.layers.find((candidate) => candidate.name === layer);
-    if (!layerConfig) throw new HalignError(`.halign/config.json: layer is not configured, got ${valueText(layer)}`);
     const layerOptions = options[layer]!;
     if (!layerOptions.some((candidate) => candidate.name === option)) throw new HalignError(`.halign/layers/${layer}: option does not exist, got ${valueText(option)}`);
     if (layerOptions.length === 1) throw new HalignError(`.halign/layers/${layer}: the final layer option cannot be removed`);
-    if (layerConfig.selected === option) throw new HalignError(`.halign/config.json: selected layer option cannot be removed, got ${valueText(option)}`);
+    if (layerConfig?.selected === option) throw new HalignError(`.halign/config.json: selected layer option cannot be removed, got ${valueText(option)}`);
     await fs.unlink(join(root, ".halign", "layers", layer, `${option}.md`));
 }
 
@@ -490,8 +507,8 @@ export async function renameLayerOption(rootPath: string, layer: string, from: s
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
+    if (!hasCatalogLayer(options, layer)) throw new HalignError(`.halign/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
     const layerConfig = config.layers.find((candidate) => candidate.name === layer);
-    if (!layerConfig) throw new HalignError(`.halign/config.json: layer is not configured, got ${valueText(layer)}`);
     if (!options[layer]!.some((candidate) => candidate.name === from)) throw new HalignError(`.halign/layers/${layer}: option does not exist, got ${valueText(from)}`);
     if (!LAYER_NAME.test(to)) throw new HalignError(`layer option name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
     if (from.toLowerCase() !== to.toLowerCase() && options[layer]!.some((candidate) => candidate.name.toLowerCase() === to.toLowerCase()))
@@ -509,7 +526,7 @@ export async function renameLayerOption(rootPath: string, layer: string, from: s
     if (source !== destination) await fs.rename(source, destination);
     try
     {
-        if (layerConfig.selected === from) await writeConfig(root, next);
+        if (layerConfig?.selected === from) await writeConfig(root, next);
         return next;
     }
     catch (error)
