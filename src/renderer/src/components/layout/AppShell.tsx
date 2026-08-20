@@ -152,13 +152,13 @@ export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: App
                         </span>
                     </div>
                     <div className="ml-auto flex shrink-0 items-center gap-2">
-                        <Button size="sm" variant={workspace ? "default" : "secondary"} disabled={!workspace || isBusy} onClick={onGenerate}>
-                            Generate
-                        </Button>
                         <Button size="sm" variant="secondary" disabled={!workspace || isBusy} onClick={onCheck}>
                             Check
                         </Button>
-                        <Button size="sm" variant="secondary" disabled={!workspace || isBusy} onClick={() => setSetupOpen(true)}>
+                        <Button size="sm" variant="secondary" disabled={!workspace || isBusy} onClick={onGenerate}>
+                            Generate
+                        </Button>
+                        <Button size="sm" variant={workspace ? "default" : "secondary"} disabled={!workspace || isBusy} onClick={() => setSetupOpen(true)}>
                             Setup
                         </Button>
                     </div>
