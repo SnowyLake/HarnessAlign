@@ -4,7 +4,7 @@
  */
 
 import type { AgentFormat, Config, HarnessConfig, LayerOptionInput, LayerSelection, RuleInput, Workspace } from "@shared/models/Workspace";
-import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { ChevronRightIcon, GripVerticalIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
 import { refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { ruleDisplayName, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
 /** Form bindings that preserve drafts and respond to tree or keyboard commands. */
@@ -155,14 +156,86 @@ function FormError({ message }: { message: string | undefined })
     );
 }
 
+/** Props for a click-to-edit heading bound to a named form field. */
+interface EditableHeadingProps
+{
+    name: string;
+    value: string;
+    onChange: (value: string) => void;
+}
+
+/** Click-to-edit heading that writes a named field into the surrounding form. */
+function EditableHeading({ name, value, onChange }: EditableHeadingProps)
+{
+    const [isEditing, setIsEditing] = useState(false);
+    const startRef = useRef(value);
+
+    /** Switch the heading into an inline text field. */
+    const startEdit = (): void =>
+    {
+        startRef.current = value;
+        setIsEditing(true);
+    };
+
+    if (isEditing)
+    {
+        return (
+            <input
+                autoFocus
+                type="text"
+                name={name}
+                aria-label={name}
+                value={value}
+                onChange={(event) => onChange(event.currentTarget.value)}
+                onBlur={() => setIsEditing(false)}
+                onKeyDown={(event) =>
+                {
+                    if (event.key === "Enter")
+                    {
+                        event.preventDefault();
+                        setIsEditing(false);
+                    }
+                    if (event.key === "Escape")
+                    {
+                        event.preventDefault();
+                        onChange(startRef.current);
+                        setIsEditing(false);
+                    }
+                }}
+                className="h-8 min-w-0 flex-1 rounded-md bg-background px-1 text-lg font-semibold outline-none ring-2 ring-ring/50"
+            />
+        );
+    }
+
+    return (
+        <>
+            <input type="hidden" name={name} value={value} />
+            <h1
+                tabIndex={0}
+                className="min-w-0 flex-1 cursor-text truncate px-1 text-lg font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                onClick={startEdit}
+                onKeyDown={(event) =>
+                {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    startEdit();
+                }}
+            >
+                {value || <span className="text-muted-foreground">{name}</span>}
+            </h1>
+        </>
+    );
+}
+
 /** Editor for `config.json` title and saved ordered layer selection. */
-function ConfigForm({ workspace, showTitle = true }: { workspace: Workspace; showTitle?: boolean })
+function ConfigForm({ workspace, showTitle = true, children }: { workspace: Workspace; showTitle?: boolean; children?: ReactNode })
 {
     const setSelection = useAppStore((state) => state.setSelection);
     const layerSelection = useAppStore((state) => state.layerSelection);
     const [formError, setFormError] = useState<string | undefined>();
     const editorKey = selectionKey({ kind: "config" });
     const editor = useEditorForm(editorKey);
+    const [configName, setConfigName] = useState(draftText(editor.draft, "name", workspace.config.name));
 
     return (
         <form
@@ -192,9 +265,29 @@ function ConfigForm({ workspace, showTitle = true }: { workspace: Workspace; sho
                 });
             }}
         >
-            {showTitle ? <h2 className="text-base font-semibold">config.json</h2> : null}
-            <FormError message={formError} />
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", workspace.config.name)} /></Label>
+            {showTitle ? (
+                <>
+                    <h2 className="text-base font-semibold">config.json</h2>
+                    <FormError message={formError} />
+                    <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", workspace.config.name)} /></Label>
+                </>
+            ) : (
+                <>
+                    <div className="flex items-center justify-between gap-3">
+                        <EditableHeading
+                            name="name"
+                            value={configName}
+                            onChange={(value) =>
+                            {
+                                setConfigName(value);
+                                editor.handleValueChange("name", value);
+                            }}
+                        />
+                        {children}
+                    </div>
+                    <FormError message={formError} />
+                </>
+            )}
         </form>
     );
 }
@@ -634,6 +727,27 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
     const existingPath = sharedExisting?.path ?? existing?.path;
     const editorKey = selectionKey(selection);
     const editor = useEditorForm(editorKey, existingPath ? () => setDeleteOpen(true) : undefined);
+    const [ruleName, setRuleName] = useState(draftText(editor.draft, "name", ruleDisplayName(existingPath ?? defaultPath)));
+    const rulePaths = [...workspace.rootRules, ...workspace.sharedRules].map((item) => item.path);
+
+    /** Resolve the saved path from the heading name. */
+    const pathFromName = (name: string): string => uniqueRulePath(existingPath ?? defaultPath, name, rulePaths);
+
+    /** Title row with the click-to-edit rule name and Save. */
+    const nameHeader = (
+        <div className="flex items-center justify-between gap-3">
+            <EditableHeading
+                name="name"
+                value={ruleName}
+                onChange={(value) =>
+                {
+                    setRuleName(value);
+                    editor.handleValueChange("name", value);
+                }}
+            />
+            <Button type="submit" size="sm" disabled={isBusy} onMouseDown={(event) => event.preventDefault()}>Save</Button>
+        </div>
+    );
     const deleteDialog = existingPath ? (
         <ConfirmDialog
             open={deleteOpen}
@@ -672,9 +786,9 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     {
                         event.preventDefault();
                         const form = new FormData(event.currentTarget);
-                        const path = sharedExisting?.path ?? defaultPath;
-                        const body = String(form.get("body") ?? "");
                         const original = sharedExisting?.path;
+                        const path = pathFromName(String(form.get("name") ?? ""));
+                        const body = String(form.get("body") ?? "");
                         setFormError(undefined);
                         void runMutation(async () =>
                         {
@@ -689,7 +803,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                         });
                     }}
                 >
-                    <h2 className="text-base font-semibold">Shared rule</h2>
+                    {nameHeader}
                     <FormError message={formError} />
                     <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
                         body
@@ -712,13 +826,13 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     event.preventDefault();
                     const form = event.currentTarget;
                     const data = new FormData(form);
+                    const original = existing?.path;
                     const payload = rulePayload(
-                        existing?.path ?? defaultPath,
+                        pathFromName(String(data.get("name") ?? "")),
                         existing?.priority ?? workspace.rootRules.length,
                         readTargets(form),
                         String(data.get("body") ?? ""),
                     );
-                    const original = existing?.path;
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
@@ -733,7 +847,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     });
                 }}
             >
-                <h2 className="text-base font-semibold">Rule</h2>
+                {nameHeader}
                 <FormError message={formError} />
                 <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} />
                 <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
@@ -1047,15 +1161,12 @@ export function ProjectEditor()
 
     return (
         <div className="mx-auto grid w-full max-w-6xl gap-6 pb-4">
-            <div className="flex items-center justify-between gap-3">
-                <div>
-                    <h1 className="text-lg font-semibold">Project</h1>
-                    <p className="text-[12px] text-muted-foreground">Manage config.json, harnesses, and ordered generation Layers in one place.</p>
-                </div>
+            <ConfigForm workspace={workspace} showTitle={false}>
                 <Button
                     type="button"
                     size="sm"
                     disabled={isBusy}
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={() => requestEditorAction(
                         selection.kind === "config" || selection.kind === "harness" || selection.kind === "harness-new" || selection.kind === "layer-new"
                             ? selection
@@ -1065,11 +1176,7 @@ export function ProjectEditor()
                 >
                     Save
                 </Button>
-            </div>
-
-            <section>
-                <ConfigForm workspace={workspace} showTitle={false} />
-            </section>
+            </ConfigForm>
 
             <section className="grid gap-3">
                 <div className="flex items-center justify-between gap-3">

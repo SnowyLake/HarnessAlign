@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/toast";
 import { refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { fileName } from "@/lib/Utils";
+import { fileName, ruleDisplayName, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 
 /** Available insertion gaps around a rule row. */
@@ -144,22 +144,14 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                     {label}
                 </button>
             )}
-            {isDirty && selection ? (
-                <button
-                    type="button"
-                    title={`Save ${label}`}
-                    aria-label={`Save ${label}`}
-                    disabled={disabled || !canSave}
-                    onClick={(event) =>
-                    {
-                        event.stopPropagation();
-                        requestEditorAction(selection, "save");
-                    }}
-                    className="group/save mr-1 flex h-5 w-10 shrink-0 items-center justify-center rounded text-blue-600 hover:bg-blue-500/10 disabled:opacity-50 dark:text-blue-400"
+            {isDirty ? (
+                <span
+                    title="Unsaved changes"
+                    aria-label="Unsaved changes"
+                    className="mr-1 flex h-5 w-5 shrink-0 items-center justify-center text-blue-600 dark:text-blue-400"
                 >
-                    <span className="size-2 rounded-full bg-current group-hover/save:hidden" />
-                    <span className="hidden text-[10px] font-semibold group-hover/save:inline">Save</span>
-                </button>
+                    <span className="size-2 rounded-full bg-current" />
+                </span>
             ) : null}
         </div>
     );
@@ -213,22 +205,6 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
     );
 }
 
-/** Build a renamed rule path while keeping the file in its current directory. */
-function renamedRulePath(path: string, name: string): string
-{
-    const trimmed = name.trim();
-    if (!trimmed || trimmed.includes("/") || trimmed.includes("\\")) throw new Error(`Rule filename must not contain path separators, got ${name}`);
-    const nextName = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
-    return `${path.slice(0, path.lastIndexOf("/") + 1)}${nextName}`;
-}
-
-/** Return a rule filename without its default Markdown extension. */
-function ruleDisplayName(path: string): string
-{
-    const name = fileName(path);
-    return name.toLowerCase().endsWith(".md") ? name.slice(0, -3) : name;
-}
-
 /** Return rule tabs in their persisted priority order. */
 function sortRuleTabs(rules: readonly RuleInput[]): RuleInput[]
 {
@@ -241,9 +217,7 @@ async function renameRuleFromTree(workspace: Workspace, rule: RuleInput | Shared
     let nextPath = rule.path;
     const result = await runMutation(async () =>
     {
-        nextPath = renamedRulePath(rule.path, name);
-        const allRules = [...workspace.rootRules, ...workspace.sharedRules];
-        if (nextPath !== rule.path && allRules.some((item) => item.path === nextPath)) throw new Error(`${nextPath}: rule already exists`);
+        nextPath = uniqueRulePath(rule.path, name, [...workspace.rootRules, ...workspace.sharedRules].map((item) => item.path));
         if (nextPath !== rule.path)
         {
             if ("priority" in rule) await window.appApi.workspace.saveRule(workspace.root, { ...rule, path: nextPath });
