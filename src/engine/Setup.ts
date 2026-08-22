@@ -1,5 +1,5 @@
 /**
- * Deploy generated harness files into existing USERPROFILE roots and shared-rules.
+ * Deploy generated harness files into existing USERPROFILE roots, shared-rules, and skills.
  * Missing harness roots are skipped. Preflight every target before any delete.
  */
 
@@ -9,6 +9,7 @@ import { atomicWrite, lstatIfExists } from "./FsSafe.js";
 import { generate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
 import { type Harness, type LayerSelection, type OutputMap, codePointCompare, HalignError, valueText } from "./Model.js";
+import { hasHiddenSegment, loadSkills } from "./Skills.js";
 
 /** Resolve `path` and throw if it escapes `root`. */
 function assertContainedWithin(root: string, path: string, label: string): string
@@ -119,6 +120,14 @@ export interface SetupTargetReport
     files: string[];
 }
 
+/** Skills deploy result used in the setup report. */
+export interface SetupSkillsReport
+{
+    target: string;
+    skipped: boolean;
+    ids: string[];
+}
+
 /** Outcome of generating and deploying into existing harness roots. */
 export interface SetupResult
 {
@@ -126,6 +135,7 @@ export interface SetupResult
     generatedRoot: string;
     targets: SetupTargetReport[];
     sharedRules: { target: string; files: string[] };
+    skills: SetupSkillsReport;
 }
 
 /** List files under a directory as `/`-separated relative paths. */
@@ -145,6 +155,39 @@ async function listRelativeFiles(directory: string): Promise<string[]>
     };
     await visit(directory, "");
     return files;
+}
+
+/** Copy one skill directory while skipping hidden path segments. */
+async function copySkillDirectory(source: string, destination: string): Promise<void>
+{
+    const visit = async (current: string, prefix: string): Promise<void> =>
+    {
+        const entries = await fs.readdir(current, { withFileTypes: true });
+        entries.sort((left, right) => codePointCompare(left.name, right.name));
+        for (const entry of entries)
+        {
+            if (entry.name.startsWith(".")) continue;
+            const child = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (hasHiddenSegment(child)) continue;
+            const from = join(current, entry.name);
+            const to = join(destination, ...child.split("/"));
+            const stats = await lstatIfExists(from);
+            if (!stats) continue;
+            if (stats.isSymbolicLink()) throw new HalignError(`${from}: symbolic link skill sources are not allowed`);
+            if (stats.isDirectory())
+            {
+                await fs.mkdir(to, { recursive: true });
+                await visit(from, child);
+            }
+            else if (stats.isFile())
+            {
+                await fs.mkdir(join(to, ".."), { recursive: true });
+                await fs.copyFile(from, to);
+            }
+        }
+    };
+    await fs.mkdir(destination, { recursive: true });
+    await visit(source, "");
 }
 
 /** Format the setup success report for CLI and the desktop log. */
@@ -168,10 +211,19 @@ export function reportSetup(result: SetupResult): string
     }
     lines.push(`Updated shared rules at ${result.sharedRules.target}`);
     for (const file of result.sharedRules.files) lines.push(`  ${file}`);
+    if (result.skills.skipped)
+    {
+        lines.push(`Skipped skills; no project skills to deploy: ${result.skills.target}`);
+    }
+    else
+    {
+        lines.push(`Updated skills at ${result.skills.target}`);
+        for (const id of result.skills.ids) lines.push(`  ${id}`);
+    }
     return `${lines.join("\n")}\n`;
 }
 
-/** Generate then deploy into existing USERPROFILE harness roots and shared-rules. */
+/** Generate then deploy into existing USERPROFILE harness roots, shared-rules, and skills. */
 export async function setup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE): Promise<SetupResult>
 {
     const root = resolve(rootPath);
@@ -236,6 +288,26 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
         await assertNoReparseTree(targetSharedRules, "shared rules target");
     }
 
+    const projectSkills = await loadSkills(root);
+    const targetSkillsRoot = await assertNoReparseComponents(deploymentRoot, join(targetAgentsRoot, "skills"), "skills target");
+    const skillInstallations: Array<{ id: string; source: string; target: string }> = [];
+    for (const skill of projectSkills)
+    {
+        const source = await assertNoReparseComponents(root, join(root, ".halign", "skills", skill.id), `skill ${skill.id} source`);
+        await assertRegularDirectory(source, `skill ${skill.id} source`);
+        await assertNoReparseTree(source, `skill ${skill.id} source`);
+        const target = await assertNoReparseComponents(deploymentRoot, join(targetSkillsRoot, skill.id), `skill ${skill.id} target`);
+        const targetStats = await lstatIfExists(target);
+        if (targetStats)
+        {
+            if (targetStats.isSymbolicLink()) throw deploymentReparseError(`skill ${skill.id} target`, target);
+            if (!targetStats.isDirectory()) throw new HalignError(`skill ${skill.id} target: expected a directory: ${target}`);
+            await assertNoReparseTree(target, `skill ${skill.id} target`);
+        }
+        skillInstallations.push({ id: skill.id, source, target });
+    }
+    const skillsSkipped = skillInstallations.length === 0;
+
     for (const installation of installations)
     {
         await removeDeploymentDirectory(deploymentRoot, installation.targetAgents, `${installation.harness} target agents`);
@@ -247,10 +319,26 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
     await fs.mkdir(targetAgentsRoot, { recursive: true });
     await removeDeploymentDirectory(deploymentRoot, targetSharedRules, "shared rules target");
     await fs.cp(sourceSharedRules, targetSharedRules, { recursive: true, force: false, errorOnExist: true });
+
+    if (!skillsSkipped)
+    {
+        await fs.mkdir(targetSkillsRoot, { recursive: true });
+        for (const skill of skillInstallations)
+        {
+            await removeDeploymentDirectory(deploymentRoot, skill.target, `skill ${skill.id} target`);
+            await copySkillDirectory(skill.source, skill.target);
+        }
+    }
+
     return {
         outputs,
         generatedRoot,
         targets: reports,
         sharedRules: { target: targetSharedRules, files: sharedFiles },
+        skills: {
+            target: targetSkillsRoot,
+            skipped: skillsSkipped,
+            ids: skillInstallations.map((skill) => skill.id),
+        },
     };
 }

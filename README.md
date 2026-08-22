@@ -20,7 +20,7 @@
 
 Harness Align 是一个使用 TypeScript 编写的本地 CLI, 并附带可选的 Electron 管理窗口. 它从统一的 `.halign` 配置为任意已声明 Harness 生成 `AGENTS.md` 与 Subagent 文件, 并能检查生成结果或部署到当前用户的 Harness 配置目录.
 
-CLI 命令名是 `halign`. 工具成功时会输出简短摘要, 失败时返回非零退出码并给出错误原因. 桌面壳调用同一套生成与部署函数, 用来可视化管理 Rule, Agent, Layer, Harness 和配置字段.
+CLI 命令名是 `halign`. 工具成功时会输出简短摘要, 失败时返回非零退出码并给出错误原因. 桌面壳调用同一套生成与部署函数, 用来可视化管理 Rule, Agent, Layer, Harness, Skills 和配置字段.
 
 ## 工程与配置分离
 
@@ -131,12 +131,14 @@ npm run dev
 
 - 打开包含 `.halign` 的配置目录, 并记住上次路径和主题 (保存在 Electron `userData`, 不写入本仓库).
 - 编辑 `config.json` 的标题, 有序 Layer 选择和 Harness 列表.
+- 在 Project 页面 Layers 下方的 Skills 章节注册或移除 GitHub skill 仓库地址.
 - 在 Layers 页面新建, 修改, 重命名或删除 Layer 及其选项; 在 Project 页面从已有 Layer 中选择添加, 拖拽顺序, 并为每个 Layer 选择一个选项.
+- 在 Skills 页面发现, 下载, 检查或应用更新, 从 `%USERPROFILE%\.agents\skills` 导入, 或移除已安装的项目 Skills.
 - 新建, 修改, 重命名或删除根 Rule, shared-rules 和 Subagent.
 - 使用当前未保存的 Layer 选择执行 `Generate`, `Check` 和 `Setup`.
 - 点击 Project 页面的 `Save` 后, 把当前 Layer 顺序与选择写回 `config.json`.
 
-桌面壳不创建 `%USERPROFILE%` 下缺失的 Harness 根目录. `Setup` 的部署规则与 CLI 相同. Renderer 只通过 `window.appApi` 请求能力, 不直接访问文件系统.
+桌面壳不创建 `%USERPROFILE%` 下缺失的 Harness 根目录. `Setup` 的部署规则与 CLI 相同. Renderer 只通过 `window.appApi` 请求能力, 不直接访问文件系统. Skills 的 GitHub 下载与解压只发生在 Electron Main, CLI `setup` 只复制已存在的 `.halign/skills/`.
 
 ## 配置目录
 
@@ -151,15 +153,20 @@ npm run dev
 │  └─ <layer>\
 │     └─ <option>.md
 ├─ agents\
+├─ skills\
+│  ├─ index.json
+│  └─ <skill-id>\
+│     └─ SKILL.md
 └─ generated\
 ```
 
-- `.halign/config.json` 定义格式版本, 输出标题, 有序 Layer 选择和 Harness 配置. `layers` 是项目选择, 不必覆盖 `.halign/layers` 下的全部目录.
+- `.halign/config.json` 定义格式版本, 输出标题, 有序 Layer 选择, Harness 配置和可选 `skill_sources`. `layers` 是项目选择, 不必覆盖 `.halign/layers` 下的全部目录.
 - `.halign/rules/` 保存参与各 Harness `AGENTS.md` 的公共 Rule.
 - `.halign/layers/<layer>/<option>.md` 保存一个 Layer 的可选 Markdown 文件. 每次生成从项目选中的每个 Layer 选择一个文件.
 - `.halign/rules/shared/` 保存独立部署到 `%USERPROFILE%\.agents\shared-rules` 的共享规则.
+- `.halign/skills/` 保存项目 Skills; `setup` 按 id 覆盖部署到 `%USERPROFILE%\.agents\skills\<id>\`, 不复制 `index.json`, 也不删除无关兄弟目录.
 - `.halign/agents/` 保存 Subagent 的共享正文与各 Harness 原生 metadata.
-- `.halign/generated/` 保存生成结果和所有权 manifest, 不应手工编辑.
+- `.halign/generated/` 保存生成结果和所有权 manifest, 不应手工编辑. Skills 不进入生成 manifest.
 
 ## 配置文件
 
@@ -233,7 +240,7 @@ Harness 配置字段如下:
 | 字段 | 约束 | 用途 |
 | --- | --- | --- |
 | `name` | 匹配 `[a-z0-9][a-z0-9_-]*` 且忽略大小写后唯一 | Rule `targets`, Agent `harnesses` 键和生成目录名 |
-| `config_path` | 使用 `/` 的规范化相对路径, 不允许绝对路径, `..`, Harness 间路径重叠或占用 `.agents/shared-rules` | 相对于 `%USERPROFILE%` 的部署根目录 |
+| `config_path` | 使用 `/` 的规范化相对路径, 不允许绝对路径, `..`, Harness 间路径重叠或占用 `.agents/shared-rules` / `.agents/skills` | 相对于 `%USERPROFILE%` 的部署根目录 |
 | `agent_format` | `toml` 或 `yaml` | Subagent metadata 序列化格式 |
 | `agent_extension` | 不含点或路径分隔符的安全扩展名 | 生成的 Subagent 文件扩展名 |
 | `instructions_field` | TOML Harness 必填, 匹配 `[a-z0-9][a-z0-9_-]*` 且不是 `name` 或 `description`; YAML Harness 不使用 | 保存共享 Markdown 正文的 TOML 字段名 |
@@ -248,16 +255,16 @@ Subagent 文件仍使用公共 `name`, `description`, `harnesses` 和 Markdown �
 4. 合并有序 Root Rule 与当前 Layer 选择, 再按 Harness 名称和 Subagent 格式构建确定性的内存输出.
 5. `generate` 在完整预检后原子写入变化文件, 清理 manifest 管理的过期文件, 最后提交新 manifest.
 6. `check` 重新构建期望输出并按字节比较实际生成目录.
-7. `setup` 先执行生成, 再对用户部署目标完成路径与 reparse point 预检, 最后替换已启用 Harness 的文件.
-8. 桌面壳对 Rule / Agent / Config 的保存走 `src/engine/Edit.ts`: Renderer 调用 `window.appApi`, Main 校验后调用引擎, 再原子写入 `.halign` 源文件.
+7. `setup` 先执行生成, 再对用户部署目标完成路径与 reparse point 预检, 最后替换已启用 Harness 的文件, 完整替换 `shared-rules`, 并按 id 覆盖部署项目 Skills.
+8. 桌面壳对 Rule / Agent / Config / Skills 的保存走 `src/engine/Edit.ts` 与 Main 侧 `SkillRemoteService`: Renderer 调用 `window.appApi`, Main 校验后调用引擎或下载解压, 再原子写入 `.halign` 源文件.
 
 源码采用 ESM. CLI 入口会解析 `npm link` 目录联接后的真实路径, 从而正确区分直接执行与被测试代码 `import` 的情况.
 
 ## 工程目录
 
-- `src/engine/` 是 CLI 生产引擎 (`Model`, `FsSafe`, `Load`, `Render`, `Generate`, `Setup`, `Edit`, `Halign`).
-- `src/main/`, `src/preload/`, `src/renderer/`, `src/shared/` 是 Electron 桌面壳. Renderer 只通过 `window.appApi` 访问引擎.
-- `tests/Halign.test.ts` 使用 Node 内置 `node:test`, 覆盖解析, 渲染, 生成, 检查, 部署, 源文件写回和路径安全.
+- `src/engine/` 是 CLI 生产引擎 (`Model`, `FsSafe`, `Load`, `Render`, `Generate`, `Skills`, `Setup`, `Edit`, `Halign`).
+- `src/main/`, `src/preload/`, `src/renderer/`, `src/shared/` 是 Electron 桌面壳. Renderer 只通过 `window.appApi` 访问引擎. Skills 下载使用 Main 侧 `fflate`.
+- `tests/Halign.test.ts` 使用 Node 内置 `node:test`, 覆盖解析, 渲染, 生成, 检查, 部署, Skills, 源文件写回和路径安全.
 - `dist/src/engine/Halign.js` 是全局 `halign` 实际执行的编译结果.
 - `dist/tests/Halign.test.js` 是测试编译结果.
 - `out/` 是 electron-vite 编译结果.
@@ -318,6 +325,7 @@ npm link
 - `yaml`, 用于读取和生成 YAML frontmatter.
 - `smol-toml`, 用于生成可配置 TOML Harness 的任意 metadata.
 - React, Zustand, Zod, Tailwind 和 Base UI, 用于桌面壳.
+- `fflate`, 仅 Electron Main 用于解压 GitHub skill zip; 不进入 CLI 引擎运行时.
 
 开发依赖包括:
 
@@ -334,5 +342,6 @@ npm link
 - `generate` 和 `setup` 会拒绝路径逃逸, symlink, junction 和其他 reparse point 风险.
 - `setup` 会修改真实用户配置. 日常开发测试必须使用临时 `USERPROFILE`, 不得直接覆盖真实配置.
 - `setup` 不创建缺失的 Harness 根目录, 只更新配置中声明且已经存在的 Harness.
+- `setup` 对 Skills 按目录覆盖同名 id, 保留 `%USERPROFILE%\.agents\skills` 下的其他兄弟目录.
 - 源文件或部署目标验证失败时, CLI 返回非零退出码并停止后续写入. 桌面壳把同一错误显示在日志区, 不写文件.
 - 桌面壳记住的上次配置目录只存在于 Electron `userData`.

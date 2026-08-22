@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ProjectEditor, WorkspaceEditor } from "@/features/workspace/WorkspaceEditor";
+import { SkillsPanel } from "@/features/workspace/SkillsPanel";
 import { WorkspaceTree } from "@/features/workspace/WorkspaceTree";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 
@@ -39,20 +40,21 @@ export function WorkspacePage({ view }: WorkspacePageProps)
     {
         const handleKeyDown = (event: KeyboardEvent): void =>
         {
+            if (view === "skills") return;
             if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s" || !workspaceRoot || isBusy || !canSaveSelection(selection)) return;
             event.preventDefault();
             requestEditorAction(selection, "save");
         };
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [isBusy, requestEditorAction, selection, workspaceRoot]);
+    }, [isBusy, requestEditorAction, selection, view, workspaceRoot]);
 
-    if (view === "project")
+    if (view === "project" || view === "skills")
     {
         return (
             <ScrollArea className="h-full">
-                <div className="min-h-full min-w-0 p-4" key={workspaceRoot ?? ""}>
-                    <ProjectEditor />
+                <div className="min-h-full min-w-0 p-4" key={`${workspaceRoot ?? ""}:${view}`}>
+                    {view === "project" ? <ProjectEditor /> : <SkillsPanel />}
                 </div>
             </ScrollArea>
         );

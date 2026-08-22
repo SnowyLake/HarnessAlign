@@ -650,6 +650,46 @@ interface LayerCardProps
     onDrop: () => void;
 }
 
+/** Dashed card that picks a catalog Layer and adds it to the project selection. */
+function NewLayerCard({ workspace, onAdd, onCancel }: { workspace: Workspace; onAdd: (name: string) => void; onCancel: () => void })
+{
+    const isBusy = useAppStore((state) => state.isBusy);
+    const layerSelection = useAppStore((state) => state.layerSelection);
+    const available = catalogLayerNames(workspace).filter((name) => !layerSelection.some((item) => item.name === name));
+
+    return (
+        <div className="grid gap-3 rounded-lg border border-dashed bg-card p-4">
+            <div className="flex items-center gap-2">
+                <h3 className="min-w-0 flex-1 truncate font-medium">New layer</h3>
+                <Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label="Cancel new layer" className="border-0 text-muted-foreground" onClick={onCancel}>
+                    <XIcon />
+                </Button>
+            </div>
+            {available.length === 0 ? (
+                <p className="text-[12px] text-muted-foreground">Every catalog layer is already in this project.</p>
+            ) : (
+                <Label className="grid gap-1 text-[12px] text-muted-foreground">
+                    layer
+                    <Select
+                        value={null}
+                        onValueChange={(value) =>
+                        {
+                            if (value !== null) onAdd(value);
+                        }}
+                    >
+                        <SelectTrigger size="sm" className="w-full" disabled={isBusy}>
+                            <SelectValue placeholder="Choose a layer" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {available.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+                        </SelectContent>
+                    </Select>
+                </Label>
+            )}
+        </div>
+    );
+}
+
 /** Project card for choosing one option and reordering an existing Layer. */
 function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, onDrop }: LayerCardProps)
 {
@@ -683,8 +723,8 @@ function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, o
             <div className="flex items-center gap-2">
                 <GripVerticalIcon className="size-4 shrink-0 cursor-grab text-muted-foreground" />
                 <h3 className="min-w-0 flex-1 truncate font-medium">{selection.name}</h3>
-                <Button type="button" size="sm" variant="ghost" disabled={isBusy} onClick={() => setRemoveOpen(true)}>
-                    <XIcon className="size-4" />
+                <Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label={`Remove ${selection.name}`} className="border-0 text-muted-foreground" onClick={() => setRemoveOpen(true)}>
+                    <XIcon />
                 </Button>
             </div>
             <Label className="grid gap-1 text-[12px] text-muted-foreground">
@@ -1166,6 +1206,7 @@ export function ProjectEditor()
     const layerSelection = useAppStore((state) => state.layerSelection);
     const setLayerSelection = useAppStore((state) => state.setLayerSelection);
     const [draggedLayer, setDraggedLayer] = useState<string>();
+    const [isAddingLayer, setIsAddingLayer] = useState(false);
 
     if (!workspace)
     {
@@ -1229,25 +1270,17 @@ export function ProjectEditor()
                         <h2 className="text-base font-semibold">Layers</h2>
                         <p className="text-[12px] text-muted-foreground">Add existing Layers, choose one option each, and drag them into generation order.</p>
                     </div>
-                    <Select
-                        value={null}
-                        onValueChange={(value) =>
-                        {
-                            if (value === null) return;
-                            const option = defaultLayerOption(workspace, value);
-                            if (!option) return;
-                            setLayerSelection([...useAppStore.getState().layerSelection, { name: value, option }]);
-                        }}
+                    <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        disabled={isBusy || isAddingLayer || catalogLayerNames(workspace).every((name) => layerSelection.some((item) => item.name === name))}
+                        aria-label="New layer"
+                        className="border-0 text-muted-foreground"
+                        onClick={() => setIsAddingLayer(true)}
                     >
-                        <SelectTrigger size="sm" className="w-40" disabled={isBusy || catalogLayerNames(workspace).every((name) => layerSelection.some((item) => item.name === name))}>
-                            <SelectValue placeholder="Add layer" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {catalogLayerNames(workspace)
-                                .filter((name) => !layerSelection.some((item) => item.name === name))
-                                .map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
-                        </SelectContent>
-                    </Select>
+                        <PlusIcon />
+                    </Button>
                 </div>
                 <div className="grid gap-3">
                     {layerSelection.map((layer) => (
@@ -1270,12 +1303,170 @@ export function ProjectEditor()
                             }}
                         />
                     ))}
+                    {isAddingLayer ? (
+                        <NewLayerCard
+                            workspace={workspace}
+                            onCancel={() => setIsAddingLayer(false)}
+                            onAdd={(name) =>
+                            {
+                                const option = defaultLayerOption(workspace, name);
+                                if (!option) return;
+                                setLayerSelection([...useAppStore.getState().layerSelection, { name, option }]);
+                                setIsAddingLayer(false);
+                            }}
+                        />
+                    ) : null}
                     {catalogLayerNames(workspace).length === 0 ? (
                         <p className="text-[12px] text-muted-foreground">Create a layer on the Layers page, then add it here.</p>
                     ) : null}
                 </div>
             </section>
+
+            <SkillsSourcesSection workspace={workspace} />
         </div>
+    );
+}
+
+/** Project-page section for registering and removing GitHub skill sources. */
+function SkillsSourcesSection({ workspace }: { workspace: Workspace })
+{
+    const isBusy = useAppStore((state) => state.isBusy);
+    const [isAdding, setIsAdding] = useState(false);
+    const [formError, setFormError] = useState<string>();
+
+    return (
+        <section className="grid gap-3">
+            <div className="flex items-center justify-between gap-3">
+                <div>
+                    <h2 className="text-base font-semibold">Skills</h2>
+                    <p className="text-[12px] text-muted-foreground">Register GitHub repositories used by the Skills page for discover and download.</p>
+                </div>
+                <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    disabled={isBusy || isAdding}
+                    aria-label="New skill source"
+                    className="border-0 text-muted-foreground"
+                    onClick={() =>
+                    {
+                        setFormError(undefined);
+                        setIsAdding(true);
+                    }}
+                >
+                    <PlusIcon />
+                </Button>
+            </div>
+            <FormError message={formError} />
+            <div className="grid gap-3">
+                {workspace.config.skillSources.map((source) => (
+                    <div key={`${source.owner}/${source.name}`} className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3">
+                        <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">https://github.com/{source.owner}/{source.name}</div>
+                            <div className="text-[12px] text-muted-foreground">branch: {source.branch}</div>
+                        </div>
+                        <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            disabled={isBusy}
+                            aria-label={`Remove ${source.owner}/${source.name}`}
+                            className="border-0 text-muted-foreground"
+                            onClick={() =>
+                            {
+                                setFormError(undefined);
+                                void runMutation(async () =>
+                                {
+                                    await window.appApi.workspace.removeSkillSource(workspace.root, source.owner, source.name);
+                                    await refreshWorkspace({ kind: "config" });
+                                    toast.add({ title: "Skill source removed", type: "success" });
+                                }).then((result) =>
+                                {
+                                    if (!result.ok) setFormError(result.message);
+                                });
+                            }}
+                        >
+                            <XIcon />
+                        </Button>
+                    </div>
+                ))}
+                {isAdding ? (
+                    <NewSkillSourceCard
+                        workspace={workspace}
+                        onCancel={() => setIsAdding(false)}
+                        onError={setFormError}
+                        onAdded={() =>
+                        {
+                            setFormError(undefined);
+                            setIsAdding(false);
+                        }}
+                    />
+                ) : null}
+                {workspace.config.skillSources.length === 0 && !isAdding ? (
+                    <p className="text-[12px] text-muted-foreground">No skill sources registered.</p>
+                ) : null}
+            </div>
+        </section>
+    );
+}
+
+/** Dashed card that registers one GitHub skill source. */
+function NewSkillSourceCard({
+    workspace,
+    onAdded,
+    onCancel,
+    onError,
+}: {
+    workspace: Workspace;
+    onAdded: () => void;
+    onCancel: () => void;
+    onError: (message: string | undefined) => void;
+})
+{
+    const isBusy = useAppStore((state) => state.isBusy);
+    const [url, setUrl] = useState("");
+    const [branch, setBranch] = useState("");
+
+    return (
+        <form
+            className="grid gap-3 rounded-lg border border-dashed bg-card p-4"
+            onSubmit={(event) =>
+            {
+                event.preventDefault();
+                onError(undefined);
+                void runMutation(async () =>
+                {
+                    const input = branch.trim()
+                        ? { url: url.trim(), branch: branch.trim() }
+                        : { url: url.trim() };
+                    await window.appApi.workspace.addSkillSource(workspace.root, input);
+                    await refreshWorkspace({ kind: "config" });
+                    toast.add({ title: "Skill source added", type: "success" });
+                    onAdded();
+                }).then((result) =>
+                {
+                    if (!result.ok) onError(result.message);
+                });
+            }}
+        >
+            <div className="flex items-center gap-2">
+                <h3 className="min-w-0 flex-1 truncate font-medium">New skill source</h3>
+                <Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label="Cancel new skill source" className="border-0 text-muted-foreground" onClick={onCancel}>
+                    <XIcon />
+                </Button>
+            </div>
+            <Label className="grid gap-1 text-[12px] text-muted-foreground">
+                Repository URL
+                <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repo" disabled={isBusy} />
+            </Label>
+            <Label className="grid gap-1 text-[12px] text-muted-foreground">
+                Branch (optional)
+                <Input value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" disabled={isBusy} />
+            </Label>
+            <div>
+                <Button type="submit" size="sm" disabled={isBusy || !url.trim()}>Save</Button>
+            </div>
+        </form>
     );
 }
 

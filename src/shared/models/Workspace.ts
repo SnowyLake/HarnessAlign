@@ -32,6 +32,14 @@ export interface LayerSelection
     option: string;
 }
 
+/** One registered GitHub skill repository source. */
+export interface SkillSource
+{
+    owner: string;
+    name: string;
+    branch: string;
+}
+
 /** Validated `.halign/config.json` document. */
 export interface Config
 {
@@ -39,6 +47,52 @@ export interface Config
     name: string;
     layers: LayerConfig[];
     harnesses: HarnessConfig[];
+    skillSources: SkillSource[];
+}
+
+/** Provenance recorded for an installed project skill. */
+export type SkillOrigin =
+    | { kind: "github"; owner: string; name: string; branch: string; sourcePath: string; contentHash: string }
+    | { kind: "local"; contentHash: string }
+    | { kind: "unknown" };
+
+/** Installed project skill metadata without file bodies. */
+export interface ProjectSkill
+{
+    id: string;
+    title: string;
+    description: string;
+    origin: SkillOrigin;
+}
+
+/** Skill discovered under a remote GitHub skill source. */
+export interface RemoteSkill
+{
+    id: string;
+    title: string;
+    description: string;
+    owner: string;
+    name: string;
+    branch: string;
+    sourcePath: string;
+    conflict: boolean;
+}
+
+/** Result of comparing an installed skill against its remote source. */
+export interface SkillUpdate
+{
+    id: string;
+    currentHash: string;
+    remoteHash: string;
+    error?: string;
+}
+
+/** Skill discovered under the user profile skills directory. */
+export interface UserSkill
+{
+    id: string;
+    title: string;
+    description: string;
 }
 
 /** Editor payload for a root rule. */
@@ -101,5 +155,6 @@ export interface Workspace
     layerOptions: Record<string, LayerOption[]>;
     sharedRules: SharedRule[];
     agents: Agent[];
+    skills: ProjectSkill[];
     generatedFiles: GeneratedFile[];
 }

@@ -24,6 +24,8 @@ import {
     type Metadata,
     RULE_FIELDS,
     type Rule,
+    type SkillSource,
+    SKILL_SOURCE_FIELDS,
     codePointCompare,
     errorText,
     firstSorted,
@@ -201,12 +203,41 @@ function validateHarnessConfig(value: unknown, path: string, index: number): Har
         : { name, configPath, agentFormat, agentExtension, instructionsField };
 }
 
+/** Validate one skill source object from `config.json`. */
+function validateSkillSource(value: unknown, path: string, index: number): SkillSource
+{
+    const context = `${path}: skill_sources[${index}]`;
+    if (!isRecord(value)) throw new HalignError(`${context} must be a mapping, got ${typeText(value)}`);
+    const unknown = Object.keys(value).filter((field) => !SKILL_SOURCE_FIELDS.has(field));
+    if (unknown.length > 0) throw new HalignError(`${context}: unknown field ${valueText(firstSorted(unknown))}`);
+    for (const field of ["owner", "name", "branch"])
+    {
+        if (!hasOwn(value, field)) throw new HalignError(`${context}: ${field} is required`);
+    }
+    const owner = validateString(context, "owner", value.owner);
+    const name = validateString(context, "name", value.name);
+    const branch = validateString(context, "branch", value.branch);
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u.test(owner))
+    {
+        throw new HalignError(`${context}: owner must be a GitHub owner name, got ${valueText(owner)}`);
+    }
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u.test(name))
+    {
+        throw new HalignError(`${context}: name must be a GitHub repository name, got ${valueText(name)}`);
+    }
+    if (/[\r\n]/.test(branch) || branch.includes("\\") || branch.includes(".."))
+    {
+        throw new HalignError(`${context}: branch must be a single-line git ref, got ${valueText(branch)}`);
+    }
+    return { owner, name, branch };
+}
+
 /** Validate a parsed config.json value into a Config. */
 export function validateConfig(value: unknown): Config
 {
     const path = ".halign/config.json";
     if (!isRecord(value)) throw new HalignError(`${path}: expected a mapping`);
-    const knownFields = new Set(["version", "name", "layers", "harnesses"]);
+    const knownFields = new Set(["version", "name", "layers", "harnesses", "skill_sources"]);
     const unknownFields = Object.keys(value).filter((field) => !knownFields.has(field));
     if (unknownFields.length > 0) throw new HalignError(`${path}: unknown field ${valueText(firstSorted(unknownFields))}`);
     for (const field of ["version", "layers", "harnesses"])
@@ -242,6 +273,18 @@ export function validateConfig(value: unknown): Config
         throw new HalignError(`${path}: harnesses must be a non-empty mapping array, got ${valueText(value.harnesses)}`);
     }
     const harnesses = value.harnesses.map((harness, index) => validateHarnessConfig(harness, path, index));
+    const skillSources: SkillSource[] = [];
+    if (hasOwn(value, "skill_sources"))
+    {
+        if (!Array.isArray(value.skill_sources))
+        {
+            throw new HalignError(`${path}: skill_sources must be a mapping array, got ${valueText(value.skill_sources)}`);
+        }
+        for (let index = 0; index < value.skill_sources.length; index += 1)
+        {
+            skillSources.push(validateSkillSource(value.skill_sources[index], path, index));
+        }
+    }
     const layerNames = new Map<string, string>();
     for (const layer of layers)
     {
@@ -275,6 +318,10 @@ export function validateConfig(value: unknown): Config
         {
             throw new HalignError(`${path}: harness config_path must not use the managed shared rules target, got ${valueText(harness.configPath)}`);
         }
+        if (foldedPath === ".agents/skills" || foldedPath.startsWith(".agents/skills/"))
+        {
+            throw new HalignError(`${path}: harness config_path must not use the managed skills target, got ${valueText(harness.configPath)}`);
+        }
     }
     for (let leftIndex = 0; leftIndex < harnesses.length; leftIndex += 1)
     {
@@ -290,7 +337,18 @@ export function validateConfig(value: unknown): Config
             }
         }
     }
-    return { version: 1, name, layers, harnesses };
+    const skillRepos = new Map<string, string>();
+    for (const source of skillSources)
+    {
+        const key = `${source.owner.toLowerCase()}/${source.name.toLowerCase()}`;
+        const existing = skillRepos.get(key);
+        if (existing !== undefined)
+        {
+            throw new HalignError(`${path}: skill_sources owner/name must be unique without case sensitivity, got ${valueText(`${source.owner}/${source.name}`)} after ${valueText(existing)}`);
+        }
+        skillRepos.set(key, `${source.owner}/${source.name}`);
+    }
+    return { version: 1, name, layers, harnesses, skillSources };
 }
 
 /** Read and validate `.halign/config.json`. */

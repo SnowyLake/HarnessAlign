@@ -125,6 +125,60 @@ export function registerWorkspaceHandlers(): void
         await workspaceService.renameHarness(root, from, to);
     }));
 
+    ipcMain.handle(IPC_CHANNELS.workspaceAddSkillSource, (event, root: string, input: { url: string; branch?: string }) => runIpc(async () =>
+    {
+        assertTrusted(event);
+        return workspaceService.addSkillSource(root, input);
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceRemoveSkillSource, (event, root: string, owner: string, name: string) => runIpc(async () =>
+    {
+        assertTrusted(event);
+        return workspaceService.removeSkillSource(root, owner, name);
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceDiscoverSkills, (event, root: string) => runIpc(async () =>
+    {
+        assertTrusted(event);
+        return workspaceService.discoverSkills(root);
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceInstallSkills, (event, root: string, ids: string[]) => runIpc(async () =>
+    {
+        assertTrusted(event);
+        return workspaceService.installSkills(root, ids);
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceCheckSkillUpdates, (event, root: string) => runIpc(async () =>
+    {
+        assertTrusted(event);
+        return workspaceService.checkSkillUpdates(root);
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceApplySkillUpdates, (event, root: string, ids: string[]) => runIpc(async () =>
+    {
+        assertTrusted(event);
+        return workspaceService.applySkillUpdates(root, ids);
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceListUserSkills, (event) => runIpc(async () =>
+    {
+        assertTrusted(event);
+        return workspaceService.listUserSkills();
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceImportUserSkills, (event, root: string, ids: string[], overwrite: boolean) => runIpc(async () =>
+    {
+        assertTrusted(event);
+        return workspaceService.importUserSkills(root, ids, overwrite);
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceRemoveSkill, (event, root: string, id: string) => runIpc(async () =>
+    {
+        assertTrusted(event);
+        await workspaceService.removeSkill(root, id);
+    }));
+
     ipcMain.handle(IPC_CHANNELS.workspaceGenerate, (event, root: string, selection?: LayerSelection[]) => runIpc(async () =>
     {
         assertTrusted(event);

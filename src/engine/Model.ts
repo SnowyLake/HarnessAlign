@@ -11,8 +11,20 @@ export const AGENT_NAME = /^[a-z0-9][a-z0-9_-]*$/u;
 export const LAYER_NAME = /^[a-z0-9][a-z0-9_-]*$/u;
 /** Allowed harness name. */
 export const HARNESS_NAME = /^[a-z0-9][a-z0-9_-]*$/u;
+/** Allowed skill directory identifier. */
+export const SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+/** Maximum length of a skill directory identifier. */
+export const SKILL_NAME_MAX = 128;
 /** Allowed subagent file extension without a leading dot. */
 export const AGENT_EXTENSION = /^[a-z0-9][a-z0-9_-]*$/u;
+/** Known skill source object keys in config.json. */
+export const SKILL_SOURCE_FIELDS = new Set(["owner", "name", "branch"]);
+/** Windows reserved device names rejected as skill ids. */
+export const WINDOWS_RESERVED_NAMES = new Set([
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+]);
 /** ATX heading line outside fenced code. */
 export const ATX_HEADING = /^( {0,3})(#{1,6})(?=[ \t]|$)/u;
 /** Markdown fence opener. */
@@ -57,6 +69,14 @@ export interface LayerSelection
     option: string;
 }
 
+/** One registered GitHub skill repository source. */
+export interface SkillSource
+{
+    owner: string;
+    name: string;
+    branch: string;
+}
+
 /** Validated `.halign/config.json` document. */
 export interface Config
 {
@@ -64,6 +84,30 @@ export interface Config
     name: string;
     layers: LayerConfig[];
     harnesses: HarnessConfig[];
+    skillSources: SkillSource[];
+}
+
+/** Provenance recorded for an installed project skill. */
+export type SkillOrigin =
+    | { kind: "github"; owner: string; name: string; branch: string; sourcePath: string; contentHash: string }
+    | { kind: "local"; contentHash: string }
+    | { kind: "unknown" };
+
+/** Installed project skill metadata without file bodies. */
+export interface ProjectSkill
+{
+    id: string;
+    title: string;
+    description: string;
+    origin: SkillOrigin;
+}
+
+/** Skill discovered under the user profile skills directory. */
+export interface UserSkill
+{
+    id: string;
+    title: string;
+    description: string;
 }
 
 /** Loaded rule with validated frontmatter and markdown body. */

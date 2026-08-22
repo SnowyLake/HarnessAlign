@@ -4,7 +4,18 @@
  */
 
 import type { AppSettings } from "../models/AppSettings.js";
-import type { Agent, Config, HarnessConfig, LayerOptionInput, LayerSelection, RuleInput, Workspace } from "../models/Workspace.js";
+import type {
+    Agent,
+    Config,
+    HarnessConfig,
+    LayerOptionInput,
+    LayerSelection,
+    RemoteSkill,
+    RuleInput,
+    SkillUpdate,
+    UserSkill,
+    Workspace,
+} from "../models/Workspace.js";
 
 /** Privileged capabilities exposed to the renderer through `window.appApi`. */
 export interface AppApi
@@ -36,6 +47,15 @@ export interface AppApi
         addHarness(root: string, harness: HarnessConfig): Promise<Config>;
         removeHarness(root: string, name: string): Promise<void>;
         renameHarness(root: string, from: string, to: string): Promise<void>;
+        addSkillSource(root: string, input: { url: string; branch?: string }): Promise<Config>;
+        removeSkillSource(root: string, owner: string, name: string): Promise<Config>;
+        discoverSkills(root: string): Promise<RemoteSkill[]>;
+        installSkills(root: string, ids: string[]): Promise<string>;
+        checkSkillUpdates(root: string): Promise<SkillUpdate[]>;
+        applySkillUpdates(root: string, ids: string[]): Promise<string>;
+        listUserSkills(): Promise<UserSkill[]>;
+        importUserSkills(root: string, ids: string[], overwrite: boolean): Promise<string>;
+        removeSkill(root: string, id: string): Promise<void>;
         generate(root: string, selection?: LayerSelection[]): Promise<string>;
         check(root: string, selection?: LayerSelection[]): Promise<string[]>;
         setup(root: string, selection?: LayerSelection[]): Promise<string>;

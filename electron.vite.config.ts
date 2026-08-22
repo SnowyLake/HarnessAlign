@@ -8,7 +8,7 @@ export default defineConfig({
         plugins: [
             // Bundle yaml, smol-toml, and zod so the packaged app does not depend on
             // the development node_modules layout inside the asar.
-            externalizeDepsPlugin({ exclude: ["yaml", "smol-toml", "zod"] }),
+            externalizeDepsPlugin({ exclude: ["yaml", "smol-toml", "zod", "fflate"] }),
         ],
     },
     preload: {

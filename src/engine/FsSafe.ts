@@ -55,6 +55,19 @@ export function reparseError(root: string, path: string, isOutput: boolean): Hal
     );
 }
 
+/** Recursively reject reparse points under `path`. */
+export async function assertNoReparseTree(root: string, path: string, isOutput = false): Promise<void>
+{
+    const stats = await lstatIfExists(path);
+    if (!stats) return;
+    if (stats.isSymbolicLink()) throw reparseError(root, path, isOutput);
+    if (!stats.isDirectory()) return;
+    for (const entry of await fs.readdir(path, { withFileTypes: true }))
+    {
+        await assertNoReparseTree(root, join(path, entry.name), isOutput);
+    }
+}
+
 /** Walk every prefix of `path` and reject reparse points. */
 export async function ensureRegularSource(root: string, path: string): Promise<void>
 {

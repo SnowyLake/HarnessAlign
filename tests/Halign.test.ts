@@ -10,7 +10,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { atomicWrite, addHarness, addLayer, addLayerOption, buildOutputs, check, deleteSource, downgradeMarkdownHeadings, generate, HalignError, loadConfig, loadWorkspace, removeHarness, removeLayer, removeLayerOption, renameHarness, renameLayer, renameLayerOption, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup } from "../src/engine/Halign.js";
+import { atomicWrite, addHarness, addLayer, addLayerOption, addSkillSource, assertSafeZipEntry, buildOutputs, check, deleteSource, downgradeMarkdownHeadings, generate, HalignError, hashSkillDirectory, importUserSkills, installSkillFromDirectory, loadConfig, loadSkills, loadWorkspace, parseGitHubSkillSource, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup, validateConfig } from "../src/engine/Halign.js";
 
 const config = {
     version: 1,
@@ -423,6 +423,7 @@ test("generate and setup reports list written files and destination directories"
         assert.ok(setupLog.includes(`Skipped opencode; target does not exist: ${join(userProfile, ".config", "opencode")}`));
         assert.ok(setupLog.includes(`Updated shared rules at ${join(userProfile, ".agents", "shared-rules")}`));
         assert.ok(setupLog.includes("  shared.md"));
+        assert.ok(setupLog.includes(`Skipped skills; no project skills to deploy: ${join(userProfile, ".agents", "skills")}`));
     });
 });
 
@@ -522,5 +523,277 @@ test("legal prototype property Layer names survive discovery and harness cascade
         await renameHarness(root, "cursor", "atlas");
         const renamed = await loadWorkspace(root);
         assert.deepEqual(Object.entries(renamed.layerOptions).find(([name]) => name === "constructor")?.[1][0]?.targets, ["atlas"]);
+    });
+});
+
+test("skill_sources config omit, write, unknown field, duplicates, version, and skills config_path", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const loaded = await loadConfig(root);
+        assert.deepEqual(loaded.skillSources, []);
+        assert.equal(loaded.version, 1);
+        const withSources = await saveConfig(root, {
+            ...loaded,
+            skillSources: [{ owner: "acme", name: "skills", branch: "main" }],
+        });
+        assert.deepEqual(withSources.skillSources, [{ owner: "acme", name: "skills", branch: "main" }]);
+        const written = JSON.parse(await readFile(join(root, ".halign", "config.json"), "utf8")) as { skill_sources?: unknown; version: number };
+        assert.equal(written.version, 1);
+        assert.deepEqual(written.skill_sources, [{ owner: "acme", name: "skills", branch: "main" }]);
+        await assert.rejects(Promise.resolve().then(() => validateConfig({
+            ...config,
+            skill_sources: [{ owner: "acme", name: "skills", branch: "main", extra: true }],
+        })), /unknown field/u);
+        await assert.rejects(Promise.resolve().then(() => validateConfig({
+            ...config,
+            skill_sources: [
+                { owner: "acme", name: "skills", branch: "main" },
+                { owner: "Acme", name: "Skills", branch: "dev" },
+            ],
+        })), /owner\/name must be unique/u);
+        await assert.rejects(Promise.resolve().then(() => validateConfig({ ...config, version: 2 })), /version must be integer 1/u);
+        await assert.rejects(Promise.resolve().then(() => validateConfig({
+            ...config,
+            harnesses: [{ ...config.harnesses[0], config_path: ".agents/skills" }],
+        })), /managed skills target/u);
+        await assert.rejects(Promise.resolve().then(() => validateConfig({
+            ...config,
+            harnesses: [{ ...config.harnesses[0], config_path: ".agents/skills/nested" }],
+        })), /managed skills target/u);
+        await saveConfig(root, { ...withSources, skillSources: [] });
+        const omitted = JSON.parse(await readFile(join(root, ".halign", "config.json"), "utf8")) as { skill_sources?: unknown };
+        assert.equal(omitted.skill_sources, undefined);
+    });
+});
+
+test("parseGitHubSkillSource accepts repository URLs and rejects unsupported forms", () =>
+{
+    assert.deepEqual(parseGitHubSkillSource("https://github.com/acme/skills"), { owner: "acme", name: "skills", branch: "main" });
+    assert.deepEqual(parseGitHubSkillSource("https://github.com/acme/skills.git/"), { owner: "acme", name: "skills", branch: "main" });
+    assert.deepEqual(parseGitHubSkillSource("https://github.com/acme/skills/tree/develop"), { owner: "acme", name: "skills", branch: "develop" });
+    assert.deepEqual(parseGitHubSkillSource("https://github.com/acme/skills", "release"), { owner: "acme", name: "skills", branch: "release" });
+    assert.throws(() => parseGitHubSkillSource("https://gist.github.com/acme/skills"), /github\.com\/\{owner\}\/\{repo\}/u);
+    assert.throws(() => parseGitHubSkillSource("https://github.com/acme/skills/blob/main/README.md"), /tree\/\{branch\}/u);
+    assert.throws(() => parseGitHubSkillSource("https://user:pass@github.com/acme/skills"), /github\.com\/\{owner\}\/\{repo\}/u);
+    assert.throws(() => parseGitHubSkillSource("https://gitlab.com/acme/skills"), /github\.com\/\{owner\}\/\{repo\}/u);
+});
+
+test("loadSkills tolerates a missing directory, loads SKILL.md, and rejects junk roots", async () =>
+{
+    await withProject(async (root) =>
+    {
+        assert.deepEqual(await loadSkills(root), []);
+        const workspace = await loadWorkspace(root);
+        assert.deepEqual(workspace.skills, []);
+        await mkdir(join(root, ".halign", "skills", "demo"), { recursive: true });
+        await writeFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "---\nname: Demo\ndescription: Demo skill\n---\n\nBody.\n", "utf8");
+        const skills = await loadSkills(root);
+        assert.equal(skills.length, 1);
+        assert.equal(skills[0]?.id, "demo");
+        assert.equal(skills[0]?.title, "Demo");
+        assert.equal(skills[0]?.origin.kind, "unknown");
+        await writeFile(join(root, ".halign", "skills", "junk.txt"), "nope\n", "utf8");
+        await assert.rejects(loadSkills(root), /index.json and skill subdirectories/u);
+        await unlink(join(root, ".halign", "skills", "junk.txt"));
+        await assert.rejects(deleteSource(root, ".halign/skills/demo/SKILL.md"), /deleted with removeSkill/u);
+    });
+});
+
+test("skill hash ignores hidden files and changes when content changes", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const skillDir = join(root, "skill-src");
+        await mkdir(join(skillDir, ".hidden"), { recursive: true });
+        await writeFile(join(skillDir, "SKILL.md"), "---\nname: Demo\n---\n\nBody.\n", "utf8");
+        await writeFile(join(skillDir, ".hidden", "secret.bin"), Buffer.from([1, 2, 3]));
+        await writeFile(join(skillDir, "notes.txt"), "notes\n", "utf8");
+        const first = await hashSkillDirectory(skillDir);
+        await writeFile(join(skillDir, ".hidden", "secret.bin"), Buffer.from([9, 9, 9]));
+        assert.equal(await hashSkillDirectory(skillDir), first);
+        await writeFile(join(skillDir, "notes.txt"), "notes!\n", "utf8");
+        assert.notEqual(await hashSkillDirectory(skillDir), first);
+    });
+});
+
+test("assertSafeZipEntry rejects traversal, absolute, and backslash paths", () =>
+{
+    assert.equal(assertSafeZipEntry("repo/SKILL.md"), "repo/SKILL.md");
+    assert.throws(() => assertSafeZipEntry("../escape"), /unsafe/u);
+    assert.throws(() => assertSafeZipEntry("/abs/path"), /relative/u);
+    assert.throws(() => assertSafeZipEntry("C:/abs/path"), /relative/u);
+    assert.throws(() => assertSafeZipEntry("repo\\SKILL.md"), /unsafe/u);
+});
+
+test("installSkillFromDirectory copies a local extracted skill into .halign/skills", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const source = join(root, "extracted", "demo");
+        await mkdir(join(source, "scripts"), { recursive: true });
+        await writeFile(join(source, "SKILL.md"), "---\nname: Demo\ndescription: Installed\n---\n\nBody.\n", "utf8");
+        await writeFile(join(source, "scripts", "run.bin"), Buffer.from([0, 1, 2, 255]));
+        await writeFile(join(source, ".cache"), "skip\n", "utf8");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "unused" });
+        const skills = await loadSkills(root);
+        assert.equal(skills[0]?.id, "demo");
+        assert.equal(skills[0]?.origin.kind, "local");
+        assert.deepEqual(await readFile(join(root, ".halign", "skills", "demo", "scripts", "run.bin")), Buffer.from([0, 1, 2, 255]));
+        await assert.rejects(readFile(join(root, ".halign", "skills", "demo", ".cache")));
+        await writeFile(join(source, "SKILL.md"), "---\nname: Demo\ndescription: Replaced\n---\n\nNew body.\n", "utf8");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "unused" });
+        assert.equal(await readFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: Demo\ndescription: Replaced\n---\n\nNew body.\n");
+        const redirected = join(root, "redirected-nested");
+        await mkdir(redirected, { recursive: true });
+        await writeFile(join(redirected, "secret.md"), "protected\n", "utf8");
+        await symlink(redirected, join(root, ".halign", "skills", "demo", "nested"), "junction");
+        await writeFile(join(source, "SKILL.md"), "---\nname: Demo\n---\n\nShould not land.\n", "utf8");
+        await assert.rejects(installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "unused" }), /symbolic link/u);
+        assert.equal(await readFile(join(redirected, "secret.md"), "utf8"), "protected\n");
+        assert.equal(await readFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: Demo\ndescription: Replaced\n---\n\nNew body.\n");
+    });
+});
+
+test("importUserSkills respects overwrite and records local origin", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const userProfile = join(root, "isolated-userprofile");
+        const userSkill = join(userProfile, ".agents", "skills", "demo");
+        await mkdir(userSkill, { recursive: true });
+        await writeFile(join(userSkill, "SKILL.md"), "---\nname: User Demo\n---\n\nFrom user.\n", "utf8");
+        const report = await importUserSkills(root, ["demo"], false, userProfile);
+        assert.ok(report.includes("demo"));
+        assert.equal((await loadSkills(root))[0]?.origin.kind, "local");
+        await writeFile(join(userSkill, "SKILL.md"), "---\nname: User Demo\n---\n\nUpdated user.\n", "utf8");
+        await assert.rejects(importUserSkills(root, ["demo"], false, userProfile), /already exists/u);
+        await importUserSkills(root, ["demo"], true, userProfile);
+        assert.equal(await readFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: User Demo\n---\n\nUpdated user.\n");
+        assert.equal((await loadSkills(root))[0]?.origin.kind, "local");
+        await installSkillFromDirectory(root, "demo", userSkill, {
+            kind: "github",
+            owner: "acme",
+            name: "skills",
+            branch: "main",
+            sourcePath: "demo",
+            contentHash: "remote",
+        }, true);
+        assert.equal((await loadSkills(root))[0]?.origin.kind, "github");
+        await writeFile(join(userSkill, "SKILL.md"), "---\nname: User Demo\n---\n\nImported over github.\n", "utf8");
+        await importUserSkills(root, ["demo"], true, userProfile);
+        assert.equal(await readFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: User Demo\n---\n\nImported over github.\n");
+        assert.equal((await loadSkills(root))[0]?.origin.kind, "local");
+    });
+});
+
+test("removeSkill deletes the skill directory and index entry", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const source = join(root, "extracted", "demo");
+        await mkdir(source, { recursive: true });
+        await writeFile(join(source, "SKILL.md"), "---\nname: Demo\n---\n\nBody.\n", "utf8");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "x" });
+        await removeSkill(root, "demo");
+        assert.deepEqual(await loadSkills(root), []);
+        await assert.rejects(readdir(join(root, ".halign", "skills", "demo")));
+        const index = JSON.parse(await readFile(join(root, ".halign", "skills", "index.json"), "utf8")) as { skills: Record<string, unknown> };
+        assert.deepEqual(index.skills, {});
+    });
+});
+
+test("setup without skills succeeds and keeps unrelated user skills", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        const userProfile = join(root, "isolated-userprofile");
+        await mkdir(join(userProfile, ".codex", "agents"), { recursive: true });
+        await mkdir(join(userProfile, ".agents", "skills", "unrelated"), { recursive: true });
+        await writeFile(join(userProfile, ".agents", "skills", "unrelated", "SKILL.md"), "keep\n", "utf8");
+        const result = await setup(root, undefined, userProfile);
+        assert.equal(result.skills.skipped, true);
+        assert.equal(await readFile(join(userProfile, ".agents", "skills", "unrelated", "SKILL.md"), "utf8"), "keep\n");
+    });
+});
+
+test("setup overwrites same-name skills and keeps unrelated siblings", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        const source = join(root, "extracted", "demo");
+        await mkdir(source, { recursive: true });
+        await writeFile(join(source, "SKILL.md"), "---\nname: Demo\n---\n\nProject skill.\n", "utf8");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "x" });
+        const userProfile = join(root, "isolated-userprofile");
+        await mkdir(join(userProfile, ".codex", "agents"), { recursive: true });
+        await mkdir(join(userProfile, ".agents", "skills", "demo"), { recursive: true });
+        await mkdir(join(userProfile, ".agents", "skills", "unrelated"), { recursive: true });
+        await writeFile(join(userProfile, ".agents", "skills", "demo", "SKILL.md"), "old\n", "utf8");
+        await writeFile(join(userProfile, ".agents", "skills", "unrelated", "SKILL.md"), "keep\n", "utf8");
+        const result = await setup(root, undefined, userProfile);
+        assert.equal(result.skills.skipped, false);
+        assert.deepEqual(result.skills.ids, ["demo"]);
+        assert.equal(await readFile(join(userProfile, ".agents", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: Demo\n---\n\nProject skill.\n");
+        assert.equal(await readFile(join(userProfile, ".agents", "skills", "unrelated", "SKILL.md"), "utf8"), "keep\n");
+        assert.ok(reportSetup(result).includes(`Updated skills at ${join(userProfile, ".agents", "skills")}`));
+        assert.ok(reportSetup(result).includes("  demo"));
+    });
+});
+
+test("setup rejects a junction at the target skill directory before deleting anything", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        const source = join(root, "extracted", "demo");
+        await mkdir(source, { recursive: true });
+        await writeFile(join(source, "SKILL.md"), "---\nname: Demo\n---\n\nProject skill.\n", "utf8");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "x" });
+        const userProfile = join(root, "isolated-userprofile");
+        await mkdir(join(userProfile, ".codex", "agents"), { recursive: true });
+        await mkdir(join(userProfile, ".agents", "skills"), { recursive: true });
+        const redirected = join(root, "redirected-skill");
+        await mkdir(redirected, { recursive: true });
+        await writeFile(join(redirected, "SKILL.md"), "protected\n", "utf8");
+        await symlink(redirected, join(userProfile, ".agents", "skills", "demo"), "junction");
+        await assert.rejects(setup(root, undefined, userProfile), /reparse points are not allowed/u);
+        assert.equal(await readFile(join(redirected, "SKILL.md"), "utf8"), "protected\n");
+    });
+});
+
+test("generate and check ignore project skills", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const source = join(root, "extracted", "demo");
+        await mkdir(source, { recursive: true });
+        await writeFile(join(source, "SKILL.md"), "---\nname: Demo\n---\n\nBody.\n", "utf8");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "x" });
+        const outputs = await generate(root);
+        assert.equal([...outputs.keys()].some((path) => path.includes("skill")), false);
+        for (const [path, content] of outputs)
+        {
+            if (path.endsWith("AGENTS.md")) assert.equal(content.toString("utf8").includes("demo"), false);
+        }
+        assert.deepEqual(await check(root), []);
+        const manifest = JSON.parse(await readFile(join(root, ".halign", "generated", ".manifest.json"), "utf8")) as { files: string[] };
+        assert.equal(manifest.files.some((path) => path.includes("skill")), false);
+    });
+});
+
+test("addSkillSource and removeSkillSource round-trip through configDocument", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const added = await addSkillSource(root, { url: "https://github.com/acme/toolkit", branch: "release" });
+        assert.deepEqual(added.skillSources, [{ owner: "acme", name: "toolkit", branch: "release" }]);
+        const removed = await removeSkillSource(root, "acme", "toolkit");
+        assert.deepEqual(removed.skillSources, []);
     });
 });

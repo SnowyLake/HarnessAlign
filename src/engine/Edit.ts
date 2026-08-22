@@ -23,12 +23,15 @@ import {
     type LayerOption,
     type Metadata,
     normalizedBody,
+    type ProjectSkill,
     type Rule,
     typeText,
     valueText,
 } from "./Model.js";
+import { importUserSkills as importUserSkillsEngine, listUserSkills as listUserSkillsEngine, loadSkills, parseGitHubSkillSource, removeSkill as removeSkillEngine } from "./Skills.js";
 
 export type { SharedRule };
+export { listUserSkillsEngine as listUserSkills, importUserSkillsEngine as importUserSkills, removeSkillEngine as removeSkill };
 
 /** Loaded `.halign` workspace for the desktop editor and tests. */
 export interface Workspace
@@ -39,6 +42,7 @@ export interface Workspace
     layerOptions: Record<string, LayerOption[]>;
     sharedRules: SharedRule[];
     agents: Agent[];
+    skills: ProjectSkill[];
 }
 
 /** Editor payload for creating or updating a rule source file. */
@@ -67,22 +71,31 @@ function sortEditableRules(rules: Rule[]): Rule[]
 /** Build the JSON document written to `config.json`. */
 function configDocument(config: Config): Record<string, unknown>
 {
-    return {
+    const document: Record<string, unknown> = {
         version: 1,
         name: config.name,
         layers: config.layers.map((layer) => ({ name: layer.name, selected: layer.selected })),
         harnesses: config.harnesses.map((harness) =>
         {
-            const document: Record<string, unknown> = {
+            const item: Record<string, unknown> = {
                 name: harness.name,
                 config_path: harness.configPath,
                 agent_format: harness.agentFormat,
                 agent_extension: harness.agentExtension,
             };
-            if (harness.instructionsField !== undefined) document.instructions_field = harness.instructionsField;
-            return document;
+            if (harness.instructionsField !== undefined) item.instructions_field = harness.instructionsField;
+            return item;
         }),
     };
+    if (config.skillSources.length > 0)
+    {
+        document.skill_sources = config.skillSources.map((source) => ({
+            owner: source.owner,
+            name: source.name,
+            branch: source.branch,
+        }));
+    }
+    return document;
 }
 
 /** Normalize and contain a managed `.halign` relative path. */
@@ -101,7 +114,7 @@ function managedRelative(value: string, label: string): string
     {
         throw new HalignError(`${label}: path must stay inside managed .halign sources, got ${valueText(value)}`);
     }
-    if (value !== ".halign/config.json" && !value.startsWith(".halign/rules/") && !value.startsWith(".halign/layers/") && !value.startsWith(".halign/agents/"))
+    if (value !== ".halign/config.json" && !value.startsWith(".halign/rules/") && !value.startsWith(".halign/layers/") && !value.startsWith(".halign/agents/") && !value.startsWith(".halign/skills/"))
     {
         throw new HalignError(`${label}: path must stay inside managed .halign sources, got ${valueText(value)}`);
     }
@@ -270,18 +283,19 @@ function assertAgentInput(agent: Agent, harnesses: HarnessConfig[]): void
     }
 }
 
-/** Load config, root rules, layer options, shared-rules, and agents from a config root. */
+/** Load config, root rules, layer options, shared-rules, agents, and skills from a config root. */
 export async function loadWorkspace(rootPath: string): Promise<Workspace>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    const [agents, rules, layerOptions, sharedRules] = await Promise.all([
+    const [agents, rules, layerOptions, sharedRules, skills] = await Promise.all([
         loadAgents(root, config.harnesses),
         loadRules(root, config.harnesses),
         loadLayerOptions(root, config),
         loadSharedRules(root),
+        loadSkills(root),
     ]);
-    return { root, config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents };
+    return { root, config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents, skills };
 }
 
 /** Atomically write an already validated config document. */
@@ -368,6 +382,7 @@ export async function deleteSource(rootPath: string, relativePath: string): Prom
     const relative = managedRelative(relativePath, relativePath);
     if (relative === ".halign/config.json") throw new HalignError(`${relative}: config.json cannot be deleted`);
     if (relative.startsWith(".halign/layers/")) throw new HalignError(`${relative}: layer options are deleted with removeLayerOption`);
+    if (relative.startsWith(".halign/skills/")) throw new HalignError(`${relative}: skills are deleted with removeSkill`);
     const path = await resolveManaged(root, relative, relative);
     const stats = await lstatIfExists(path);
     if (!stats) throw new HalignError(`${relative}: file does not exist`);
@@ -650,4 +665,40 @@ export async function addHarness(rootPath: string, harness: HarnessConfig): Prom
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     return saveConfig(root, { ...config, harnesses: [...config.harnesses, harness] });
+}
+
+/** Register a GitHub skill source URL in config. */
+export async function addSkillSource(rootPath: string, input: { url: string; branch?: string }): Promise<Config>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const source = input.branch === undefined
+        ? parseGitHubSkillSource(input.url)
+        : parseGitHubSkillSource(input.url, input.branch);
+    const key = `${source.owner.toLowerCase()}/${source.name.toLowerCase()}`;
+    if (config.skillSources.some((item) => `${item.owner.toLowerCase()}/${item.name.toLowerCase()}` === key))
+    {
+        throw new HalignError(`.halign/config.json: skill_sources owner/name must be unique without case sensitivity, got ${valueText(`${source.owner}/${source.name}`)}`);
+    }
+    if (config.skillSources.some((item) => item.owner.toLowerCase() === source.owner.toLowerCase()
+        && item.name.toLowerCase() === source.name.toLowerCase()
+        && item.branch !== source.branch))
+    {
+        throw new HalignError(`.halign/config.json: only one branch per skill repository is allowed, got ${valueText(source.branch)}`);
+    }
+    return saveConfig(root, { ...config, skillSources: [...config.skillSources, source] });
+}
+
+/** Remove a registered GitHub skill source from config. */
+export async function removeSkillSource(rootPath: string, owner: string, name: string): Promise<Config>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const nextSources = config.skillSources.filter((source) =>
+        !(source.owner.toLowerCase() === owner.toLowerCase() && source.name.toLowerCase() === name.toLowerCase()));
+    if (nextSources.length === config.skillSources.length)
+    {
+        throw new HalignError(`.halign/config.json: skill source is not configured, got ${valueText(`${owner}/${name}`)}`);
+    }
+    return saveConfig(root, { ...config, skillSources: nextSources });
 }

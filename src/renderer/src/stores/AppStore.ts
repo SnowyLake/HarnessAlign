@@ -7,7 +7,7 @@ import type { ThemeMode } from "@shared/models/AppSettings";
 import type { LayerSelection, Workspace } from "@shared/models/Workspace";
 
 /** Workspace modules available from the primary navigation. */
-export type WorkspaceView = "project" | "rules" | "layers" | "agents" | "generated";
+export type WorkspaceView = "project" | "rules" | "layers" | "skills" | "agents" | "generated";
 
 /** Top-level desktop shell view. */
 export type AppView = WorkspaceView | "settings" | "showcase";
@@ -103,6 +103,8 @@ function selectionMatchesView(view: WorkspaceView, selection: Selection, workspa
                 || (selection.kind === "layer" && Object.hasOwn(workspace.layerOptions, selection.name))
                 || (selection.kind === "layer-option-new" && Object.hasOwn(workspace.layerOptions, selection.layer))
                 || (selection.kind === "layer-option" && Object.values(workspace.layerOptions).flat().some((item) => item.path === selection.path));
+        case "skills":
+            return selection.kind === "config";
         case "agents":
             return selection.kind === "agent-new"
                 || (selection.kind === "agent" && workspace.agents.some((item) => item.path === selection.path));
@@ -133,6 +135,8 @@ function selectionForView(view: WorkspaceView, selection: Selection, workspace: 
             const option = workspace.layerOptions[layer]?.[0];
             return option ? { kind: "layer-option", path: option.path } : { kind: "layer-option-new", layer };
         }
+        case "skills":
+            return { kind: "config" };
         case "agents":
         {
             const agent = workspace.agents[0];

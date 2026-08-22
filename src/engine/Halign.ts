@@ -13,13 +13,14 @@ import { loadConfig } from "./Load.js";
 import { errorText, HalignError, type LayerSelection } from "./Model.js";
 import { reportSetup, setup } from "./Setup.js";
 
-export type { Agent, AgentFormat, Config, Harness, HarnessConfig, LayerConfig, LayerOption, LayerSelection, OutputMap, Rule } from "./Model.js";
-export type { SetupResult, SetupTargetReport } from "./Setup.js";
+export type { Agent, AgentFormat, Config, Harness, HarnessConfig, LayerConfig, LayerOption, LayerSelection, OutputMap, ProjectSkill, Rule, SkillOrigin, SkillSource, UserSkill } from "./Model.js";
+export type { SetupResult, SetupSkillsReport, SetupTargetReport } from "./Setup.js";
 export type { LayerOptionInput, RuleInput, SharedRule, Workspace } from "./Edit.js";
 export { HalignError } from "./Model.js";
 export { atomicWrite } from "./FsSafe.js";
 export { loadConfig, loadLayerOptions, loadSharedRules, validateConfig } from "./Load.js";
-export { addHarness, addLayer, addLayerOption, deleteSource, loadWorkspace, removeHarness, removeLayer, removeLayerOption, renameHarness, renameLayer, renameLayerOption, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule } from "./Edit.js";
+export { addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, importUserSkills, listUserSkills, loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule } from "./Edit.js";
+export { assertSafeZipEntry, hashSkillDirectory, installSkillFromDirectory, loadSkills, parseGitHubSkillSource, readSkillFrontmatter } from "./Skills.js";
 export { downgradeMarkdownHeadings, renderMarkdownToc } from "./Render.js";
 export { buildOutputs, check, generate, reportGenerate, safeOutputRelative } from "./Generate.js";
 export { reportSetup, setup } from "./Setup.js";

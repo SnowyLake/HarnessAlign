@@ -7,11 +7,16 @@ import {
     addHarness,
     addLayer,
     addLayerOption,
+    addSkillSource,
     deleteSource,
+    importUserSkills,
+    listUserSkills,
     loadWorkspace,
     removeHarness,
     removeLayer,
     removeLayerOption,
+    removeSkill,
+    removeSkillSource,
     renameHarness,
     renameLayer,
     renameLayerOption,
@@ -23,8 +28,20 @@ import {
 } from "../../engine/Edit.js";
 import { check, generate, readGeneratedFiles, reportGenerate } from "../../engine/Generate.js";
 import { reportSetup, setup } from "../../engine/Setup.js";
-import type { Agent, Config, HarnessConfig, LayerOptionInput, LayerSelection, RuleInput, Workspace } from "../../shared/models/Workspace.js";
+import type {
+    Agent,
+    Config,
+    HarnessConfig,
+    LayerOptionInput,
+    LayerSelection,
+    RemoteSkill,
+    RuleInput,
+    SkillUpdate,
+    UserSkill,
+    Workspace,
+} from "../../shared/models/Workspace.js";
 import { ABSOLUTE_PATH_SCHEMA } from "../../shared/models/Schemas.js";
+import * as skillRemote from "./SkillRemoteService.js";
 
 /** Resolve and validate an absolute workspace root from the renderer. */
 function rootPath(root: string): string
@@ -137,6 +154,60 @@ export class WorkspaceService
     renameHarness(root: string, from: string, to: string): Promise<void>
     {
         return renameHarness(rootPath(root), from, to);
+    }
+
+    /** Register a GitHub skill source URL. */
+    addSkillSource(root: string, input: { url: string; branch?: string }): Promise<Config>
+    {
+        return addSkillSource(rootPath(root), input);
+    }
+
+    /** Remove a registered GitHub skill source. */
+    removeSkillSource(root: string, owner: string, name: string): Promise<Config>
+    {
+        return removeSkillSource(rootPath(root), owner, name);
+    }
+
+    /** Discover remote skills from configured GitHub sources. */
+    discoverSkills(root: string): Promise<RemoteSkill[]>
+    {
+        return skillRemote.discoverSkills(rootPath(root));
+    }
+
+    /** Install selected discovered skills into the project. */
+    installSkills(root: string, ids: string[]): Promise<string>
+    {
+        return skillRemote.installSkills(rootPath(root), ids);
+    }
+
+    /** Compare installed GitHub skills with remote content hashes. */
+    checkSkillUpdates(root: string): Promise<SkillUpdate[]>
+    {
+        return skillRemote.checkSkillUpdates(rootPath(root));
+    }
+
+    /** Apply remote updates for selected installed skills. */
+    applySkillUpdates(root: string, ids: string[]): Promise<string>
+    {
+        return skillRemote.applySkillUpdates(rootPath(root), ids);
+    }
+
+    /** List skills under the current user profile. */
+    listUserSkills(): Promise<UserSkill[]>
+    {
+        return listUserSkills();
+    }
+
+    /** Import selected user-profile skills into the project. */
+    importUserSkills(root: string, ids: string[], overwrite: boolean): Promise<string>
+    {
+        return importUserSkills(rootPath(root), ids, overwrite);
+    }
+
+    /** Remove one installed project skill. */
+    removeSkill(root: string, id: string): Promise<void>
+    {
+        return removeSkill(rootPath(root), id);
     }
 
     /** Generate outputs and return the CLI report string. */

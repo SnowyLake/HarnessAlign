@@ -9,6 +9,7 @@ import {
     PaletteIcon,
     ScrollTextIcon,
     Settings2Icon,
+    SparklesIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
@@ -41,6 +42,7 @@ const WORKSPACE_NAV_ITEMS: NavItem[] = [
     { view: "project", label: "Project", icon: FolderCogIcon },
     { view: "rules", label: "Rules", icon: ScrollTextIcon },
     { view: "layers", label: "Layers", icon: Layers3Icon },
+    { view: "skills", label: "Skills", icon: SparklesIcon },
     { view: "agents", label: "Agents", icon: BotIcon },
     { view: "generated", label: "Generated", icon: FileOutputIcon },
 ];
@@ -169,7 +171,7 @@ export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: App
                 open={setupOpen}
                 onOpenChange={setSetupOpen}
                 title="Run Setup?"
-                description="Setup updates existing harness directories under USERPROFILE and shared-rules. Continue?"
+                description="Setup updates existing harness directories under USERPROFILE, shared-rules, and same-name skills. Other user skills are kept. Continue?"
                 confirmLabel="Setup"
                 confirmDisabled={isBusy}
                 onConfirm={onSetup}
