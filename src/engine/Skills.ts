@@ -11,6 +11,7 @@ import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegul
 import {
     codePointCompare,
     errorText,
+    FRONTMATTER,
     HalignError,
     hasOwn,
     isRecord,
@@ -118,7 +119,7 @@ export function parseGitHubSkillSource(url: string, branchOverride?: string): Sk
 /** Read lenient SKILL.md frontmatter name/description without reusing rule/agent parsers. */
 export function readSkillFrontmatter(text: string): { name?: string; description?: string }
 {
-    const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)(?:\r?\n)?/u.exec(text);
+    const match = FRONTMATTER.exec(text);
     if (!match) return {};
     let metadata: unknown;
     try
@@ -504,10 +505,12 @@ export async function listUserSkills(userProfile = process.env.USERPROFILE): Pro
     const skills: UserSkill[] = [];
     for (const entry of entries)
     {
-        if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+        if (entry.name.startsWith(".")) continue;
         const id = entry.name;
         if (!SKILL_NAME.test(id) || id.length > SKILL_NAME_MAX || WINDOWS_RESERVED_NAMES.has(id.toUpperCase())) continue;
         const directory = join(skillsRoot, id);
+        const directoryStats = await lstatIfExists(directory);
+        if (!directoryStats || directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) continue;
         const skillFile = join(directory, "SKILL.md");
         const skillStats = await lstatIfExists(skillFile);
         if (!skillStats?.isFile()) continue;

@@ -27,7 +27,7 @@ import {
     SidebarRail,
     useSidebar,
 } from "@/components/ui/sidebar";
-import { useAppStore, type AppView } from "@/stores/AppStore";
+import { useAppStore, visibleView, type AppView } from "@/stores/AppStore";
 
 /** Navigation item shown in the app chrome sidebar. */
 interface NavItem
@@ -67,7 +67,7 @@ export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: App
     const { toggleSidebar } = useSidebar();
     const [version, setVersion] = useState("");
     const [setupOpen, setSetupOpen] = useState(false);
-    const effectiveView = view === "showcase" && !import.meta.env.DEV ? "project" : view;
+    const effectiveView = visibleView(view);
 
     useEffect(() =>
     {
@@ -76,7 +76,7 @@ export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: App
 
     useEffect(() =>
     {
-        if (view === "showcase" && !import.meta.env.DEV) setView("project");
+        if (visibleView(view) !== view) setView(visibleView(view));
     }, [view, setView]);
 
     return (

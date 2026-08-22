@@ -2,8 +2,10 @@
  * Convert thrown values into IPC errors without leaking Node exceptions to the renderer.
  */
 
+import type { IpcMainInvokeEvent } from "electron";
 import { HalignError } from "../../engine/Model.js";
 import type { AppError } from "../../shared/models/AppError.js";
+import { isTrustedSender } from "../windows/MainWindow.js";
 
 /** Convert an unknown thrown value into the IPC error DTO. */
 export function toAppError(error: unknown): AppError
@@ -20,6 +22,12 @@ export function fail(error: unknown): never
     const thrown = new Error(appError.message);
     thrown.name = appError.code;
     throw thrown;
+}
+
+/** Reject IPC from any WebContents other than the main window. */
+export function assertTrusted(event: IpcMainInvokeEvent): void
+{
+    if (!isTrustedSender(event.sender)) fail(new Error("Invalid IPC sender"));
 }
 
 /** Run privileged work and convert domain failures into IPC errors. */

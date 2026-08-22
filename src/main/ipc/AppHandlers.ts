@@ -2,17 +2,10 @@
  * App IPC handlers. Paths and URLs from the renderer are validated here.
  */
 
-import { app, ipcMain, type IpcMainInvokeEvent, shell } from "electron";
+import { app, ipcMain, shell } from "electron";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import { HTTPS_URL_SCHEMA } from "../../shared/models/Schemas.js";
-import { fail, runIpc } from "../utils/Ipc.js";
-import { isTrustedSender } from "../windows/MainWindow.js";
-
-/** Reject IPC from any WebContents other than the main window. */
-function assertTrusted(event: IpcMainInvokeEvent): void
-{
-    if (!isTrustedSender(event.sender)) fail(new Error("Invalid IPC sender"));
-}
+import { assertTrusted, runIpc } from "../utils/Ipc.js";
 
 /** Register app-level IPC handlers. */
 export function registerAppHandlers(): void

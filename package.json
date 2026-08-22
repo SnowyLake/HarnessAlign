@@ -21,7 +21,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.engine.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "tsc -p tsconfig.engine.json && node --test dist/tests/Halign.test.js",
-    "verify": "npm run typecheck && npm run test",
+    "verify": "tsc -p tsconfig.engine.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && node --test dist/tests/Halign.test.js",
     "lint": "eslint .",
     "preinstall": "node -e \"if (!String(process.env.npm_config_user_agent || '').startsWith('npm/')) { process.stderr.write('This project uses npm. Run npm install.\\n'); process.exit(1) }\"",
     "postinstall": "node ./node_modules/electron/install.js",

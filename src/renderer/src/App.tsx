@@ -13,13 +13,13 @@ import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
 import { ShowcasePage } from "@/features/showcase/ShowcasePage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
 import { refreshWorkspace, runCommand } from "@/features/workspace/WorkspaceTasks";
-import { useAppStore } from "@/stores/AppStore";
+import { useAppStore, visibleView, type WorkspaceView } from "@/stores/AppStore";
 
 /** Root React tree for the desktop shell. */
 export function App()
 {
     const view = useAppStore((state) => state.view);
-    const effectiveView = view === "showcase" && !import.meta.env.DEV ? "project" : view;
+    const effectiveView = visibleView(view);
 
     useEffect(() =>
     {
@@ -119,9 +119,9 @@ export function App()
     /** Render the active feature page. */
     const page = effectiveView === "settings"
         ? <SettingsPage />
-        : effectiveView === "showcase"
+        : import.meta.env.DEV && effectiveView === "showcase"
             ? <ShowcasePage />
-            : <WorkspacePage view={effectiveView} />;
+            : <WorkspacePage view={effectiveView as WorkspaceView} />;
 
     return (
         <Toaster>

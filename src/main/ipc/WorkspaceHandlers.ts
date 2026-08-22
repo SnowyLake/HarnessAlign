@@ -2,19 +2,12 @@
  * Workspace IPC handlers. Every path and payload is validated in Main before touching the engine.
  */
 
-import { dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
+import { dialog, ipcMain } from "electron";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import type { Agent, Config, HarnessConfig, LayerOptionInput, LayerSelection, RuleInput } from "../../shared/models/Workspace.js";
 import { settingsService } from "../services/SettingsService.js";
 import { workspaceService } from "../services/WorkspaceService.js";
-import { fail, runIpc } from "../utils/Ipc.js";
-import { isTrustedSender } from "../windows/MainWindow.js";
-
-/** Reject IPC from any WebContents other than the main window. */
-function assertTrusted(event: IpcMainInvokeEvent): void
-{
-    if (!isTrustedSender(event.sender)) fail(new Error("Invalid IPC sender"));
-}
+import { assertTrusted, runIpc } from "../utils/Ipc.js";
 
 /** Register workspace IPC handlers. */
 export function registerWorkspaceHandlers(): void

@@ -214,20 +214,20 @@ export class WorkspaceService
     async generate(root: string, selection?: LayerSelection[]): Promise<string>
     {
         const resolved = rootPath(root);
-        const outputs = selection ? await generate(resolved, selection) : await generate(resolved);
+        const outputs = await generate(resolved, selection);
         return reportGenerate(join(resolved, ".halign", "generated"), outputs);
     }
 
     /** Compare generated output with the workspace and return differences. */
     check(root: string, selection?: LayerSelection[]): Promise<string[]>
     {
-        return selection ? check(rootPath(root), selection) : check(rootPath(root));
+        return check(rootPath(root), selection);
     }
 
     /** Generate then deploy into existing user harness roots. */
     async setup(root: string, selection?: LayerSelection[]): Promise<string>
     {
-        return reportSetup(selection ? await setup(rootPath(root), selection) : await setup(rootPath(root)));
+        return reportSetup(await setup(rootPath(root), selection));
     }
 }
 

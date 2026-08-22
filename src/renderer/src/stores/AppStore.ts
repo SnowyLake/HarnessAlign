@@ -12,6 +12,12 @@ export type WorkspaceView = "project" | "rules" | "layers" | "skills" | "agents"
 /** Top-level desktop shell view. */
 export type AppView = WorkspaceView | "settings" | "showcase";
 
+/** Map a stored view to the view the chrome may actually show. */
+export function visibleView(view: AppView): AppView
+{
+    return view === "showcase" && !import.meta.env.DEV ? "project" : view;
+}
+
 /** Tone applied to output notifications and the full output dialog. */
 export type OutputTone = "neutral" | "success" | "error";
 

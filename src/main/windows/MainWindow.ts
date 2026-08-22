@@ -20,6 +20,22 @@ export function isTrustedSender(sender: Electron.WebContents): boolean
     return mainWindow !== undefined && sender.id === mainWindow.webContents.id;
 }
 
+/** Return whether renderer navigation is allowed for the current runtime. */
+function isAllowedRendererNavigation(url: string): boolean
+{
+    let parsed: URL;
+    try
+    {
+        parsed = new URL(url);
+    }
+    catch
+    {
+        return false;
+    }
+    if (import.meta.env.DEV) return parsed.protocol === "http:" && parsed.hostname === "localhost";
+    return parsed.protocol === "file:";
+}
+
 /** Create the sandboxed main window and load the renderer. */
 export function createMainWindow(): BrowserWindow
 {
@@ -43,10 +59,7 @@ export function createMainWindow(): BrowserWindow
     mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     mainWindow.webContents.on("will-navigate", (event, url) =>
     {
-        const allowed = import.meta.env.DEV
-            ? url.startsWith("http://localhost")
-            : url.startsWith("file:");
-        if (!allowed) event.preventDefault();
+        if (!isAllowedRendererNavigation(url)) event.preventDefault();
     });
 
     if (import.meta.env.DEV && process.env.ELECTRON_RENDERER_URL)

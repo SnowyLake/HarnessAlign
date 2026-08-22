@@ -302,7 +302,7 @@ npm run test
 npm run verify
 ```
 
-`npm run verify` 依次执行类型检查和测试. `npm run typecheck` 检查引擎, Main/Preload 和 Renderer. `npm run test` 会先编译引擎, 再运行 `dist/tests/Halign.test.js`. `npm run build` 构建桌面壳.
+`npm run verify` 先编译引擎并类型检查 Main/Preload 与 Renderer, 再运行测试, 引擎只编译一次. `npm run typecheck` 检查引擎, Main/Preload 和 Renderer. `npm run test` 会先编译引擎, 再运行 `dist/tests/Halign.test.js`. `npm run build` 构建桌面壳.
 
 启动桌面壳:
 

@@ -44,22 +44,13 @@ export function downgradeMarkdownHeadings(body: string): string
     let fenceLength = 0;
     for (let line of body.split("\n"))
     {
-        if (fenceCharacter)
+        const wasFenced = fenceCharacter !== "";
+        [fenceCharacter, fenceLength] = fenceState(line, fenceCharacter, fenceLength);
+        if (!wasFenced && fenceCharacter === "")
         {
-            [fenceCharacter, fenceLength] = fenceState(line, fenceCharacter, fenceLength);
-            lines.push(line);
-            continue;
+            const heading = ATX_HEADING.exec(line);
+            if (heading && heading[2]!.length < 6) line = `${line.slice(0, heading[1]!.length)}#${line.slice(heading[1]!.length)}`;
         }
-        const fence = FENCE.exec(line);
-        if (fence)
-        {
-            fenceCharacter = fence[1]?.[0] ?? "";
-            fenceLength = fence[1]?.length ?? 0;
-            lines.push(line);
-            continue;
-        }
-        const heading = ATX_HEADING.exec(line);
-        if (heading && heading[2]!.length < 6) line = `${line.slice(0, heading[1]!.length)}#${line.slice(heading[1]!.length)}`;
         lines.push(line);
     }
     return lines.join("\n");
@@ -102,18 +93,9 @@ export function renderMarkdownToc(bodies: string[], name: string): string
         let fenceLength = 0;
         for (const line of body.split("\n"))
         {
-            if (fenceCharacter)
-            {
-                [fenceCharacter, fenceLength] = fenceState(line, fenceCharacter, fenceLength);
-                continue;
-            }
-            const fence = FENCE.exec(line);
-            if (fence)
-            {
-                fenceCharacter = fence[1]?.[0] ?? "";
-                fenceLength = fence[1]?.length ?? 0;
-                continue;
-            }
+            const wasFenced = fenceCharacter !== "";
+            [fenceCharacter, fenceLength] = fenceState(line, fenceCharacter, fenceLength);
+            if (wasFenced || fenceCharacter !== "") continue;
             const heading = ATX_HEADING.exec(line);
             if (!heading) continue;
             const title = line.slice(heading[0].length).trim().replace(/[ \t]+#+[ \t]*$/u, "");

@@ -2,18 +2,12 @@
  * Settings IPC handlers. Persist through SettingsService and push changes to the renderer.
  */
 
-import { ipcMain, type IpcMainInvokeEvent } from "electron";
+import { ipcMain } from "electron";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import type { AppSettings } from "../../shared/models/AppSettings.js";
 import { settingsService } from "../services/SettingsService.js";
-import { fail, runIpc } from "../utils/Ipc.js";
-import { getMainWindow, isTrustedSender } from "../windows/MainWindow.js";
-
-/** Reject IPC from any WebContents other than the main window. */
-function assertTrusted(event: IpcMainInvokeEvent): void
-{
-    if (!isTrustedSender(event.sender)) fail(new Error("Invalid IPC sender"));
-}
+import { assertTrusted, runIpc } from "../utils/Ipc.js";
+import { getMainWindow } from "../windows/MainWindow.js";
 
 /** Notify the renderer after settings.json changes. */
 function emitChanged(settings: AppSettings): void

@@ -59,11 +59,12 @@ export async function buildOutputs(rootPath: string, selection?: readonly LayerS
         loadLayerOptions(root, config),
     ]);
     const [selections, selectedLayers] = selectedLayerOptions(config, layerOptions, selection);
+    const orderedAgents = agents.slice().sort((left, right) => codePointCompare(left.name, right.name));
     const outputs: OutputMap = new Map();
     for (const harness of config.harnesses)
     {
         outputs.set(`${harness.name}/AGENTS.md`, renderAgentsMarkdown(rules, selectedLayers, harness.name, config.name));
-        for (const agent of agents.slice().sort((left, right) => codePointCompare(left.name, right.name)))
+        for (const agent of orderedAgents)
         {
             const metadata = agent.harnesses[harness.name];
             if (!metadata) continue;
@@ -165,15 +166,16 @@ async function loadManifest(root: string): Promise<string[]>
 }
 
 /** Collect generated paths that will be written or deleted, after containment checks. */
-async function preflightOutputChanges(root: string, expected: OutputMap): Promise<string[]>
+async function preflightOutputChanges(root: string, expected: OutputMap): Promise<{ stalePaths: string[]; resolved: Map<string, string> }>
 {
     const oldFiles = await loadManifest(root);
     const currentFiles = new Set([...expected.keys()].filter((path) => path !== ".manifest.json"));
     const stale = oldFiles.filter((path) => !currentFiles.has(path));
-    for (const path of expected.keys()) await destination(root, path);
+    const resolved = new Map<string, string>();
+    for (const path of expected.keys()) resolved.set(path, await destination(root, path));
     const stalePaths: string[] = [];
     for (const path of stale) stalePaths.push(await destination(root, path));
-    return stalePaths;
+    return { stalePaths, resolved };
 }
 
 /** Write generated files and replace the manifest after a successful preflight. */
@@ -181,19 +183,19 @@ export async function generate(rootPath: string, selection?: readonly LayerSelec
 {
     const expected = await buildOutputs(rootPath, selection);
     const root = resolve(rootPath);
-    const stalePaths = await preflightOutputChanges(root, expected);
+    const { stalePaths, resolved } = await preflightOutputChanges(root, expected);
     const generated = await outputRoot(root);
     await fs.mkdir(generated, { recursive: true });
     for (const [path, content] of expected)
     {
-        if (path !== ".manifest.json") await atomicWrite(await destination(root, path), content);
+        if (path !== ".manifest.json") await atomicWrite(resolved.get(path)!, content);
     }
     for (const path of stalePaths)
     {
         const stats = await lstatIfExists(path);
         if (stats) await fs.unlink(path);
     }
-    await atomicWrite(await destination(root, ".manifest.json"), expected.get(".manifest.json")!);
+    await atomicWrite(resolved.get(".manifest.json")!, expected.get(".manifest.json")!);
     return expected;
 }
 

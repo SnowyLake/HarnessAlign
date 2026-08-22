@@ -13,6 +13,7 @@ import {
     AGENT_NAME,
     type Agent,
     type Config,
+    FRONTMATTER,
     type Harness,
     type HarnessConfig,
     HARNESS_FIELDS,
@@ -80,24 +81,7 @@ async function markdownFiles(
         }
     };
 
-    if (recursive)
-    {
-        await visit(directory);
-    }
-    else
-    {
-        const entries = await fs.readdir(directory, { withFileTypes: true });
-        entries.sort((left, right) => codePointCompare(left.name, right.name));
-        for (const entry of entries)
-        {
-            const path = join(directory, entry.name);
-            await ensureRegularSource(root, path);
-            const stats = await lstatIfExists(path);
-            if (!stats) continue;
-            if (stats.isSymbolicLink()) throw reparseError(root, path, false);
-            if (stats.isFile() && path.endsWith(".md")) files.push(path);
-        }
-    }
+    await visit(directory);
     return files;
 }
 
@@ -105,7 +89,7 @@ async function markdownFiles(
 async function parseFrontmatter(root: string, path: string): Promise<[Record<string, unknown>, string]>
 {
     const text = await readUtf8(root, path);
-    const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)(?:\r?\n)?/u.exec(text);
+    const match = FRONTMATTER.exec(text);
     if (!match)
     {
         throw new HalignError(`${display(root, path)}: frontmatter must start with a YAML mapping`);
@@ -386,7 +370,7 @@ export async function loadRules(root: string, harnesses: HarnessConfig[]): Promi
     for (const sourcePath of paths)
     {
         const path = display(root, sourcePath);
-        const foldedPath = path.toUpperCase().toLowerCase();
+        const foldedPath = path.toLowerCase();
         const existing = folded.get(foldedPath);
         if (existing && existing !== path)
         {
@@ -428,7 +412,7 @@ async function parseLayerSource(root: string, path: string): Promise<[Record<str
 {
     const text = await readUtf8(root, path);
     if (!/^---\r?\n/u.test(text)) return [{}, text];
-    const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)(?:\r?\n)?/u.exec(text);
+    const match = FRONTMATTER.exec(text);
     if (!match) throw new HalignError(`${display(root, path)}: invalid YAML frontmatter`);
     let metadata: unknown;
     try

@@ -6,7 +6,7 @@
 import { promises as fs } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
-import { assertContained, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError } from "./FsSafe.js";
+import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError } from "./FsSafe.js";
 import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, type SharedRule, validateConfig } from "./Load.js";
 import {
     AGENT_NAME,
@@ -65,7 +65,7 @@ export interface LayerOptionInput
 /** Sort editable rules by priority and use their paths as a deterministic tie-breaker. */
 function sortEditableRules(rules: Rule[]): Rule[]
 {
-    return rules.sort((left, right) => left.priority - right.priority || codePointCompare(left.path, right.path));
+    return rules.slice().sort((left, right) => left.priority - right.priority || codePointCompare(left.path, right.path));
 }
 
 /** Build the JSON document written to `config.json`. */
@@ -129,19 +129,6 @@ async function resolveManaged(root: string, relativePath: string, label: string)
     assertContained(root, path, label);
     await ensureRegularSource(root, path);
     return path;
-}
-
-/** Reject reparse points from the config root down to `path`. */
-async function assertNoReparseTree(root: string, path: string): Promise<void>
-{
-    const stats = await lstatIfExists(path);
-    if (!stats) return;
-    if (stats.isSymbolicLink()) throw reparseError(root, path, false);
-    if (!stats.isDirectory()) return;
-    for (const entry of await fs.readdir(path, { withFileTypes: true }))
-    {
-        await assertNoReparseTree(root, join(path, entry.name));
-    }
 }
 
 /** Atomically write a managed source file after reparse checks. */
@@ -467,6 +454,7 @@ export async function renameLayer(rootPath: string, from: string, to: string): P
     }
     const source = join(root, ".halign", "layers", from);
     const destination = join(root, ".halign", "layers", to);
+    await ensureRegularSource(root, source);
     await ensureRegularSource(root, destination);
     if (from !== to && await lstatIfExists(destination)) throw new HalignError(`${display(root, destination)}: path already exists`);
     const nextLayers = config.layers.map((layer) => (layer.name === from ? { ...layer, name: to } : layer));
@@ -513,7 +501,13 @@ export async function removeLayerOption(rootPath: string, layer: string, option:
     if (!layerOptions.some((candidate) => candidate.name === option)) throw new HalignError(`.halign/layers/${layer}: option does not exist, got ${valueText(option)}`);
     if (layerOptions.length === 1) throw new HalignError(`.halign/layers/${layer}: the final layer option cannot be removed`);
     if (layerConfig?.selected === option) throw new HalignError(`.halign/config.json: selected layer option cannot be removed, got ${valueText(option)}`);
-    await fs.unlink(join(root, ".halign", "layers", layer, `${option}.md`));
+    const relative = `.halign/layers/${layer}/${option}.md`;
+    const path = await resolveManaged(root, relative, relative);
+    const stats = await lstatIfExists(path);
+    if (!stats) throw new HalignError(`${relative}: file does not exist`);
+    if (stats.isSymbolicLink()) throw reparseError(root, path, false);
+    if (!stats.isFile()) throw new HalignError(`${relative}: managed source must be a file`);
+    await fs.unlink(path);
 }
 
 /** Rename a layer option and cascade the saved selection when necessary. */
@@ -532,6 +526,7 @@ export async function renameLayerOption(rootPath: string, layer: string, from: s
     }
     const source = join(root, ".halign", "layers", layer, `${from}.md`);
     const destination = join(root, ".halign", "layers", layer, `${to}.md`);
+    await ensureRegularSource(root, source);
     await ensureRegularSource(root, destination);
     if (source !== destination && await lstatIfExists(destination)) throw new HalignError(`${display(root, destination)}: path already exists`);
     const next = validateConfig(configDocument({
@@ -679,12 +674,6 @@ export async function addSkillSource(rootPath: string, input: { url: string; bra
     if (config.skillSources.some((item) => `${item.owner.toLowerCase()}/${item.name.toLowerCase()}` === key))
     {
         throw new HalignError(`.halign/config.json: skill_sources owner/name must be unique without case sensitivity, got ${valueText(`${source.owner}/${source.name}`)}`);
-    }
-    if (config.skillSources.some((item) => item.owner.toLowerCase() === source.owner.toLowerCase()
-        && item.name.toLowerCase() === source.name.toLowerCase()
-        && item.branch !== source.branch))
-    {
-        throw new HalignError(`.halign/config.json: only one branch per skill repository is allowed, got ${valueText(source.branch)}`);
     }
     return saveConfig(root, { ...config, skillSources: [...config.skillSources, source] });
 }

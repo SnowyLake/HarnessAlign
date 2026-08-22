@@ -10,7 +10,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { atomicWrite, addHarness, addLayer, addLayerOption, addSkillSource, assertSafeZipEntry, buildOutputs, check, deleteSource, downgradeMarkdownHeadings, generate, HalignError, hashSkillDirectory, importUserSkills, installSkillFromDirectory, loadConfig, loadSkills, loadWorkspace, parseGitHubSkillSource, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup, validateConfig } from "../src/engine/Halign.js";
+import { atomicWrite, addHarness, addLayer, addLayerOption, addSkillSource, assertSafeZipEntry, buildOutputs, check, deleteSource, downgradeMarkdownHeadings, generate, HalignError, hashSkillDirectory, importUserSkills, installSkillFromDirectory, listUserSkills, loadConfig, loadSkills, loadWorkspace, parseGitHubSkillSource, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup, validateConfig } from "../src/engine/Halign.js";
 
 const config = {
     version: 1,
@@ -684,6 +684,24 @@ test("importUserSkills respects overwrite and records local origin", async () =>
         await importUserSkills(root, ["demo"], true, userProfile);
         assert.equal(await readFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: User Demo\n---\n\nImported over github.\n");
         assert.equal((await loadSkills(root))[0]?.origin.kind, "local");
+    });
+});
+
+test("listUserSkills skips reparse skill directories", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const userProfile = join(root, "isolated-userprofile");
+        const skillsRoot = join(userProfile, ".agents", "skills");
+        const real = join(skillsRoot, "real");
+        await mkdir(real, { recursive: true });
+        await writeFile(join(real, "SKILL.md"), "---\nname: Real\n---\n\nBody.\n", "utf8");
+        const redirected = join(userProfile, "redirected-skill");
+        await mkdir(redirected, { recursive: true });
+        await writeFile(join(redirected, "SKILL.md"), "---\nname: Linked\n---\n\nBody.\n", "utf8");
+        await symlink(redirected, join(skillsRoot, "linked"), "junction");
+        const skills = await listUserSkills(userProfile);
+        assert.deepEqual(skills.map((skill) => skill.id), ["real"]);
     });
 });
 

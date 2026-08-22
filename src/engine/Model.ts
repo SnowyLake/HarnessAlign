@@ -29,6 +29,8 @@ export const WINDOWS_RESERVED_NAMES = new Set([
 export const ATX_HEADING = /^( {0,3})(#{1,6})(?=[ \t]|$)/u;
 /** Markdown fence opener. */
 export const FENCE = /^ {0,3}(`{3,}|~{3,})/u;
+/** YAML frontmatter fence at the start of a markdown file. */
+export const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)(?:\r?\n)?/u;
 /** Known rule frontmatter keys. */
 export const RULE_FIELDS = new Set(["priority", "targets"]);
 /** Known layer option frontmatter keys. */
@@ -198,15 +200,19 @@ export function hasOwn(record: Record<string, unknown>, field: string): boolean
 /** Compare two strings by Unicode code point for deterministic sorting. */
 export function codePointCompare(left: string, right: string): number
 {
-    const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? 0);
-    const rightPoints = Array.from(right, (character) => character.codePointAt(0) ?? 0);
-    const length = Math.min(leftPoints.length, rightPoints.length);
-    for (let index = 0; index < length; index += 1)
+    if (left === right) return 0;
+    const leftIterator = left[Symbol.iterator]();
+    const rightIterator = right[Symbol.iterator]();
+    for (;;)
     {
-        const difference = leftPoints[index]! - rightPoints[index]!;
+        const leftNext = leftIterator.next();
+        const rightNext = rightIterator.next();
+        if (leftNext.done === true && rightNext.done === true) return 0;
+        if (leftNext.done === true) return -1;
+        if (rightNext.done === true) return 1;
+        const difference = (leftNext.value.codePointAt(0) ?? 0) - (rightNext.value.codePointAt(0) ?? 0);
         if (difference !== 0) return difference;
     }
-    return leftPoints.length - rightPoints.length;
 }
 
 /** Return the first string in code-point order, or an empty string. */

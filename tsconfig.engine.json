@@ -11,6 +11,8 @@
     "useUnknownInCatchVariables": true,
     "forceConsistentCasingInFileNames": true,
     "noEmitOnError": true,
+    "incremental": true,
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
