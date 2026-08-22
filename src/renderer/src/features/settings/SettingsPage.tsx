@@ -1,5 +1,7 @@
 import type { ThemeMode } from "@shared/models/AppSettings";
 import { useEffect, useState } from "react";
+import { FolderOpenIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -18,7 +20,10 @@ export function SettingsPage()
 {
     const theme = useAppStore((state) => state.theme);
     const setTheme = useAppStore((state) => state.setTheme);
+    const workspaceRoot = useAppStore((state) => state.workspace?.root);
     const [version, setVersion] = useState("");
+    const [isOpening, setIsOpening] = useState(false);
+    const configDirectory = workspaceRoot ? `${workspaceRoot}\\.halign` : "%USERPROFILE%\\.halign";
 
     useEffect(() =>
     {
@@ -59,6 +64,29 @@ export function SettingsPage()
                         </SelectContent>
                     </Select>
                 </Label>
+                <div className="grid gap-1 text-[12px] text-muted-foreground">
+                    <span>Config directory</span>
+                    <div className="flex items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-foreground" title={configDirectory}>{configDirectory}</span>
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            disabled={isOpening}
+                            onClick={() =>
+                            {
+                                setIsOpening(true);
+                                void window.appApi.app.openConfigDirectory().then(() => undefined).catch((error: unknown) =>
+                                {
+                                    toast.add({ title: error instanceof Error ? error.message : String(error), type: "error" });
+                                }).finally(() => setIsOpening(false));
+                            }}
+                        >
+                            <FolderOpenIcon />
+                            Open
+                        </Button>
+                    </div>
+                </div>
                 <div className="grid gap-1 text-[12px] text-muted-foreground">
                     <span>App version</span>
                     <span className="text-foreground">{version || "—"}</span>

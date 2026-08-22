@@ -63,7 +63,7 @@
 1. Renderer 通过 `window.appApi` 发请求.
 2. Preload 只做 typed 桥接, 不含业务逻辑.
 3. Main handler 校验 sender 与输入, 再调用 `WorkspaceService`.
-4. 源文件写回走 `Edit.ts`: 先编码并校验, 再 `atomicWrite`. CLI 不调用 `Edit.ts`.
+4. 源文件写回走 `Edit.ts`: 先编码并校验, 再 `atomicWrite`. CLI 只调用 `ensureUserWorkspace`; 其他写回 API 供桌面壳与测试使用.
 5. GitHub Skills 发现, 下载, 解压只发生在 `SkillRemoteService`. 安装进 `.halign/skills/` 仍走 `Skills.ts`.
 
 `src/engine/Halign.ts` 是 ESM CLI 入口, 并对测试 re-export 公开 API. 入口判断必须先 `realpathSync` 解析 `npm link` 产生的真实路径, 避免目录联接导致 `main()` 未执行.
@@ -78,7 +78,7 @@
   - `Generate.ts` — `buildOutputs`, manifest, `generate`, `check`, `readGeneratedFiles`
   - `Skills.ts` — 项目 Skills 加载, 哈希, 安装, 导入与 zip 路径守卫; 不联网, 不依赖解压库
   - `Setup.ts` — 部署到已存在的用户 Harness 根目录, shared-rules 与 skills
-  - `Edit.ts` — 校验后写回 `.halign` 源文件; CLI 不调用, 供桌面壳与测试使用
+  - `Edit.ts` — 校验后写回 `.halign` 源文件; CLI 只调用 `ensureUserWorkspace`, 其他写回 API 供桌面壳与测试使用
   - `Halign.ts` — ESM CLI 入口, 并对测试 re-export 公开 API
 - `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, `SettingsService`, `WorkspaceService`, `SkillRemoteService`.
 - `src/preload/` 只把 typed `window.appApi` 暴露给 Renderer.
@@ -102,6 +102,8 @@ CLI:
 - `halign check [--layer <layer>=<option>]...` 比较期望输出与 `%USERPROFILE%\.halign\generated`, 一致返回 `0`, 存在差异时列出差异并返回 `1`.
 - `halign setup [--layer <layer>=<option>]...` 先生成, 再部署到已存在的用户 Harness 根目录, shared-rules 与项目 Skills.
 - `--layer` 覆盖 `config.json` 中对应 Layer 的 `selected`. 同一 Layer 不得重复传入. 未知 Layer 或不存在的选项是领域错误.
+- `halign --help` / `-h` 显示命令用法并返回 `0`. 可与业务命令同时出现, 此时不执行该命令.
+- `halign --version` / `-v` 打印 `package.json` 版本并返回 `0`.
 - 无效命令或参数输出 usage 并返回 `2`. 领域错误输出到 stderr 并返回 `1`.
 - 修改 `bin` 入口路径后必须重新执行 `npm link`.
 
@@ -131,14 +133,14 @@ CLI:
 
 - `generate` 只更新 `%USERPROFILE%\.halign\generated`.
 - `setup` 只更新配置中声明且根目录已经存在的 Harness. 不因部署而创建缺失的 Harness 根目录. 桌面壳的 Setup 按钮遵守同一规则.
-- 对已启用 Harness, `setup` 替换其 `agents` 目录并更新根 `AGENTS.md`.
+- 对已启用 Harness, `setup` 替换其 `agents` 目录并更新根 `AGENTS.md`. 没有生成 Subagent 时仍把目标 `agents/` 替换为空目录.
 - `setup` 用完整目录替换更新 `%USERPROFILE%\.agents\shared-rules`.
 - `setup` 按 skill id 覆盖部署 `%USERPROFILE%\.agents\skills\<id>\`, 不删除无关兄弟目录, 也不复制 `index.json`.
 - 缺失, 空, 或仅有 `index.json` 的 `.halign/skills/` 时, skills 部署跳过并成功; `shared-rules` 仍为必需.
 - 部署前必须验证解析后的目标位于 `USERPROFILE` 或项目生成目录内, 并拒绝既有 symlink 或 junction.
 - `setup` 相关验证只使用测试构造的临时 `USERPROFILE`, 不触碰开发机上的真实用户目录.
 - 不递归删除含有 reparse point 的部署目标.
-- 桌面壳把 theme 记在 Electron `userData`, 不写进本仓库.
+- 桌面壳把 theme 和窗口位置记在 Electron `userData`, 不写进本仓库.
 
 ## 修改流程
 

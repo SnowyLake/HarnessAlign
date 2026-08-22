@@ -125,6 +125,35 @@ async function snapshot(root: string): Promise<Map<string, Buffer>>
     return files;
 }
 
+/** Capture stdout and stderr while `run` executes, then restore the original writers. */
+async function withCapturedStdio(run: () => Promise<number>): Promise<{ code: number; stdout: string; stderr: string }>
+{
+    let stdout = "";
+    let stderr = "";
+    const originalOut = process.stdout.write;
+    const originalErr = process.stderr.write;
+    const capture = (target: "stdout" | "stderr"): typeof process.stdout.write => ((chunk: unknown, encoding?: unknown, callback?: unknown) =>
+    {
+        const text = String(chunk);
+        if (target === "stdout") stdout += text;
+        else stderr += text;
+        if (typeof encoding === "function") (encoding as () => void)();
+        else if (typeof callback === "function") (callback as () => void)();
+        return true;
+    }) as typeof process.stdout.write;
+    process.stdout.write = capture("stdout");
+    process.stderr.write = capture("stderr");
+    try
+    {
+        return { code: await run(), stdout, stderr };
+    }
+    finally
+    {
+        process.stdout.write = originalOut;
+        process.stderr.write = originalErr;
+    }
+}
+
 test("config and metadata validation reject unsafe input", async () =>
 {
     await withProject(async (root) =>
@@ -146,6 +175,14 @@ test("config and metadata validation reject unsafe input", async () =>
             { ...config.harnesses[0], config_path: ".halign" },
         ] }), "utf8");
         await assert.rejects(buildOutputs(root), /managed config directory/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
+            { ...config.harnesses[0], config_path: ".halign/extra" },
+        ] }), "utf8");
+        await assert.rejects(buildOutputs(root), /managed config directory/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
+            { ...config.harnesses[0], name: "con" },
+        ] }), "utf8");
+        await assert.rejects(buildOutputs(root), /Windows reserved device name/u);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, version: 2 }), "utf8");
         await assert.rejects(buildOutputs(root), /version must be integer 1/u);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, profiles: ["legacy"] }), "utf8");
@@ -868,5 +905,74 @@ test("cli uses USERPROFILE not the current working directory", async () =>
         process.chdir(previous);
         await rm(home, { recursive: true, force: true });
         await rm(cwd, { recursive: true, force: true });
+    }
+});
+
+test("cli help and version return 0 without touching USERPROFILE", async () =>
+{
+    const help = await withCapturedStdio(() => main(["--help"], ""));
+    assert.equal(help.code, 0);
+    assert.match(help.stdout, /halign --version/u);
+    assert.equal(help.stderr, "");
+    const commandHelp = await withCapturedStdio(() => main(["generate", "-h"], ""));
+    assert.equal(commandHelp.code, 0);
+    assert.equal(commandHelp.stdout, help.stdout);
+    const pkg = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as { version: string };
+    const version = await withCapturedStdio(() => main(["--version"], ""));
+    assert.equal(version.code, 0);
+    assert.equal(version.stdout, `${pkg.version}\n`);
+});
+
+test("cli usage covers invalid commands, missing --layer values, and duplicates", async () =>
+{
+    const missing = await withCapturedStdio(() => main([], ""));
+    assert.equal(missing.code, 2);
+    assert.match(missing.stderr, /usage: halign/u);
+    const unknown = await withCapturedStdio(() => main(["build"], ""));
+    assert.equal(unknown.code, 2);
+    const dangling = await withCapturedStdio(() => main(["generate", "--layer"], ""));
+    assert.equal(dangling.code, 2);
+    assert.match(dangling.stderr, /--layer requires a value/u);
+    const duplicate = await withCapturedStdio(() => main(["generate", "--layer", "soul=arona", "--layer", "soul=kei"], ""));
+    assert.equal(duplicate.code, 2);
+    assert.match(duplicate.stderr, /--layer must not repeat soul/u);
+});
+
+test("cli unknown --layer is a domain error against the user workspace", async () =>
+{
+    const home = await mkdtemp(join(tmpdir(), "halign-cli-layer-"));
+    try
+    {
+        await ensureUserWorkspace(home);
+        const result = await withCapturedStdio(() => main(["generate", "--layer", "soul=arona"], home));
+        assert.equal(result.code, 1);
+        assert.match(result.stderr, /unknown layer selection "soul"/u);
+    }
+    finally
+    {
+        await rm(home, { recursive: true, force: true });
+    }
+});
+
+test("setup on a fresh user workspace deploys empty agents and skips missing harness roots", async () =>
+{
+    const home = await mkdtemp(join(tmpdir(), "halign-fresh-setup-"));
+    try
+    {
+        await ensureUserWorkspace(home);
+        await mkdir(join(home, ".cursor"), { recursive: true });
+        const result = await setup(home, undefined, home);
+        const cursor = result.targets.find((target) => target.harness === "cursor");
+        assert.ok(cursor);
+        assert.equal(cursor.skipped, false);
+        assert.deepEqual(cursor.files, ["AGENTS.md"]);
+        assert.equal(result.targets.filter((target) => target.skipped).length, 2);
+        assert.equal(await readFile(join(home, ".cursor", "AGENTS.md"), "utf8").then((content) => content.includes("Generated by Harness Align")), true);
+        assert.deepEqual(await readdir(join(home, ".cursor", "agents")), []);
+        assert.ok(await readdir(join(home, ".agents", "shared-rules")).then(() => true));
+    }
+    finally
+    {
+        await rm(home, { recursive: true, force: true });
     }
 });

@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SourceEditor } from "@/components/ui/source-editor";
 import { toast } from "@/components/ui/toast";
-import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { persistLayerOptionRename, persistLayerRename, persistProjectConfig, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { catalogLayerNames, defaultLayerOption, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
@@ -135,13 +135,15 @@ function TargetBoxes({ selected }: { selected: string[] | undefined })
     );
 }
 
-/** Read checked harness names from a form, or `undefined` when none are checked. */
-function readTargets(root: HTMLElement): string[] | undefined
+/** Read checked harness names, omitting `targets` when none or all current harnesses are checked. */
+function readTargets(root: HTMLElement, harnessNames: readonly string[]): string[] | undefined
 {
-    const values = [...root.querySelectorAll("input[type=checkbox]")]
+    const values = [...root.querySelectorAll("input[name=targets]")]
         .filter((node) => (node as HTMLInputElement).checked)
         .map((node) => (node as HTMLInputElement).value);
-    return values.length === 0 ? undefined : values;
+    if (values.length === 0) return undefined;
+    if (values.length === harnessNames.length && harnessNames.every((name) => values.includes(name))) return undefined;
+    return values;
 }
 
 /** Inline form error banner. */
@@ -437,6 +439,9 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
                         {agentFileFormat === "toml" ? (
                             <Label className="grid gap-1 text-[12px] text-muted-foreground">instructions_field<Input name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", harness?.instructionsField ?? "")} /></Label>
                         ) : null}
+                        <div className="flex justify-end">
+                            <Button type="submit" size="sm" disabled={isBusy} onMouseDown={(event) => event.preventDefault()}>Save</Button>
+                        </div>
                     </div>
                 </details>
         </form>
@@ -565,7 +570,10 @@ function LayerForm({ workspace, name }: { workspace: Workspace; name: string })
     const editor = useEditorForm(editorKey, () => setDeleteOpen(true));
     const [layerName, setLayerName] = useState(draftText(editor.draft, "name", name));
 
-    if (options.length === 0) return <GeneratedEmpty />;
+    if (options.length === 0)
+    {
+        return <MissingEditorEmpty title="No options" description="This layer has no option files." />;
+    }
 
     return (
         <>
@@ -877,7 +885,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     const payload = rulePayload(
                         pathFromName(String(data.get("name") ?? "")),
                         existing?.priority ?? workspace.rootRules.length,
-                        readTargets(form),
+                        readTargets(form, workspace.config.harnesses.map((harness) => harness.name)),
                         String(data.get("body") ?? ""),
                     );
                     setFormError(undefined);
@@ -932,8 +940,14 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
     const editor = useEditorForm(editorKey, canDelete ? () => setDeleteOpen(true) : undefined);
     const [optionName, setOptionName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-option"));
 
-    if (selection.kind === "layer-option" && !existing) return <GeneratedEmpty />;
-    if (!layer) return <GeneratedEmpty />;
+    if (selection.kind === "layer-option" && !existing)
+    {
+        return <MissingEditorEmpty title="Option not found" description="This layer option is no longer in the workspace." />;
+    }
+    if (!layer)
+    {
+        return <MissingEditorEmpty title="Layer not found" description="This layer is no longer in the workspace." />;
+    }
 
     return (
         <>
@@ -947,7 +961,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                     const form = event.currentTarget;
                     const data = new FormData(form);
                     const nextName = ruleDisplayName(String(data.get("name") ?? "").trim() || "new-option");
-                    const targets = readTargets(form);
+                    const targets = readTargets(form, workspace.config.harnesses.map((harness) => harness.name));
                     const body = String(data.get("body") ?? "");
                     setFormError(undefined);
                     void runMutation(async () =>
@@ -1187,6 +1201,19 @@ function GeneratedEmpty()
     );
 }
 
+/** Empty state when the selected editor target is missing from the workspace. */
+function MissingEditorEmpty({ title, description }: { title: string; description: string })
+{
+    return (
+        <Empty className="border-0">
+            <EmptyHeader>
+                <EmptyTitle>{title}</EmptyTitle>
+                <EmptyDescription>{description}</EmptyDescription>
+            </EmptyHeader>
+        </Empty>
+    );
+}
+
 /** Move one Layer around the current ordered generation selection. */
 function moveLayerSelection(selection: readonly LayerSelection[], sourceName: string, targetName: string): LayerSelection[]
 {
@@ -1234,12 +1261,24 @@ export function ProjectEditor()
                     size="sm"
                     disabled={isBusy}
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => requestEditorAction(
-                        selection.kind === "config" || selection.kind === "harness" || selection.kind === "harness-new"
-                            ? selection
-                            : { kind: "config" },
-                        "save",
-                    )}
+                    onClick={() =>
+                    {
+                        void runMutation(async () =>
+                        {
+                            await persistProjectConfig(workspace);
+                            await refreshWorkspace(
+                                selection.kind === "harness" || selection.kind === "harness-new" ? selection : { kind: "config" },
+                            );
+                            toast.add({ title: "Saved config.json", type: "success" });
+                        }).then((result) =>
+                        {
+                            if (!result.ok) return;
+                            if (selection.kind === "harness" || selection.kind === "harness-new")
+                            {
+                                requestEditorAction(selection, "save");
+                            }
+                        });
+                    }}
                 >
                     Save
                 </Button>
@@ -1497,7 +1536,7 @@ export function WorkspaceEditor()
     if (selection.kind === "harness")
     {
         const harness = workspace.config.harnesses.find((item) => item.name === selection.name);
-        return harness ? <HarnessCard workspace={workspace} harness={harness} isInitiallyOpen /> : <GeneratedEmpty />;
+        return harness ? <HarnessCard workspace={workspace} harness={harness} isInitiallyOpen /> : <MissingEditorEmpty title="Harness not found" description="This harness is no longer in the workspace." />;
     }
     if (selection.kind === "harness-new") return <HarnessCard workspace={workspace} isInitiallyOpen />;
     if (selection.kind === "layer-new") return <LayerNewForm workspace={workspace} />;

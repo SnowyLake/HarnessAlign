@@ -1,6 +1,6 @@
 /**
  * Validated write-back for `.halign` sources used by the desktop shell and tests.
- * Encode and validate before `atomicWrite`. Multi-file updates are not a single disk transaction.
+ * CLI `main` only calls `ensureUserWorkspace`. Encode and validate before `atomicWrite`. Multi-file updates are not a single disk transaction.
  */
 
 import { promises as fs } from "node:fs";
@@ -11,6 +11,7 @@ import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, t
 import {
     AGENT_NAME,
     type Agent,
+    assertWindowsSafeName,
     codePointCompare,
     type Config,
     type Harness,
@@ -256,6 +257,7 @@ function assertAgentInput(agent: Agent, harnesses: HarnessConfig[]): void
     {
         throw new HalignError(`${agent.path}: name must match ${AGENT_NAME.source}, got ${valueText(agent.name)}`);
     }
+    assertWindowsSafeName(agent.name, agent.path);
     if (!agent.description.trim())
     {
         throw new HalignError(`${agent.path}: description must be a non-empty string, got ${valueText(agent.description)}`);
@@ -419,6 +421,8 @@ export async function addLayer(rootPath: string, name: string, initialOption: st
     const options = await loadLayerOptions(root, config);
     if (!LAYER_NAME.test(name)) throw new HalignError(`.halign/layers/${name}: layer name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
     if (!LAYER_NAME.test(initialOption)) throw new HalignError(`.halign/layers/${name}: option name must match ${LAYER_NAME.source}, got ${valueText(initialOption)}`);
+    assertWindowsSafeName(name, `.halign/layers/${name}`);
+    assertWindowsSafeName(initialOption, `.halign/layers/${name}`);
     if (catalogHasFoldedName(options, name))
     {
         throw new HalignError(`.halign/layers/${name}: layer already exists, got ${valueText(name)}`);
@@ -481,6 +485,7 @@ export async function renameLayer(rootPath: string, from: string, to: string): P
     const options = await loadLayerOptions(root, config);
     if (!hasCatalogLayer(options, from)) throw new HalignError(`.halign/layers/${from}: layer does not exist, got ${valueText(from)}`);
     if (!LAYER_NAME.test(to)) throw new HalignError(`.halign/layers/${to}: layer name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
+    assertWindowsSafeName(to, `.halign/layers/${to}`);
     if (from.toLowerCase() !== to.toLowerCase() && catalogHasFoldedName(options, to))
     {
         throw new HalignError(`.halign/layers/${to}: layer names must be unique without case sensitivity, got ${valueText(to)}`);
@@ -515,6 +520,7 @@ export async function addLayerOption(rootPath: string, layer: string, option: st
     const options = await loadLayerOptions(root, config);
     if (!hasCatalogLayer(options, layer)) throw new HalignError(`.halign/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
     if (!LAYER_NAME.test(option)) throw new HalignError(`layer option name must match ${LAYER_NAME.source}, got ${valueText(option)}`);
+    assertWindowsSafeName(option, `layer option ${option}`);
     if (options[layer]!.some((candidate) => candidate.name.toLowerCase() === option.toLowerCase()))
     {
         throw new HalignError(`.halign/layers/${layer}: option already exists, got ${valueText(option)}`);
@@ -553,6 +559,7 @@ export async function renameLayerOption(rootPath: string, layer: string, from: s
     const layerConfig = config.layers.find((candidate) => candidate.name === layer);
     if (!options[layer]!.some((candidate) => candidate.name === from)) throw new HalignError(`.halign/layers/${layer}: option does not exist, got ${valueText(from)}`);
     if (!LAYER_NAME.test(to)) throw new HalignError(`layer option name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
+    assertWindowsSafeName(to, `layer option ${to}`);
     if (from.toLowerCase() !== to.toLowerCase() && options[layer]!.some((candidate) => candidate.name.toLowerCase() === to.toLowerCase()))
     {
         throw new HalignError(`.halign/layers/${layer}: option names must be unique without case sensitivity, got ${valueText(to)}`);
@@ -598,6 +605,7 @@ export async function renameHarness(rootPath: string, from: string, to: string):
     {
         throw new HalignError(`.halign/config.json: name must match ${HARNESS_NAME.source}, got ${valueText(to)}`);
     }
+    assertWindowsSafeName(to, ".halign/config.json");
     if (from.toLowerCase() !== to.toLowerCase() && config.harnesses.some((harness) => harness.name.toLowerCase() === to.toLowerCase()))
     {
         throw new HalignError(`.halign/config.json: harness names must be unique without case sensitivity, got ${valueText(to)}`);

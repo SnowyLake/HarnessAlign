@@ -36,7 +36,7 @@ export function assertContained(root: string, path: string, label: string): void
     const pathRelative = relative(root, path);
     if (pathRelative === ".." || pathRelative.startsWith(`..${sep}`) || isAbsolute(pathRelative))
     {
-        throw new HalignError(`${label}: path must stay inside the project root`);
+        throw new HalignError(`${label}: path ${valueText(path)} must stay inside ${valueText(root)}, got relative ${valueText(pathRelative)}`);
     }
 }
 

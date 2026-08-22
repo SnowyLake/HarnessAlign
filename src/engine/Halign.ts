@@ -5,9 +5,9 @@
  * Terminal I/O stays in `main()`. The same module re-exports engine APIs for tests. Resolve `argv[1]` with `realpathSync` so a global bin link still runs `main()`.
  */
 
-import { realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureUserWorkspace } from "./Edit.js";
 import { check, generate, reportGenerate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
@@ -26,20 +26,48 @@ export { downgradeMarkdownHeadings, renderMarkdownToc } from "./Render.js";
 export { buildOutputs, check, generate, reportGenerate, safeOutputRelative } from "./Generate.js";
 export { reportSetup, setup } from "./Setup.js";
 
+/** CLI usage text written for `--help` and invalid arguments. */
+const USAGE = "usage: halign <generate|check|setup> [--layer <layer>=<option>]...\n       halign --help\n       halign --version\n";
+
+/** Read `package.json` version by walking up from this module, covering `src/` and `dist/`. */
+function packageVersion(): string
+{
+    let directory = dirname(fileURLToPath(import.meta.url));
+    for (let index = 0; index < 5; index += 1)
+    {
+        const candidate = join(directory, "package.json");
+        if (existsSync(candidate))
+        {
+            const parsed: unknown = JSON.parse(readFileSync(candidate, "utf8"));
+            if (typeof parsed === "object" && parsed !== null && "version" in parsed && typeof parsed.version === "string")
+            {
+                return parsed.version;
+            }
+        }
+        directory = join(directory, "..");
+    }
+    throw new HalignError("package.json: version was not found");
+}
+
 /** Write usage to stderr and return the invalid-argument exit code. */
 function usage(error?: string): number
 {
     if (error) process.stderr.write(`error: ${error}\n`);
-    process.stderr.write("usage: halign <generate|check|setup> [--layer <layer>=<option>]...\n");
+    process.stderr.write(USAGE);
     return 2;
 }
 
 /** CLI entry used by the `halign` binary and by tests. */
 export async function main(argv: string[], userProfile = process.env.USERPROFILE): Promise<number>
 {
-    if (argv.length === 1 && ["--help", "-h"].includes(argv[0]!))
+    if (argv.includes("--help") || argv.includes("-h"))
     {
-        process.stdout.write("usage: halign <generate|check|setup> [--layer <layer>=<option>]...\n");
+        process.stdout.write(USAGE);
+        return 0;
+    }
+    if (argv.includes("--version") || argv.includes("-v"))
+    {
+        process.stdout.write(`${packageVersion()}\n`);
         return 0;
     }
     const command = argv[0];
@@ -82,7 +110,7 @@ export async function main(argv: string[], userProfile = process.env.USERPROFILE
             const config = await loadConfig(root);
             const configured = new Set(config.layers.map((layer) => layer.name));
             const unknown = [...overrides.keys()].find((name) => !configured.has(name));
-            if (unknown !== undefined) throw new HalignError(`unknown layer selection ${JSON.stringify(unknown)}`);
+            if (unknown !== undefined) throw new HalignError(`unknown layer selection ${JSON.stringify(unknown)}; expected one of ${JSON.stringify([...configured].sort())}`);
             selection = config.layers.map((layer) => ({ name: layer.name, option: overrides.get(layer.name) ?? layer.selected }));
         }
         if (command === "generate")

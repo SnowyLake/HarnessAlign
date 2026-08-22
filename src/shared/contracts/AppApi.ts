@@ -23,6 +23,7 @@ export interface AppApi
     app: {
         getVersion(): Promise<string>;
         openExternal(url: string): Promise<void>;
+        openConfigDirectory(): Promise<string>;
     };
     settings: {
         get(): Promise<AppSettings>;

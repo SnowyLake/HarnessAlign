@@ -19,7 +19,7 @@ function assertContainedWithin(root: string, path: string, label: string): strin
     const pathRelative = relative(rootFull, pathFull);
     if (!pathRelative || pathRelative === ".." || pathRelative.startsWith(`..${sep}`) || isAbsolute(pathRelative))
     {
-        throw new HalignError(`${label}: path must stay inside its allowed root`);
+        throw new HalignError(`${label}: path ${valueText(path)} must stay inside ${valueText(rootFull)}, got relative ${valueText(pathRelative)}`);
     }
     return pathFull;
 }
@@ -105,7 +105,7 @@ async function removeDeploymentDirectory(userProfile: string, path: string, labe
 interface SetupInstallation
 {
     harness: Harness;
-    sourceAgents: string;
+    sourceAgents: string | undefined;
     sourceRules: string;
     targetAgents: string;
     targetRules: string;
@@ -244,11 +244,17 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
     for (const target of targets)
     {
         const sourceRoot = await assertNoReparseComponents(root, join(generatedRoot, target.harness), `${target.harness} generated source`);
-        const sourceAgents = await assertNoReparseComponents(root, join(sourceRoot, "agents"), `${target.harness} source agents`);
+        const sourceAgentsPath = await assertNoReparseComponents(root, join(sourceRoot, "agents"), `${target.harness} source agents`);
         const sourceRules = await assertNoReparseComponents(root, join(sourceRoot, "AGENTS.md"), `${target.harness} source AGENTS.md`);
-        await assertRegularDirectory(sourceAgents, `${target.harness} source agents`);
-        await assertNoReparseTree(sourceAgents, `${target.harness} source agents`);
         await assertRegularFile(sourceRules, `${target.harness} source AGENTS.md`);
+        const sourceAgentsStats = await lstatIfExists(sourceAgentsPath);
+        let sourceAgents: string | undefined;
+        if (sourceAgentsStats)
+        {
+            await assertRegularDirectory(sourceAgentsPath, `${target.harness} source agents`);
+            await assertNoReparseTree(sourceAgentsPath, `${target.harness} source agents`);
+            sourceAgents = sourceAgentsPath;
+        }
 
         const targetRoot = await assertNoReparseComponents(deploymentRoot, target.root, `${target.harness} target root`);
         const targetStats = await lstatIfExists(targetRoot);
@@ -267,7 +273,8 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
             await assertNoReparseTree(targetAgents, `${target.harness} target agents`);
         }
         await assertRegularFileIfPresent(targetRules, `${target.harness} target AGENTS.md`);
-        const files = ["AGENTS.md", ...(await listRelativeFiles(sourceAgents)).map((file) => `agents/${file}`)];
+        const agentFiles = sourceAgents === undefined ? [] : (await listRelativeFiles(sourceAgents)).map((file) => `agents/${file}`);
+        const files = ["AGENTS.md", ...agentFiles];
         installations.push({ harness: target.harness, sourceAgents, sourceRules, targetAgents, targetRules });
         reports.push({ harness: target.harness, root: targetRoot, skipped: false, files });
     }
@@ -308,7 +315,14 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
     {
         await removeDeploymentDirectory(deploymentRoot, installation.targetAgents, `${installation.harness} target agents`);
         await atomicWrite(installation.targetRules, await fs.readFile(installation.sourceRules));
-        await fs.cp(installation.sourceAgents, installation.targetAgents, { recursive: true, force: false, errorOnExist: true });
+        if (installation.sourceAgents !== undefined)
+        {
+            await fs.cp(installation.sourceAgents, installation.targetAgents, { recursive: true, force: false, errorOnExist: true });
+        }
+        else
+        {
+            await fs.mkdir(installation.targetAgents, { recursive: true });
+        }
     }
 
     const sharedFiles = await listRelativeFiles(sourceSharedRules);

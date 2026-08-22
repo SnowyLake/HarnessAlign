@@ -12,6 +12,7 @@ import {
     AGENT_FIELDS,
     AGENT_NAME,
     type Agent,
+    assertWindowsSafeName,
     type Config,
     FRONTMATTER,
     type Harness,
@@ -156,6 +157,7 @@ function validateHarnessConfig(value: unknown, path: string, index: number): Har
 
     const name = validateString(context, "name", value.name);
     if (!HARNESS_NAME.test(name)) throw new HalignError(`${context}: name must match ${HARNESS_NAME.source}, got ${valueText(name)}`);
+    assertWindowsSafeName(name, `${context}: name`);
     const configPath = relativeConfigPath(value.config_path, context, "config_path");
     const agentFormat = validateString(context, "agent_format", value.agent_format);
     if (agentFormat !== "toml" && agentFormat !== "yaml")
@@ -250,6 +252,8 @@ export function validateConfig(value: unknown): Config
         const selected = validateString(context, "selected", layer.selected);
         if (!LAYER_NAME.test(layerName)) throw new HalignError(`${context}: name must match ${LAYER_NAME.source}, got ${valueText(layerName)}`);
         if (!LAYER_NAME.test(selected)) throw new HalignError(`${context}: selected must match ${LAYER_NAME.source}, got ${valueText(selected)}`);
+        assertWindowsSafeName(layerName, `${context}: name`);
+        assertWindowsSafeName(selected, `${context}: selected`);
         return { name: layerName, selected };
     });
     if (!Array.isArray(value.harnesses) || value.harnesses.length === 0)
@@ -462,6 +466,7 @@ async function loadLayerDirectory(root: string, directory: string, layer: string
         {
             throw new HalignError(`${display(root, sourcePath)}: layer option name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
         }
+        assertWindowsSafeName(name, display(root, sourcePath));
         const folded = name.toLowerCase();
         const existing = foldedNames.get(folded);
         if (existing !== undefined)
@@ -521,6 +526,7 @@ export async function loadLayerOptions(root: string, config: Config): Promise<Re
         {
             throw new HalignError(`${display(root, directory)}: layer name must match ${LAYER_NAME.source}, got ${valueText(entry.name)}`);
         }
+        assertWindowsSafeName(entry.name, display(root, directory));
         discovered.add(entry.name);
         options[entry.name] = await loadLayerDirectory(root, directory, entry.name, configured.get(entry.name)?.selected, config.harnesses);
     }
@@ -558,6 +564,7 @@ export async function loadAgents(root: string, configuredHarnesses: HarnessConfi
         }
         const name = validateString(path, "name", metadata.name);
         if (!AGENT_NAME.test(name)) throw new HalignError(`${path}: name must match ${AGENT_NAME.source}, got ${valueText(name)}`);
+        assertWindowsSafeName(name, path);
         const foldedName = name.toLowerCase();
         if (names.has(foldedName))
         {

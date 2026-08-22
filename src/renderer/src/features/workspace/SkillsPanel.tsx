@@ -419,6 +419,7 @@ export function SkillsPanel()
                         size="sm"
                         variant="ghost"
                         disabled={isBusy || workspace.config.skillSources.length === 0}
+                        title={workspace.config.skillSources.length === 0 ? "Register a GitHub source on the Project page" : undefined}
                         onClick={handleDiscover}
                     >
                         <SearchIcon />
@@ -494,7 +495,9 @@ export function SkillsPanel()
                                 ? "No skills found in registered sources."
                                 : "No matching discovered skills."
                             : installed.length === 0
-                                ? "No installed skills yet. Use Discover or Import."
+                                ? workspace.config.skillSources.length === 0
+                                    ? "No installed skills yet. Register a GitHub source on the Project page, then Discover, or Import local skills."
+                                    : "No installed skills yet. Use Discover or Import."
                                 : "No matching skills."}
                     </p>
                 ) : listView === "installed" ? (
@@ -565,7 +568,6 @@ export function SkillsPanel()
                                 const overlap = selectedImport.filter((id) => installed.some((skill) => skill.id.toLowerCase() === id.toLowerCase()));
                                 if (overlap.length > 0)
                                 {
-                                    setImportOpen(false);
                                     setOverwriteOpen(true);
                                     return;
                                 }

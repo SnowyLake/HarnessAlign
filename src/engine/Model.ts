@@ -19,7 +19,7 @@ export const SKILL_NAME_MAX = 128;
 export const AGENT_EXTENSION = /^[a-z0-9][a-z0-9_-]*$/u;
 /** Known skill source object keys in config.json. */
 export const SKILL_SOURCE_FIELDS = new Set(["owner", "name", "branch"]);
-/** Windows reserved device names rejected as skill ids. */
+/** Windows reserved device names rejected as path segments. */
 export const WINDOWS_RESERVED_NAMES = new Set([
     "CON", "PRN", "AUX", "NUL",
     "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
@@ -171,6 +171,21 @@ export function valueText(value: unknown): string
     catch
     {
         return String(value);
+    }
+}
+
+/** Return whether `name` is a Windows reserved device name such as `con` or `lpt1`. */
+export function isWindowsReservedName(name: string): boolean
+{
+    return WINDOWS_RESERVED_NAMES.has(name.toUpperCase());
+}
+
+/** Throw if `name` cannot be used as a Windows directory or file stem. */
+export function assertWindowsSafeName(name: string, context: string): void
+{
+    if (isWindowsReservedName(name))
+    {
+        throw new HalignError(`${context}: name must not be a Windows reserved device name, got ${valueText(name)}`);
     }
 }
 

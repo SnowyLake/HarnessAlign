@@ -57,7 +57,7 @@ halign setup
 npm run dev
 ```
 
-窗口打开同一份用户配置. 主题保存在 Electron `userData`, 不会写入本仓库或 `%USERPROFILE%\.halign`.
+窗口打开同一份用户配置. 主题和窗口位置保存在 Electron `userData`, 不会写入本仓库或 `%USERPROFILE%\.halign`. 同时只运行一个窗口; 再次启动会聚焦已有窗口.
 
 Windows 安装包可用 `npm run build:win` 生成, 产物在 `release/`:
 
@@ -81,6 +81,7 @@ Windows 安装包可用 `npm run build:win` 生成, 产物在 `release/`:
 | `halign check` | 检查生成目录是否与当前配置一致 | `0` |
 | `halign setup` | 先生成, 再部署到当前用户已经启用的 Harness | `0` |
 | `halign --help` | 显示命令用法 | `0` |
+| `halign --version` | 打印工具版本 | `0` |
 
 三个业务命令都支持用可重复的 `--layer <layer>=<option>` 临时覆盖部分 Layer 选择:
 
@@ -106,7 +107,7 @@ halign setup --layer soul=kei
 - 在 Skills 页从已注册的 GitHub 仓库发现, 下载, 检查或应用更新, 从 `%USERPROFILE%\.agents\skills` 导入, 或移除已安装的项目 Skills.
 - 在 Generated 页查看最近一次生成结果. 不要手工改这些文件.
 - 使用当前未保存的 Layer 选择执行 Generate, Check 和 Setup.
-- 在 Settings 页切换主题.
+- 在 Settings 页切换主题, 或打开 `%USERPROFILE%\.halign`.
 
 Project 页 Layers 下方可以注册或移除 GitHub skill 仓库地址. 点 Save 后, 当前 Layer 顺序与选择会写回 `config.json`.
 
@@ -114,7 +115,7 @@ Project 页 Layers 下方可以注册或移除 GitHub skill 仓库地址. 点 Sa
 
 ## 配置目录
 
-一个配置目录的核心结构如下:
+用户配置 `%USERPROFILE%\.halign` 的核心结构如下:
 
 ```text
 .halign\
@@ -235,12 +236,12 @@ Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正�
 
 ## 部署结果
 
-`generate` 只更新配置目录里的 `.halign/generated/`. 每个已声明 Harness 会得到一份 `AGENTS.md` 和对应格式的 `agents/` 文件.
+`generate` 只更新 `%USERPROFILE%\.halign\generated`. 每个已声明 Harness 会得到一份 `AGENTS.md` 和对应格式的 `agents/` 文件.
 
 `setup` 在生成之后:
 
 - 更新 `%USERPROFILE%\<config_path>\AGENTS.md`
-- 替换该目录下的 `agents/`
+- 替换该目录下的 `agents/`. 当前没有生成 Subagent 时, 目标 `agents/` 会被替换为空目录
 - 用 `.halign/rules/shared/` 完整替换 `%USERPROFILE%\.agents\shared-rules`
 - 按 id 覆盖 `%USERPROFILE%\.agents\skills\<id>/`, 保留其他无关 skill, 也不复制 `index.json`
 

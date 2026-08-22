@@ -13,6 +13,7 @@ const appApi: AppApi = {
     app: {
         getVersion: () => ipcRenderer.invoke(IPC_CHANNELS.appGetVersion),
         openExternal: (url) => ipcRenderer.invoke(IPC_CHANNELS.appOpenExternal, url),
+        openConfigDirectory: () => ipcRenderer.invoke(IPC_CHANNELS.appOpenConfigDirectory),
     },
     settings: {
         get: () => ipcRenderer.invoke(IPC_CHANNELS.settingsGet),

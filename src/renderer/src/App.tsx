@@ -31,17 +31,28 @@ export function App()
             const loaded = await window.appApi.workspace.load();
             useAppStore.getState().setWorkspace(loaded);
             useAppStore.getState().setSelection({ kind: "config" });
-            useAppStore.getState().setOutput(`Opened ${loaded.root}`, "success", "Workspace opened");
+            useAppStore.getState().setOutput(`Loaded ${loaded.root}\\.halign`, "success", "Workspace loaded");
         })().catch((error: unknown) =>
         {
             const message = error instanceof Error ? error.message : String(error);
-            useAppStore.getState().setOutput(message, "error", "Open failed");
+            useAppStore.getState().setOutput(message, "error", "Load failed");
         });
         return window.appApi.settings.onChanged((settings) =>
         {
             useAppStore.getState().setTheme(settings.theme);
             applyTheme(settings.theme);
         });
+    }, []);
+
+    useEffect(() =>
+    {
+        const media = window.matchMedia("(prefers-color-scheme: dark)");
+        const sync = (): void =>
+        {
+            if (useAppStore.getState().theme === "system") applyTheme("system");
+        };
+        media.addEventListener("change", sync);
+        return () => media.removeEventListener("change", sync);
     }, []);
 
     /** Generate outputs for the current ordered layer selection. */

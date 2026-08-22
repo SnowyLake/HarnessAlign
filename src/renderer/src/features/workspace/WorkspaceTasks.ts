@@ -5,6 +5,21 @@
 
 import { toast } from "@/components/ui/toast";
 import { selectionKey, useAppStore, type Selection } from "@/stores/AppStore";
+import type { Config, Workspace } from "@shared/models/Workspace";
+
+/** Persist the Project title and current ordered Layer selection to `config.json`. */
+export async function persistProjectConfig(workspace: Workspace): Promise<void>
+{
+    const editorKey = selectionKey({ kind: "config" });
+    const draft = useAppStore.getState().editorDrafts[editorKey];
+    const next: Config = {
+        ...workspace.config,
+        name: (draft?.current.name?.[0] ?? workspace.config.name).trim(),
+        layers: useAppStore.getState().layerSelection.map((item) => ({ name: item.name, selected: item.option })),
+    };
+    await window.appApi.workspace.saveConfig(next);
+    useAppStore.getState().clearEditorDraft(editorKey);
+}
 
 /** Reload the open workspace after a source or generate change. */
 export async function refreshWorkspace(next?: Selection): Promise<void>
@@ -49,7 +64,7 @@ export async function runMutation(work: () => Promise<void>): Promise<{ ok: true
     catch (error)
     {
         const message = error instanceof Error ? error.message : String(error);
-        toast.add({ title: "Action failed", type: "error" });
+        toast.add({ title: message, type: "error" });
         return { ok: false, message };
     }
     finally

@@ -5,6 +5,7 @@
 import { app } from "electron";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { atomicWrite } from "../../engine/FsSafe.js";
 import { DEFAULT_APP_SETTINGS, type AppSettings } from "../../shared/models/AppSettings.js";
 import { APP_SETTINGS_SCHEMA, SETTINGS_PATCH_SCHEMA } from "../../shared/models/Schemas.js";
 
@@ -38,7 +39,7 @@ export class SettingsService
         const parsedPatch = SETTINGS_PATCH_SCHEMA.parse(patch);
         const next: AppSettings = { theme: parsedPatch.theme ?? current.theme };
         await fs.mkdir(app.getPath("userData"), { recursive: true });
-        await fs.writeFile(settingsPath(), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+        await atomicWrite(settingsPath(), Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
         return next;
     }
 }
