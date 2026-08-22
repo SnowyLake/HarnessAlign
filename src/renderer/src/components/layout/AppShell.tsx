@@ -51,14 +51,13 @@ const WORKSPACE_NAV_ITEMS: NavItem[] = [
 export interface AppShellProps
 {
     children: ReactNode;
-    onOpen: () => void;
     onGenerate: () => void;
     onCheck: () => void;
     onSetup: () => void;
 }
 
 /** App chrome: shadcn Sidebar inset, header actions, and page children. */
-export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: AppShellProps)
+export function AppShell({ children, onGenerate, onCheck, onSetup }: AppShellProps)
 {
     const view = useAppStore((state) => state.view);
     const setView = useAppStore((state) => state.setView);
@@ -144,16 +143,8 @@ export function AppShell({ children, onOpen, onGenerate, onCheck, onSetup }: App
                 <SidebarRail />
             </Sidebar>
             <SidebarInset className="min-h-0 overflow-hidden">
-                <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
-                    <div className="flex min-w-0 flex-1 items-center gap-2">
-                        <Button className="shrink-0" size="sm" variant={workspace ? "outline" : "default"} disabled={isBusy} onClick={onOpen}>
-                            Open
-                        </Button>
-                        <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground" title={workspace?.root ?? "No project"}>
-                            {workspace?.root ?? "No project"}
-                        </span>
-                    </div>
-                    <div className="ml-auto flex shrink-0 items-center gap-2">
+                <header className="flex h-12 shrink-0 items-center justify-end gap-2 border-b border-border px-3">
+                    <div className="flex shrink-0 items-center gap-2">
                         <Button size="sm" variant="secondary" disabled={!workspace || isBusy} onClick={onCheck}>
                             Check
                         </Button>

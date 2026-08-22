@@ -5,9 +5,9 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { isAbsolute, join, posix, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError } from "./FsSafe.js";
+import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError, resolveUserHome } from "./FsSafe.js";
 import {
     codePointCompare,
     errorText,
@@ -491,11 +491,7 @@ export async function removeSkill(rootPath: string, id: string): Promise<void>
 /** List skills installed under `%USERPROFILE%\.agents\skills`. */
 export async function listUserSkills(userProfile = process.env.USERPROFILE): Promise<UserSkill[]>
 {
-    if (!userProfile || !isAbsolute(userProfile))
-    {
-        throw new HalignError(`USERPROFILE must be an absolute path, got ${valueText(userProfile)}`);
-    }
-    const skillsRoot = join(resolve(userProfile), ".agents", "skills");
+    const skillsRoot = join(resolveUserHome(userProfile), ".agents", "skills");
     const stats = await lstatIfExists(skillsRoot);
     if (!stats) return [];
     if (stats.isSymbolicLink()) throw new HalignError(`${skillsRoot}: symbolic link skill sources are not allowed`);
@@ -529,10 +525,7 @@ export async function importUserSkills(
 ): Promise<string>
 {
     const root = resolve(rootPath);
-    if (!userProfile || !isAbsolute(userProfile))
-    {
-        throw new HalignError(`USERPROFILE must be an absolute path, got ${valueText(userProfile)}`);
-    }
+    userProfile = resolveUserHome(userProfile);
     if (ids.length === 0) throw new HalignError("import requires at least one skill id");
     const unique = new Set<string>();
     for (const id of ids)

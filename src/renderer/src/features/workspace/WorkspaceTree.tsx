@@ -220,9 +220,9 @@ async function renameRuleFromTree(workspace: Workspace, rule: RuleInput | Shared
         nextPath = uniqueRulePath(rule.path, name, [...workspace.rootRules, ...workspace.sharedRules].map((item) => item.path));
         if (nextPath !== rule.path)
         {
-            if ("priority" in rule) await window.appApi.workspace.saveRule(workspace.root, { ...rule, path: nextPath });
-            else await window.appApi.workspace.saveSharedRule(workspace.root, nextPath, rule.body);
-            await window.appApi.workspace.deleteSource(workspace.root, rule.path);
+            if ("priority" in rule) await window.appApi.workspace.saveRule({ ...rule, path: nextPath });
+            else await window.appApi.workspace.saveSharedRule(nextPath, rule.body);
+            await window.appApi.workspace.deleteSource(rule.path);
 
             const state = useAppStore.getState();
             const previousKey = selectionKey({ kind: "rule", path: rule.path });
@@ -263,7 +263,7 @@ async function persistRuleOrder(workspace: Workspace, rules: readonly RuleInput[
     useAppStore.getState().setWorkspace({ ...workspace, rootRules: ordered });
     const result = await runMutation(async () =>
     {
-        for (const rule of updates) await window.appApi.workspace.saveRule(workspace.root, rule);
+        for (const rule of updates) await window.appApi.workspace.saveRule(rule);
         await refreshWorkspace(selection.kind === "rule" ? selection : undefined);
     });
     if (result.ok) toast.add({ title: "Rule order updated", type: "success" });
@@ -276,7 +276,7 @@ async function renameLayerOptionFromTree(workspace: Workspace, option: LayerOpti
     const nextName = name.trim().toLowerCase().endsWith(".md") ? name.trim().slice(0, -3) : name.trim();
     const result = await runMutation(async () =>
     {
-        const nextPath = await persistLayerOptionRename(workspace, option.layer, option.name, nextName);
+        const nextPath = await persistLayerOptionRename(option.layer, option.name, nextName);
         await refreshWorkspace({ kind: "layer-option", path: nextPath });
     });
     if (result.ok) toast.add({ title: `Renamed to ${nextName}.md`, type: "success" });
@@ -290,7 +290,7 @@ async function renameLayerFromTree(workspace: Workspace, from: string, to: strin
     if (nextName === from) return true;
     const result = await runMutation(async () =>
     {
-        await persistLayerRename(workspace, from, nextName);
+        await persistLayerRename(from, nextName);
     });
     if (result.ok) toast.add({ title: `Renamed layer to ${nextName}`, type: "success" });
     return result.ok;
@@ -308,8 +308,8 @@ async function renameAgentFromTree(workspace: Workspace, path: string, name: str
         const nextName = ruleDisplayName(nextPath);
         if (nextPath !== agent.path || nextName !== agent.name)
         {
-            await window.appApi.workspace.saveAgent(workspace.root, { ...agent, path: nextPath, name: nextName });
-            if (nextPath !== agent.path) await window.appApi.workspace.deleteSource(workspace.root, agent.path);
+            await window.appApi.workspace.saveAgent({ ...agent, path: nextPath, name: nextName });
+            if (nextPath !== agent.path) await window.appApi.workspace.deleteSource(agent.path);
             const state = useAppStore.getState();
             const previousKey = selectionKey({ kind: "agent", path: agent.path });
             const nextKey = selectionKey({ kind: "agent", path: nextPath });

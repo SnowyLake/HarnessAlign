@@ -1,5 +1,5 @@
 /**
- * Persist theme and last workspace root in Electron userData, never in the tool repository.
+ * Persist theme in Electron userData, never in the tool repository.
  */
 
 import { app } from "electron";
@@ -14,15 +14,7 @@ function settingsPath(): string
     return join(app.getPath("userData"), "settings.json");
 }
 
-/** Drop an empty `lastWorkspaceRoot` so exactOptionalPropertyTypes stays satisfied. */
-function toSettings(value: { theme: AppSettings["theme"]; lastWorkspaceRoot?: string | undefined }): AppSettings
-{
-    return value.lastWorkspaceRoot
-        ? { theme: value.theme, lastWorkspaceRoot: value.lastWorkspaceRoot }
-        : { theme: value.theme };
-}
-
-/** Persist theme and last workspace root in Electron userData. */
+/** Persist theme in Electron userData. */
 export class SettingsService
 {
     /** Read settings, or return defaults when the file is missing or invalid. */
@@ -31,7 +23,7 @@ export class SettingsService
         try
         {
             const parsed: unknown = JSON.parse(await fs.readFile(settingsPath(), "utf8"));
-            return toSettings(APP_SETTINGS_SCHEMA.parse(parsed));
+            return APP_SETTINGS_SCHEMA.parse(parsed);
         }
         catch
         {
@@ -44,10 +36,7 @@ export class SettingsService
     {
         const current = await this.get();
         const parsedPatch = SETTINGS_PATCH_SCHEMA.parse(patch);
-        const next = toSettings({
-            theme: parsedPatch.theme ?? current.theme,
-            ...(parsedPatch.lastWorkspaceRoot ? { lastWorkspaceRoot: parsedPatch.lastWorkspaceRoot } : current.lastWorkspaceRoot ? { lastWorkspaceRoot: current.lastWorkspaceRoot } : {}),
-        });
+        const next: AppSettings = { theme: parsedPatch.theme ?? current.theme };
         await fs.mkdir(app.getPath("userData"), { recursive: true });
         await fs.writeFile(settingsPath(), `${JSON.stringify(next, null, 2)}\n`, "utf8");
         return next;

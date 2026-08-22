@@ -5,7 +5,7 @@
 
 import { promises as fs } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { atomicWrite, lstatIfExists } from "./FsSafe.js";
+import { atomicWrite, lstatIfExists, resolveUserHome } from "./FsSafe.js";
 import { generate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
 import { type Harness, type LayerSelection, type OutputMap, codePointCompare, HalignError, valueText } from "./Model.js";
@@ -230,11 +230,7 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
     const config = await loadConfig(root);
     const outputs = await generate(root, selection);
     const generatedRoot = join(root, ".halign", "generated");
-    if (!userProfile || !isAbsolute(userProfile))
-    {
-        throw new HalignError(`USERPROFILE must be an absolute path, got ${valueText(userProfile)}`);
-    }
-    const deploymentRoot = resolve(userProfile);
+    const deploymentRoot = resolveUserHome(userProfile);
     await assertRegularDirectory(deploymentRoot, "USERPROFILE");
     await assertNoReparseComponents(root, generatedRoot, "generated root");
 

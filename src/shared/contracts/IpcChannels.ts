@@ -10,7 +10,6 @@ export const IPC_CHANNELS = {
     settingsGet: "settings:get",
     settingsUpdate: "settings:update",
     settingsChanged: "settings:changed",
-    workspaceOpenDirectory: "workspace:open-directory",
     workspaceLoad: "workspace:load",
     workspaceSaveConfig: "workspace:save-config",
     workspaceSaveRule: "workspace:save-rule",

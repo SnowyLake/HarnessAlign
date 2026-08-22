@@ -292,7 +292,7 @@ export function SkillsPanel()
             <Empty className="border-0">
                 <EmptyHeader>
                     <EmptyTitle>No workspace</EmptyTitle>
-                    <EmptyDescription>Open a directory that contains .halign/config.json.</EmptyDescription>
+                    <EmptyDescription>The user workspace is not loaded yet.</EmptyDescription>
                 </EmptyHeader>
             </Empty>
         );
@@ -324,7 +324,7 @@ export function SkillsPanel()
     {
         void runCommand(async () =>
         {
-            const skills = await window.appApi.workspace.discoverSkills(workspace.root);
+            const skills = await window.appApi.workspace.discoverSkills();
             setDiscovered(skills);
             setSelectedRemote([]);
             setOriginFilter("all");
@@ -338,7 +338,7 @@ export function SkillsPanel()
     {
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.installSkills(workspace.root, selectedRemote);
+            const report = await window.appApi.workspace.installSkills(selectedRemote);
             setOutput(report, "success", "Install completed");
             setSelectedRemote([]);
             setListView("installed");
@@ -351,7 +351,7 @@ export function SkillsPanel()
     {
         void runCommand(async () =>
         {
-            const next = await window.appApi.workspace.checkSkillUpdates(workspace.root);
+            const next = await window.appApi.workspace.checkSkillUpdates();
             setUpdates(next);
             setListView("installed");
             setOutput(`Checked ${next.length} GitHub skill(s).`, "success", "Update check completed");
@@ -364,7 +364,7 @@ export function SkillsPanel()
         if (ids.length === 0) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.applySkillUpdates(workspace.root, ids);
+            const report = await window.appApi.workspace.applySkillUpdates(ids);
             setOutput(report, "success", "Updates applied");
             setUpdates((current) => current.filter((item) => !ids.includes(item.id)));
             await refreshWorkspace();
@@ -388,7 +388,7 @@ export function SkillsPanel()
     {
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.importUserSkills(workspace.root, selectedImport, overwrite);
+            const report = await window.appApi.workspace.importUserSkills(selectedImport, overwrite);
             setOutput(report, "success", "Import completed");
             setImportOpen(false);
             setOverwriteOpen(false);
@@ -603,7 +603,7 @@ export function SkillsPanel()
                     if (!removeId) return;
                     void runMutation(async () =>
                     {
-                        await window.appApi.workspace.removeSkill(workspace.root, removeId);
+                        await window.appApi.workspace.removeSkill(removeId);
                         setRemoveId(undefined);
                         await refreshWorkspace();
                     });

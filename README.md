@@ -23,7 +23,7 @@ Cursor, Codex, OpenCode 等工具都要读项目规则, 但目录位置和 Subag
 
 CLI 命令名是 `halign`. 桌面应用 Harness Align 编辑同一份配置, 并调用同一套生成, 检查和部署能力.
 
-本仓库只提供工具, 不保存你的 `.halign` 配置. 配置目录可以放在任意位置, 与工具安装目录相互独立.
+本仓库只提供工具, 不保存你的 `.halign` 配置. 每个用户只有一份配置, 固定放在 `%USERPROFILE%\.halign`, 与工具安装目录相互独立. 第一次运行 CLI 或打开桌面应用时, 如果该目录还不存在, 工具会创建它并写入默认 `config.json`.
 
 ## 开始使用
 
@@ -43,7 +43,7 @@ npm link
 halign --help
 ```
 
-进入包含 `.halign` 的配置目录后, 即可生成, 检查或部署:
+命令始终读写 `%USERPROFILE%\.halign`, 不依赖当前工作目录:
 
 ```powershell
 halign generate
@@ -57,7 +57,7 @@ halign setup
 npm run dev
 ```
 
-窗口会记住上次打开的配置目录和主题, 这些设置保存在 Electron `userData`, 不会写入本仓库或你的 `.halign`.
+窗口打开同一份用户配置. 主题保存在 Electron `userData`, 不会写入本仓库或 `%USERPROFILE%\.halign`.
 
 Windows 安装包可用 `npm run build:win` 生成, 产物在 `release/`:
 
@@ -66,12 +66,12 @@ Windows 安装包可用 `npm run build:win` 生成, 产物在 `release/`:
 
 ## 日常工作流
 
-1. 打开配置目录, 编辑规则, Layer, Subagent 或 Skills. 可以用桌面应用, 也可以直接改 `.halign` 里的文件.
-2. 运行 `halign generate`, 或在窗口里点 Generate. 工具会校验配置, 并把结果写到 `.halign/generated/`.
+1. 编辑 `%USERPROFILE%\.halign` 里的规则, Layer, Subagent 或 Skills. 可以用桌面应用, 也可以直接改文件.
+2. 运行 `halign generate`, 或在窗口里点 Generate. 工具会校验配置, 并把结果写到 `%USERPROFILE%\.halign\generated`.
 3. 运行 `halign check` 确认生成目录与当前配置一致. 适合在提交前做一次核对.
 4. 运行 `halign setup` 把结果部署到当前用户已经存在的 Harness 根目录, 以及共享规则和项目 Skills.
 
-`halign` 始终把执行命令时的当前工作目录当作配置根目录. 因此可以全局安装一份工具, 再从任意包含 `.halign` 的目录调用它. 桌面应用不会使用安装目录, 启动后需要打开那个配置目录.
+`halign` 始终使用 `%USERPROFILE%` 作为配置根目录. 因此可以全局安装一份工具, 从任意工作目录调用它. 桌面应用打开同一份用户配置, 不再选择目录.
 
 ## 命令
 
@@ -98,7 +98,7 @@ halign setup --layer soul=kei
 
 窗口可以:
 
-- 打开包含 `.halign` 的配置目录.
+- 打开 `%USERPROFILE%\.halign` 这份用户配置.
 - 在 Project 页编辑输出标题, Harness 列表, 以及当前项目选用的 Layer 顺序与选项.
 - 在 Layers 页新建, 修改, 重命名或删除 Layer 及其选项.
 - 在 Rules 页编辑参与 `AGENTS.md` 的根规则, 以及独立部署的 shared-rules.
@@ -201,7 +201,7 @@ Harness 字段:
 | `agent_extension` | 不含点或路径分隔符 | 生成的 Subagent 文件扩展名 |
 | `instructions_field` | TOML Harness 必填; YAML Harness 不使用 | 保存共享 Markdown 正文的 TOML 字段名 |
 
-`config_path` 之间不能重叠, 也不能占用 `.agents/shared-rules` 或 `.agents/skills`. 可选的 `skill_sources` 用来登记 GitHub skill 仓库; 省略或 `[]` 表示没有远端源.
+`config_path` 之间不能重叠, 也不能占用 `.agents/shared-rules`, `.agents/skills` 或 `.halign`. 可选的 `skill_sources` 用来登记 GitHub skill 仓库; 省略或 `[]` 表示没有远端源.
 
 ## 规则, Layer 与 Subagent
 

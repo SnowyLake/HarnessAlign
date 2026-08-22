@@ -3,7 +3,6 @@
  * Command errors go to Output; mutation errors return for form Alerts.
  */
 
-import type { Workspace } from "@shared/models/Workspace";
 import { toast } from "@/components/ui/toast";
 import { selectionKey, useAppStore, type Selection } from "@/stores/AppStore";
 
@@ -12,12 +11,12 @@ export async function refreshWorkspace(next?: Selection): Promise<void>
 {
     const current = useAppStore.getState().workspace;
     if (!current) return;
-    const workspace = await window.appApi.workspace.load(current.root);
+    const workspace = await window.appApi.workspace.load();
     useAppStore.getState().setWorkspace(workspace);
     if (next) useAppStore.getState().setSelection(next);
 }
 
-/** Run Open / Generate / Check / Setup work while holding busy; errors open the output notification flow. */
+/** Run Generate / Check / Setup work while holding busy; errors open the output notification flow. */
 export async function runCommand(work: () => Promise<void>): Promise<void>
 {
     const { beginBusy, endBusy, setOutput } = useAppStore.getState();
@@ -60,9 +59,9 @@ export async function runMutation(work: () => Promise<void>): Promise<{ ok: true
 }
 
 /** Persist a Layer rename and rewrite matching editor drafts and Project selection. */
-export async function persistLayerRename(workspace: Workspace, from: string, to: string): Promise<void>
+export async function persistLayerRename(from: string, to: string): Promise<void>
 {
-    await window.appApi.workspace.renameLayer(workspace.root, from, to);
+    await window.appApi.workspace.renameLayer(from, to);
     const state = useAppStore.getState();
     const previousOptionPrefix = `layer-option:.halign/layers/${from}/`;
     const nextOptionPrefix = `layer-option:.halign/layers/${to}/`;
@@ -99,9 +98,9 @@ export async function persistLayerRename(workspace: Workspace, from: string, to:
 }
 
 /** Persist a Layer option rename and rewrite matching editor drafts and Project selection. */
-export async function persistLayerOptionRename(workspace: Workspace, layer: string, from: string, to: string): Promise<string>
+export async function persistLayerOptionRename(layer: string, from: string, to: string): Promise<string>
 {
-    await window.appApi.workspace.renameLayerOption(workspace.root, layer, from, to);
+    await window.appApi.workspace.renameLayerOption(layer, from, to);
     const nextPath = `.halign/layers/${layer}/${to}.md`;
     const state = useAppStore.getState();
     state.setLayerSelection(state.layerSelection.map((selection) => selection.name === layer && selection.option === from

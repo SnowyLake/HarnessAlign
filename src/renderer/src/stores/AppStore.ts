@@ -222,7 +222,7 @@ export const useAppStore = create<AppState>((set) => ({
     workspace: undefined,
     selection: { kind: "config" },
     layerSelection: [],
-    output: "Open a directory that contains .halign.",
+    output: "Loading the user workspace.",
     outputTone: "neutral",
     outputTitle: "Output",
     outputNoticeId: 0,

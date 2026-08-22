@@ -306,6 +306,10 @@ export function validateConfig(value: unknown): Config
         {
             throw new HalignError(`${path}: harness config_path must not use the managed skills target, got ${valueText(harness.configPath)}`);
         }
+        if (foldedPath === ".halign" || foldedPath.startsWith(".halign/"))
+        {
+            throw new HalignError(`${path}: harness config_path must not use the managed config directory, got ${valueText(harness.configPath)}`);
+        }
     }
     for (let leftIndex = 0; leftIndex < harnesses.length; leftIndex += 1)
     {

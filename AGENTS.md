@@ -24,7 +24,7 @@
 ## 仓库边界
 
 - 本仓库实现 `halign` CLI 引擎, 以及可选的 Electron 桌面管理壳. 不保存用户的 `.halign` 配置源.
-- CLI 必须以调用者的 `process.cwd()` 作为配置根目录. 桌面壳必须让用户选择配置根目录. 不得把工具安装目录, 源码目录或 `userData` 当作配置根目录.
+- CLI 和桌面壳必须以 `%USERPROFILE%` 作为配置根目录, 配置位于 `%USERPROFILE%\.halign`. 第一次使用时创建该目录和默认 `config.json`. 不得把工具安装目录, 源码目录, `userData` 或当前工作目录当作配置根目录.
 - 行为验证以 `tests/` 中的临时目录用例为准, 不依赖仓库外任何配置或路径. 不把 Electron 窗口测进 Node test runner.
 - 只实现配置声明的 Harness 以及 `toml` / `yaml` 两种 Subagent 格式. 不为插件, 模板, renderer registry 或未声明的 Harness 预留抽象.
 - 桌面壳遵循 Main / Preload / Renderer / Shared 边界. Renderer 不得访问 Node, Electron API 或文件系统.
@@ -98,8 +98,8 @@
 
 CLI:
 
-- `halign generate [--layer <layer>=<option>]...` 验证配置并更新当前目录下的 `.halign/generated/`.
-- `halign check [--layer <layer>=<option>]...` 比较期望输出与 `.halign/generated/`, 一致返回 `0`, 存在差异时列出差异并返回 `1`.
+- `halign generate [--layer <layer>=<option>]...` 验证配置并更新 `%USERPROFILE%\.halign\generated`.
+- `halign check [--layer <layer>=<option>]...` 比较期望输出与 `%USERPROFILE%\.halign\generated`, 一致返回 `0`, 存在差异时列出差异并返回 `1`.
 - `halign setup [--layer <layer>=<option>]...` 先生成, 再部署到已存在的用户 Harness 根目录, shared-rules 与项目 Skills.
 - `--layer` 覆盖 `config.json` 中对应 Layer 的 `selected`. 同一 Layer 不得重复传入. 未知 Layer 或不存在的选项是领域错误.
 - 无效命令或参数输出 usage 并返回 `2`. 领域错误输出到 stderr 并返回 `1`.
@@ -107,12 +107,12 @@ CLI:
 
 桌面壳:
 
-- `npm run dev` 启动 Electron 开发窗口. 窗口打开用户选择的配置根目录, 可视化管理 config / harness / layer / rule / agent / shared-rules / skills, 并调用同一套 `generate` / `check` / `setup`.
+- `npm run dev` 启动 Electron 开发窗口. 窗口打开 `%USERPROFILE%\.halign`, 可视化管理 config / harness / layer / rule / agent / shared-rules / skills, 并调用同一套 `generate` / `check` / `setup`.
 - 新增 privileged capability 时必须同步更新 `src/shared` 契约, Main handler, Preload `window.appApi` 和 Renderer 调用. 禁止只改其中一层.
 
 ## 生成与写回
 
-- `.halign/config.json` 使用版本 `1`, 定义输出标题, 有序 Layer 选择, 非空 Harness 对象列表和可选 `skill_sources`. 每个 Harness 声明 `name`, `config_path`, `agent_format`, `agent_extension`; TOML Harness 还必须声明 `instructions_field`.
+- `.halign/config.json` 使用版本 `1`, 定义输出标题, 有序 Layer 选择, 非空 Harness 对象列表和可选 `skill_sources`. 每个 Harness 声明 `name`, `config_path`, `agent_format`, `agent_extension`; TOML Harness 还必须声明 `instructions_field`. `config_path` 不能占用 `.agents/shared-rules`, `.agents/skills` 或 `.halign`.
 - `skill_sources` 省略或 `[]` 表示无远端源; 校验后内存中的 `skillSources` 始终是数组; `configDocument` 仅在长度大于 `0` 时写出该键.
 - `.halign/rules/` 中的根 Rule 按 `(priority, repository_relative_path)` 排序, 再按 Harness targets 独立过滤.
 - `.halign/layers/<layer>/<option>.md` 提供可选 Layer 内容; 生成时按 `config.json` 或 `--layer` 覆盖选择一个选项. Layer 允许空文件作为显式 no-op.
@@ -129,7 +129,7 @@ CLI:
 
 ## 部署安全
 
-- `generate` 只更新调用目录中的 `.halign/generated/`.
+- `generate` 只更新 `%USERPROFILE%\.halign\generated`.
 - `setup` 只更新配置中声明且根目录已经存在的 Harness. 不因部署而创建缺失的 Harness 根目录. 桌面壳的 Setup 按钮遵守同一规则.
 - 对已启用 Harness, `setup` 替换其 `agents` 目录并更新根 `AGENTS.md`.
 - `setup` 用完整目录替换更新 `%USERPROFILE%\.agents\shared-rules`.
@@ -138,7 +138,7 @@ CLI:
 - 部署前必须验证解析后的目标位于 `USERPROFILE` 或项目生成目录内, 并拒绝既有 symlink 或 junction.
 - `setup` 相关验证只使用测试构造的临时 `USERPROFILE`, 不触碰开发机上的真实用户目录.
 - 不递归删除含有 reparse point 的部署目标.
-- 桌面壳把 theme 和上次配置根路径记在 Electron `userData`, 不写进本仓库.
+- 桌面壳把 theme 记在 Electron `userData`, 不写进本仓库.
 
 ## 修改流程
 

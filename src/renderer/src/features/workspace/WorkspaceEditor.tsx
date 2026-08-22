@@ -266,7 +266,7 @@ function ConfigForm({ workspace, showTitle = true, children }: { workspace: Work
                         name: String(form.get("name") ?? "").trim(),
                         layers: layerSelection.map((selection) => ({ name: selection.name, selected: selection.option })),
                     };
-                    await window.appApi.workspace.saveConfig(workspace.root, next);
+                    await window.appApi.workspace.saveConfig(next);
                     useAppStore.getState().clearEditorDraft(editorKey);
                     await refreshWorkspace({ kind: "config" });
                     toast.add({ title: "Saved config.json", type: "success" });
@@ -350,13 +350,13 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        if (original === undefined) await window.appApi.workspace.addHarness(workspace.root, harness);
+                        if (original === undefined) await window.appApi.workspace.addHarness(harness);
                         else
                         {
-                            if (original !== harness.name) await window.appApi.workspace.renameHarness(workspace.root, original, harness.name);
-                            const current = await window.appApi.workspace.load(workspace.root);
+                            if (original !== harness.name) await window.appApi.workspace.renameHarness(original, harness.name);
+                            const current = await window.appApi.workspace.load();
                             const harnesses = current.config.harnesses.map((item) => (item.name === harness.name ? harness : item));
-                            await window.appApi.workspace.saveConfig(current.root, { ...current.config, harnesses });
+                            await window.appApi.workspace.saveConfig({ ...current.config, harnesses });
                         }
                         useAppStore.getState().clearEditorDraft(editorKey);
                         await refreshWorkspace({ kind: "harness", name: harness.name });
@@ -489,7 +489,7 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        await window.appApi.workspace.removeHarness(workspace.root, original);
+                        await window.appApi.workspace.removeHarness(original);
                         useAppStore.getState().clearEditorDraft(editorKey);
                         await refreshWorkspace();
                         toast.add({ title: `Deleted harness ${original}`, type: "success" });
@@ -528,7 +528,7 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
                 setFormError(undefined);
                 void runMutation(async () =>
                 {
-                    await window.appApi.workspace.addLayer(workspace.root, name, initialOption);
+                    await window.appApi.workspace.addLayer(name, initialOption);
                     useAppStore.getState().clearEditorDraft(editorKey);
                     await refreshWorkspace({ kind: "layer-option", path: `.halign/layers/${name}/${initialOption}.md` });
                     toast.add({ title: `Created layer ${name}`, type: "success" });
@@ -586,7 +586,7 @@ function LayerForm({ workspace, name }: { workspace: Workspace; name: string })
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        await persistLayerRename(workspace, name, nextName);
+                        await persistLayerRename(name, nextName);
                         useAppStore.getState().clearEditorDraft(editorKey);
                         toast.add({ title: `Renamed layer to ${nextName}`, type: "success" });
                     }).then((result) =>
@@ -623,7 +623,7 @@ function LayerForm({ workspace, name }: { workspace: Workspace; name: string })
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        await window.appApi.workspace.removeLayer(workspace.root, name);
+                        await window.appApi.workspace.removeLayer(name);
                         const state = useAppStore.getState();
                         state.clearEditorDraft(editorKey);
                         state.setLayerSelection(state.layerSelection.filter((item) => item.name !== name));
@@ -800,7 +800,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                 setFormError(undefined);
                 void runMutation(async () =>
                 {
-                    await window.appApi.workspace.deleteSource(workspace.root, existingPath);
+                    await window.appApi.workspace.deleteSource(existingPath);
                     useAppStore.getState().clearEditorDraft(editorKey);
                     await refreshWorkspace();
                     toast.add({ title: `Deleted ${existingPath}`, type: "success" });
@@ -830,8 +830,8 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                         setFormError(undefined);
                         void runMutation(async () =>
                         {
-                            await window.appApi.workspace.saveSharedRule(workspace.root, path, body);
-                            if (original && original !== path) await window.appApi.workspace.deleteSource(workspace.root, original);
+                            await window.appApi.workspace.saveSharedRule(path, body);
+                            if (original && original !== path) await window.appApi.workspace.deleteSource(original);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace({ kind: "rule", path });
                             toast.add({ title: `Saved ${path}`, type: "success" });
@@ -883,8 +883,8 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        await window.appApi.workspace.saveRule(workspace.root, payload);
-                        if (original && original !== payload.path) await window.appApi.workspace.deleteSource(workspace.root, original);
+                        await window.appApi.workspace.saveRule(payload);
+                        if (original && original !== payload.path) await window.appApi.workspace.deleteSource(original);
                         useAppStore.getState().clearEditorDraft(editorKey);
                         await refreshWorkspace({ kind: "rule", path: payload.path });
                         toast.add({ title: `Saved ${payload.path}`, type: "success" });
@@ -956,8 +956,8 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                         {
                             const path = existing.name === nextName
                                 ? existing.path
-                                : await persistLayerOptionRename(workspace, existing.layer, existing.name, nextName);
-                            await window.appApi.workspace.saveLayerOption(workspace.root, {
+                                : await persistLayerOptionRename(existing.layer, existing.name, nextName);
+                            await window.appApi.workspace.saveLayerOption({
                                 path,
                                 body,
                                 ...(targets ? { targets } : {}),
@@ -967,9 +967,9 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                             toast.add({ title: `Saved ${path}`, type: "success" });
                             return;
                         }
-                        await window.appApi.workspace.addLayerOption(workspace.root, layer, nextName);
+                        await window.appApi.workspace.addLayerOption(layer, nextName);
                         const path = `.halign/layers/${layer}/${nextName}.md`;
-                        await window.appApi.workspace.saveLayerOption(workspace.root, {
+                        await window.appApi.workspace.saveLayerOption({
                             path,
                             body,
                             ...(targets ? { targets } : {}),
@@ -1014,7 +1014,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                         setFormError(undefined);
                         void runMutation(async () =>
                         {
-                            await window.appApi.workspace.removeLayerOption(workspace.root, existing.layer, existing.name);
+                            await window.appApi.workspace.removeLayerOption(existing.layer, existing.name);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace();
                             toast.add({ title: `Deleted ${existing.name}`, type: "success" });
@@ -1074,8 +1074,8 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                             harnesses,
                             body: String(form.get("body") ?? ""),
                         };
-                        await window.appApi.workspace.saveAgent(workspace.root, agent);
-                        if (existing && existing.path !== agent.path) await window.appApi.workspace.deleteSource(workspace.root, existing.path);
+                        await window.appApi.workspace.saveAgent(agent);
+                        if (existing && existing.path !== agent.path) await window.appApi.workspace.deleteSource(existing.path);
                         useAppStore.getState().clearEditorDraft(editorKey);
                         await refreshWorkspace({ kind: "agent", path: agent.path });
                         toast.add({ title: `Saved ${agent.path}`, type: "success" });
@@ -1127,7 +1127,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                         setFormError(undefined);
                         void runMutation(async () =>
                         {
-                            await window.appApi.workspace.deleteSource(workspace.root, existing.path);
+                            await window.appApi.workspace.deleteSource(existing.path);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace();
                             toast.add({ title: `Deleted ${existing.path}`, type: "success" });
@@ -1220,7 +1220,7 @@ export function ProjectEditor()
             <Empty className="border-0">
                 <EmptyHeader>
                     <EmptyTitle>No workspace</EmptyTitle>
-                    <EmptyDescription>Open a directory that contains .halign/config.json.</EmptyDescription>
+                    <EmptyDescription>The user workspace is not loaded yet.</EmptyDescription>
                 </EmptyHeader>
             </Empty>
         );
@@ -1383,7 +1383,7 @@ function SkillsSourcesSection({ workspace }: { workspace: Workspace })
                                 setFormError(undefined);
                                 void runMutation(async () =>
                                 {
-                                    await window.appApi.workspace.removeSkillSource(workspace.root, source.owner, source.name);
+                                    await window.appApi.workspace.removeSkillSource(source.owner, source.name);
                                     await refreshWorkspace({ kind: "config" });
                                     toast.add({ title: "Skill source removed", type: "success" });
                                 }).then((result) =>
@@ -1445,7 +1445,7 @@ function NewSkillSourceCard({
                     const input = branch.trim()
                         ? { url: url.trim(), branch: branch.trim() }
                         : { url: url.trim() };
-                    await window.appApi.workspace.addSkillSource(workspace.root, input);
+                    await window.appApi.workspace.addSkillSource(input);
                     await refreshWorkspace({ kind: "config" });
                     toast.add({ title: "Skill source added", type: "success" });
                     onAdded();
@@ -1488,7 +1488,7 @@ export function WorkspaceEditor()
             <Empty className="border-0">
                 <EmptyHeader>
                     <EmptyTitle>No workspace</EmptyTitle>
-                    <EmptyDescription>Open a directory that contains .halign/config.json.</EmptyDescription>
+                    <EmptyDescription>The user workspace is not loaded yet.</EmptyDescription>
                 </EmptyHeader>
             </Empty>
         );

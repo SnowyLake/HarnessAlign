@@ -13,25 +13,22 @@ export function applyTheme(theme: ThemeMode): void
     document.documentElement.classList.toggle("dark", isDark);
 }
 
-/** Desktop settings page for theme and remembered project path. */
+/** Desktop settings page for theme. */
 export function SettingsPage()
 {
     const theme = useAppStore((state) => state.theme);
     const setTheme = useAppStore((state) => state.setTheme);
-    const workspace = useAppStore((state) => state.workspace);
     const [version, setVersion] = useState("");
-    const [lastWorkspaceRoot, setLastWorkspaceRoot] = useState<string | undefined>();
 
     useEffect(() =>
     {
         void window.appApi.app.getVersion().then(setVersion).catch(() => setVersion(""));
-        void window.appApi.settings.get().then((settings) => setLastWorkspaceRoot(settings.lastWorkspaceRoot)).catch(() => undefined);
-    }, [workspace?.root]);
+    }, []);
 
     return (
         <div className="max-w-xl overflow-auto p-6">
             <h1 className="text-lg font-semibold">Settings</h1>
-            <p className="mt-1 text-muted-foreground">Theme is persisted by Main. Project files stay in the opened `.halign` directory.</p>
+            <p className="mt-1 text-muted-foreground">Theme is persisted by Main. Config lives in %USERPROFILE%\.halign.</p>
             <Card className="mt-4 grid gap-3">
                 <Label className="grid gap-1 text-[12px] text-muted-foreground">
                     Theme
@@ -65,10 +62,6 @@ export function SettingsPage()
                 <div className="grid gap-1 text-[12px] text-muted-foreground">
                     <span>App version</span>
                     <span className="text-foreground">{version || "—"}</span>
-                </div>
-                <div className="grid gap-1 text-[12px] text-muted-foreground">
-                    <span>Last project</span>
-                    <span className="truncate text-foreground">{lastWorkspaceRoot ?? workspace?.root ?? "None"}</span>
                 </div>
             </Card>
         </div>

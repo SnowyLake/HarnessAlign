@@ -9,7 +9,6 @@ export type ThemeMode = "system" | "light" | "dark";
 export interface AppSettings
 {
     theme: ThemeMode;
-    lastWorkspaceRoot?: string;
 }
 
 /** Default settings used when userData has no settings file. */

@@ -6,11 +6,11 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { atomicWrite, addHarness, addLayer, addLayerOption, addSkillSource, assertSafeZipEntry, buildOutputs, check, deleteSource, downgradeMarkdownHeadings, generate, HalignError, hashSkillDirectory, importUserSkills, installSkillFromDirectory, listUserSkills, loadConfig, loadSkills, loadWorkspace, parseGitHubSkillSource, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup, validateConfig } from "../src/engine/Halign.js";
+import { atomicWrite, addHarness, addLayer, addLayerOption, addSkillSource, assertSafeZipEntry, buildOutputs, check, deleteSource, downgradeMarkdownHeadings, ensureUserWorkspace, generate, HalignError, hashSkillDirectory, importUserSkills, installSkillFromDirectory, listUserSkills, loadConfig, loadSkills, loadWorkspace, main, parseGitHubSkillSource, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup, validateConfig } from "../src/engine/Halign.js";
 
 const config = {
     version: 1,
@@ -142,6 +142,10 @@ test("config and metadata validation reject unsafe input", async () =>
             { ...config.harnesses[0], config_path: ".agents/shared-rules/custom" },
         ] }), "utf8");
         await assert.rejects(buildOutputs(root), /managed shared rules target/u);
+        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
+            { ...config.harnesses[0], config_path: ".halign" },
+        ] }), "utf8");
+        await assert.rejects(buildOutputs(root), /managed config directory/u);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, version: 2 }), "utf8");
         await assert.rejects(buildOutputs(root), /version must be integer 1/u);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, profiles: ["legacy"] }), "utf8");
@@ -814,4 +818,55 @@ test("addSkillSource and removeSkillSource round-trip through configDocument", a
         const removed = await removeSkillSource(root, "acme", "toolkit");
         assert.deepEqual(removed.skillSources, []);
     });
+});
+
+test("ensureUserWorkspace creates a default user config once", async () =>
+{
+    const home = await mkdtemp(join(tmpdir(), "halign-home-"));
+    try
+    {
+        const root = await ensureUserWorkspace(home);
+        assert.equal(root, resolve(home));
+        const created = JSON.parse(await readFile(join(home, ".halign", "config.json"), "utf8")) as { name: string; harnesses: unknown[] };
+        assert.equal(created.name, "AGENTS");
+        assert.ok(created.harnesses.length > 0);
+        await loadWorkspace(home);
+        created.name = "KEEP";
+        await writeFile(join(home, ".halign", "config.json"), `${JSON.stringify(created, null, 2)}\n`, "utf8");
+        await ensureUserWorkspace(home);
+        const kept = JSON.parse(await readFile(join(home, ".halign", "config.json"), "utf8")) as { name: string };
+        assert.equal(kept.name, "KEEP");
+    }
+    finally
+    {
+        await rm(home, { recursive: true, force: true });
+    }
+});
+
+test("cli uses USERPROFILE not the current working directory", async () =>
+{
+    const home = await mkdtemp(join(tmpdir(), "halign-cli-home-"));
+    const cwd = await mkdtemp(join(tmpdir(), "halign-cli-cwd-"));
+    const previous = process.cwd();
+    try
+    {
+        await mkdir(join(cwd, ".halign", "rules", "shared"), { recursive: true });
+        await writeFile(join(cwd, ".halign", "config.json"), JSON.stringify({
+            ...config,
+            name: "CWD",
+            harnesses: [{ name: "cursor", config_path: ".cursor", agent_format: "yaml", agent_extension: "md" }],
+        }), "utf8");
+        process.chdir(cwd);
+        assert.equal(await main(["generate"], home), 0);
+        const generated = JSON.parse(await readFile(join(home, ".halign", "config.json"), "utf8")) as { name: string };
+        assert.equal(generated.name, "AGENTS");
+        assert.equal(await readFile(join(home, ".halign", "generated", "cursor", "AGENTS.md"), "utf8").then(() => true), true);
+        await assert.rejects(readFile(join(cwd, ".halign", "generated", "cursor", "AGENTS.md")), /ENOENT/u);
+    }
+    finally
+    {
+        process.chdir(previous);
+        await rm(home, { recursive: true, force: true });
+        await rm(cwd, { recursive: true, force: true });
+    }
 });

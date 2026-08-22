@@ -1,5 +1,5 @@
 /**
- * Desktop root: restore the last project, route feature modules, and own command output notifications.
+ * Desktop root: load the user workspace, route feature modules, and own command output notifications.
  * Renderer work stays on `window.appApi`.
  */
 
@@ -28,21 +28,10 @@ export function App()
             const settings = await window.appApi.settings.get();
             useAppStore.getState().setTheme(settings.theme);
             applyTheme(settings.theme);
-            if (settings.lastWorkspaceRoot)
-            {
-                try
-                {
-                    const loaded = await window.appApi.workspace.load(settings.lastWorkspaceRoot);
-                    useAppStore.getState().setWorkspace(loaded);
-                    useAppStore.getState().setSelection({ kind: "config" });
-                    useAppStore.getState().setOutput(`Opened ${loaded.root}`, "success", "Project opened");
-                }
-                catch (error)
-                {
-                    const message = error instanceof Error ? error.message : String(error);
-                    useAppStore.getState().setOutput(message, "error", "Open failed");
-                }
-            }
+            const loaded = await window.appApi.workspace.load();
+            useAppStore.getState().setWorkspace(loaded);
+            useAppStore.getState().setSelection({ kind: "config" });
+            useAppStore.getState().setOutput(`Opened ${loaded.root}`, "success", "Workspace opened");
         })().catch((error: unknown) =>
         {
             const message = error instanceof Error ? error.message : String(error);
@@ -55,21 +44,6 @@ export function App()
         });
     }, []);
 
-    /** Open a config root directory chosen by the user. */
-    const handleOpen = (): void =>
-    {
-        void runCommand(async () =>
-        {
-            const root = await window.appApi.workspace.openDirectory();
-            if (!root) return;
-            const loaded = await window.appApi.workspace.load(root);
-            useAppStore.getState().setWorkspace(loaded);
-            useAppStore.getState().setSelection({ kind: "config" });
-            useAppStore.getState().setView("project");
-            useAppStore.getState().setOutput(`Opened ${loaded.root}`, "success", "Project opened");
-        });
-    };
-
     /** Generate outputs for the current ordered layer selection. */
     const handleGenerate = (): void =>
     {
@@ -77,7 +51,7 @@ export function App()
         if (!current) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.generate(current.root, useAppStore.getState().layerSelection);
+            const report = await window.appApi.workspace.generate(useAppStore.getState().layerSelection);
             useAppStore.getState().setOutput(report, "success", "Generate completed");
             await refreshWorkspace();
             useAppStore.getState().setView("generated");
@@ -91,7 +65,7 @@ export function App()
         if (!current) return;
         void runCommand(async () =>
         {
-            const differences = await window.appApi.workspace.check(current.root, useAppStore.getState().layerSelection);
+            const differences = await window.appApi.workspace.check(useAppStore.getState().layerSelection);
             if (differences.length === 0)
             {
                 useAppStore.getState().setOutput("Check passed. Generated output is up to date.", "success", "Check passed");
@@ -110,7 +84,7 @@ export function App()
         if (!current) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.setup(current.root, useAppStore.getState().layerSelection);
+            const report = await window.appApi.workspace.setup(useAppStore.getState().layerSelection);
             useAppStore.getState().setOutput(report, "success", "Setup completed");
             await refreshWorkspace();
         });
@@ -127,7 +101,7 @@ export function App()
         <Toaster>
             <TooltipProvider>
                 <SidebarProvider className="h-full min-h-0">
-                    <AppShell onOpen={handleOpen} onGenerate={handleGenerate} onCheck={handleCheck} onSetup={handleSetup}>
+                    <AppShell onGenerate={handleGenerate} onCheck={handleCheck} onSetup={handleSetup}>
                         <div className="min-h-0 flex-1 overflow-hidden">{page}</div>
                     </AppShell>
                     <AppOutput />

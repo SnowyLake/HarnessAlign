@@ -8,6 +8,7 @@
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { ensureUserWorkspace } from "./Edit.js";
 import { check, generate, reportGenerate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
 import { errorText, HalignError, type LayerSelection } from "./Model.js";
@@ -17,9 +18,9 @@ export type { Agent, AgentFormat, Config, Harness, HarnessConfig, LayerConfig, L
 export type { SetupResult, SetupSkillsReport, SetupTargetReport } from "./Setup.js";
 export type { LayerOptionInput, RuleInput, SharedRule, Workspace } from "./Edit.js";
 export { HalignError } from "./Model.js";
-export { atomicWrite } from "./FsSafe.js";
+export { atomicWrite, resolveUserHome } from "./FsSafe.js";
 export { loadConfig, loadLayerOptions, loadSharedRules, validateConfig } from "./Load.js";
-export { addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, importUserSkills, listUserSkills, loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule } from "./Edit.js";
+export { addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace, importUserSkills, listUserSkills, loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule } from "./Edit.js";
 export { assertSafeZipEntry, hashSkillDirectory, installSkillFromDirectory, loadSkills, parseGitHubSkillSource, readSkillFrontmatter } from "./Skills.js";
 export { downgradeMarkdownHeadings, renderMarkdownToc } from "./Render.js";
 export { buildOutputs, check, generate, reportGenerate, safeOutputRelative } from "./Generate.js";
@@ -34,7 +35,7 @@ function usage(error?: string): number
 }
 
 /** CLI entry used by the `halign` binary and by tests. */
-export async function main(argv: string[], root = process.cwd()): Promise<number>
+export async function main(argv: string[], userProfile = process.env.USERPROFILE): Promise<number>
 {
     if (argv.length === 1 && ["--help", "-h"].includes(argv[0]!))
     {
@@ -74,6 +75,7 @@ export async function main(argv: string[], root = process.cwd()): Promise<number
     }
     try
     {
+        const root = await ensureUserWorkspace(userProfile);
         let selection: LayerSelection[] | undefined;
         if (overrides.size > 0)
         {
@@ -91,7 +93,7 @@ export async function main(argv: string[], root = process.cwd()): Promise<number
         }
         if (command === "setup")
         {
-            process.stdout.write(reportSetup(await setup(root, selection)));
+            process.stdout.write(reportSetup(await setup(root, selection, userProfile)));
             return 0;
         }
         const differences = await check(root, selection);

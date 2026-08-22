@@ -6,7 +6,7 @@
 import { promises as fs } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
-import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError } from "./FsSafe.js";
+import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError, resolveUserHome } from "./FsSafe.js";
 import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, type SharedRule, validateConfig } from "./Load.js";
 import {
     AGENT_NAME,
@@ -32,6 +32,18 @@ import { importUserSkills as importUserSkillsEngine, listUserSkills as listUserS
 
 export type { SharedRule };
 export { listUserSkillsEngine as listUserSkills, importUserSkillsEngine as importUserSkills, removeSkillEngine as removeSkill };
+
+/** Default `.halign/config.json` written when the user workspace does not exist yet. */
+const DEFAULT_USER_CONFIG = {
+    version: 1,
+    name: "AGENTS",
+    layers: [],
+    harnesses: [
+        { name: "codex", config_path: ".codex", agent_format: "toml", agent_extension: "toml", instructions_field: "developer_instructions" },
+        { name: "cursor", config_path: ".cursor", agent_format: "yaml", agent_extension: "md" },
+        { name: "opencode", config_path: ".config/opencode", agent_format: "yaml", agent_extension: "md" },
+    ],
+};
 
 /** Loaded `.halign` workspace for the desktop editor and tests. */
 export interface Workspace
@@ -283,6 +295,27 @@ export async function loadWorkspace(rootPath: string): Promise<Workspace>
         loadSkills(root),
     ]);
     return { root, config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents, skills };
+}
+
+/** Resolve `%USERPROFILE%` and create `%USERPROFILE%\.halign` with a default config when missing. */
+export async function ensureUserWorkspace(userProfile = process.env.USERPROFILE): Promise<string>
+{
+    const root = resolveUserHome(userProfile);
+    const homeStats = await lstatIfExists(root);
+    if (!homeStats) throw new HalignError(`USERPROFILE must be an existing directory, got ${valueText(root)}`);
+    if (homeStats.isSymbolicLink()) throw reparseError(root, root, false);
+    if (!homeStats.isDirectory()) throw new HalignError(`USERPROFILE must be a directory, got ${valueText(root)}`);
+    const halign = join(root, ".halign");
+    const stats = await lstatIfExists(halign);
+    if (stats?.isSymbolicLink()) throw reparseError(root, halign, false);
+    if (stats && !stats.isDirectory()) throw new HalignError(".halign: expected a directory");
+    const configPath = join(halign, "config.json");
+    if (!(await lstatIfExists(configPath)))
+    {
+        await fs.mkdir(join(halign, "rules", "shared"), { recursive: true });
+        await writeConfig(root, validateConfig(DEFAULT_USER_CONFIG));
+    }
+    return root;
 }
 
 /** Atomically write an already validated config document. */

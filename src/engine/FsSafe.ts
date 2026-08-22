@@ -5,8 +5,8 @@
 
 import { randomUUID } from "node:crypto";
 import { promises as fs, type Stats } from "node:fs";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { errorText, HalignError } from "./Model.js";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { errorText, HalignError, valueText } from "./Model.js";
 
 /** Return whether a thrown value looks like a Node errno exception. */
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException
@@ -21,6 +21,13 @@ export function display(root: string, path: string): string
     return pathRelative && !pathRelative.startsWith(`..${sep}`) && pathRelative !== ".." && !isAbsolute(pathRelative)
         ? pathRelative.split(sep).join("/")
         : path;
+}
+
+/** Resolve `%USERPROFILE%` and require an absolute path. */
+export function resolveUserHome(userProfile = process.env.USERPROFILE): string
+{
+    if (!userProfile || !isAbsolute(userProfile)) throw new HalignError(`USERPROFILE must be an absolute path, got ${valueText(userProfile)}`);
+    return resolve(userProfile);
 }
 
 /** Throw if `path` is outside `root`. */
