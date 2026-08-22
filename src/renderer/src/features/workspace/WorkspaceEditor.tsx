@@ -14,7 +14,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { SourceEditor } from "@/components/ui/source-editor";
 import { toast } from "@/components/ui/toast";
 import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { catalogLayerNames, defaultLayerOption, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
@@ -854,7 +854,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     <FormError message={formError} />
                     <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
                         body
-                        <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", sharedExisting?.body ?? "# Title\n\nbody\n")} />
+                        <SourceEditor className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", sharedExisting?.body ?? "# Title\n\nbody\n")} />
                     </Label>
                 </form>
                 {deleteDialog}
@@ -908,7 +908,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                 <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} />
                 <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
                     body
-                    <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", existing?.body ?? "# Title\n\nbody\n")} />
+                    <SourceEditor className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", existing?.body ?? "# Title\n\nbody\n")} />
                 </Label>
             </form>
             {deleteDialog}
@@ -997,7 +997,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                 <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} />
                 <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
                     body
-                    <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", existing?.body ?? "")} />
+                    <SourceEditor className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", existing?.body ?? "")} />
                 </Label>
             </form>
             {existing ? (
@@ -1100,12 +1100,17 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                 {workspace.config.harnesses.map((harness) => (
                     <Label key={harness.name} className="grid gap-1 text-[12px] text-muted-foreground">
                         {harness.name} metadata (JSON)
-                        <Textarea name={`meta-${harness.name}`} className="min-h-28" defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))} />
+                        <SourceEditor
+                            name={`meta-${harness.name}`}
+                            language="json"
+                            className="h-28 min-h-28"
+                            defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))}
+                        />
                     </Label>
                 ))}
                 <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
                     body
-                    <Textarea className="min-h-40 flex-1 resize-none" name="body" defaultValue={draftText(editor.draft, "body", existing?.body ?? "Instructions.\n")} />
+                    <SourceEditor className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", existing?.body ?? "Instructions.\n")} />
                 </Label>
             </form>
             {existing ? (
@@ -1158,10 +1163,11 @@ function GeneratedFileView({ workspace, path }: { workspace: Workspace; path: st
                 <h2 className="truncate text-base font-semibold">{file.path}</h2>
                 <p className="text-[12px] text-muted-foreground">{`.halign/generated/${file.path}`}</p>
             </div>
-            <Textarea
+            <SourceEditor
                 aria-label={file.path}
-                className="h-[calc(100vh-10rem)] min-h-40 resize-none bg-muted/30"
-                value={file.content}
+                className="h-[calc(100vh-10rem)] min-h-40 bg-muted/30"
+                language={file.path.toLowerCase().endsWith(".md") ? "markdown" : "plain"}
+                defaultValue={file.content}
                 readOnly
             />
         </div>
