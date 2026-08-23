@@ -1,8 +1,8 @@
 import type { LabelHTMLAttributes } from "react";
 import { cn } from "@/lib/Utils";
 
-/** Styled label that stacks a caption above its control. */
+/** Accessible label with the standard form typography. */
 export function Label({ className, ...props }: LabelHTMLAttributes<HTMLLabelElement>)
 {
-    return <label className={cn("grid gap-1 text-[12px] text-muted-foreground", className)} {...props} />;
+    return <label data-slot="label" className={cn("flex items-center gap-2 text-sm font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50", className)} {...props} />;
 }

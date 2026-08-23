@@ -68,7 +68,7 @@ export function WorkspacePage({ view }: WorkspacePageProps)
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize="76" minSize="40" className="min-h-0">
                 <ScrollArea className="h-full">
-                    <div className="h-full min-w-0 p-4" key={`${workspaceRoot ?? ""}:${selectionKey(selection)}`}>
+                    <div className="mx-auto h-full w-full max-w-5xl min-w-0 p-4" key={`${workspaceRoot ?? ""}:${selectionKey(selection)}`}>
                         <WorkspaceEditor />
                     </div>
                 </ScrollArea>

@@ -2,9 +2,9 @@ import type { ThemeMode } from "@shared/models/AppSettings";
 import { useEffect, useState } from "react";
 import { FolderOpenIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { useAppStore } from "@/stores/AppStore";
 
@@ -14,6 +14,13 @@ export function applyTheme(theme: ThemeMode): void
     const isDark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.classList.toggle("dark", isDark);
 }
+
+/** Theme choices rendered by the Base UI select. */
+const THEME_ITEMS = [
+    { label: "System", value: "system" },
+    { label: "Light", value: "light" },
+    { label: "Dark", value: "dark" },
+] as const;
 
 /** Desktop settings page for theme. */
 export function SettingsPage()
@@ -31,66 +38,74 @@ export function SettingsPage()
     }, []);
 
     return (
-        <div className="max-w-xl overflow-auto p-6">
-            <h1 className="text-lg font-semibold">Settings</h1>
-            <p className="mt-1 text-muted-foreground">Theme is persisted by Main. Config lives in %USERPROFILE%\.halign.</p>
-            <Card className="mt-4 grid gap-3">
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">
-                    Theme
-                    <Select
-                        value={theme}
-                        onValueChange={(value) =>
-                        {
-                            if (value === null) return;
-                            const next = value as ThemeMode;
-                            void window.appApi.settings.update({ theme: next }).then((settings) =>
-                            {
-                                setTheme(settings.theme);
-                                applyTheme(settings.theme);
-                                toast.add({ title: "Theme saved", type: "success" });
-                            }).catch((error: unknown) =>
-                            {
-                                toast.add({ title: error instanceof Error ? error.message : String(error), type: "error" });
-                            });
-                        }}
-                    >
-                        <SelectTrigger size="sm" className="w-full">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="system">System</SelectItem>
-                            <SelectItem value="light">Light</SelectItem>
-                            <SelectItem value="dark">Dark</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </Label>
-                <div className="grid gap-1 text-[12px] text-muted-foreground">
-                    <span>Config directory</span>
-                    <div className="flex items-center gap-2">
-                        <span className="min-w-0 flex-1 truncate text-foreground" title={configDirectory}>{configDirectory}</span>
-                        <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            disabled={isOpening}
-                            onClick={() =>
-                            {
-                                setIsOpening(true);
-                                void window.appApi.app.openConfigDirectory().then(() => undefined).catch((error: unknown) =>
+        <div className="mx-auto w-full max-w-2xl overflow-auto p-6">
+            <Card>
+                <CardHeader>
+                    <CardTitle>Application</CardTitle>
+                    <CardDescription>Appearance and local workspace information.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <FieldGroup>
+                        <Field>
+                            <FieldLabel htmlFor="theme-select">Theme</FieldLabel>
+                            <Select
+                                items={THEME_ITEMS}
+                                value={theme}
+                                onValueChange={(value) =>
                                 {
-                                    toast.add({ title: error instanceof Error ? error.message : String(error), type: "error" });
-                                }).finally(() => setIsOpening(false));
-                            }}
-                        >
-                            <FolderOpenIcon />
-                            Open
-                        </Button>
-                    </div>
-                </div>
-                <div className="grid gap-1 text-[12px] text-muted-foreground">
-                    <span>App version</span>
-                    <span className="text-foreground">{version || "—"}</span>
-                </div>
+                                    if (value === null) return;
+                                    const next = value as ThemeMode;
+                                    void window.appApi.settings.update({ theme: next }).then((settings) =>
+                                    {
+                                        setTheme(settings.theme);
+                                        applyTheme(settings.theme);
+                                        toast.add({ title: "Theme saved", type: "success" });
+                                    }).catch((error: unknown) =>
+                                    {
+                                        toast.add({ title: error instanceof Error ? error.message : String(error), type: "error" });
+                                    });
+                                }}
+                            >
+                                <SelectTrigger id="theme-select" className="w-full"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    <SelectGroup>
+                                        <SelectItem value="system">System</SelectItem>
+                                        <SelectItem value="light">Light</SelectItem>
+                                        <SelectItem value="dark">Dark</SelectItem>
+                                    </SelectGroup>
+                                </SelectContent>
+                            </Select>
+                            <FieldDescription>Follow the operating system or choose a fixed theme.</FieldDescription>
+                        </Field>
+                        <Field>
+                            <FieldTitle>Config directory</FieldTitle>
+                            <div className="flex items-center gap-2">
+                                <span className="min-w-0 flex-1 truncate" title={configDirectory}>{configDirectory}</span>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={isOpening}
+                                    onClick={() =>
+                                    {
+                                        setIsOpening(true);
+                                        void window.appApi.app.openConfigDirectory().then(() => undefined).catch((error: unknown) =>
+                                        {
+                                            toast.add({ title: error instanceof Error ? error.message : String(error), type: "error" });
+                                        }).finally(() => setIsOpening(false));
+                                    }}
+                                >
+                                    <FolderOpenIcon data-icon="inline-start" />
+                                    Open
+                                </Button>
+                            </div>
+                            <FieldDescription>Harness Align reads configuration from this directory.</FieldDescription>
+                        </Field>
+                        <Field>
+                            <FieldTitle>App version</FieldTitle>
+                            <span>{version || "—"}</span>
+                        </Field>
+                    </FieldGroup>
+                </CardContent>
             </Card>
         </div>
     );

@@ -1,24 +1,22 @@
 import { CircleCheckIcon, InfoIcon, OctagonXIcon, XIcon } from "lucide-react";
 import { useEffect } from "react";
 import {
-    AlertDialog,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+    Dialog,
+    DialogContent,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/Utils";
+import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { useAppStore, type OutputTone } from "@/stores/AppStore";
 
 /** Status icon used by the compact output notification. */
 function OutputIcon({ tone }: { tone: OutputTone })
 {
-    if (tone === "error") return <OctagonXIcon className="size-4 shrink-0 text-destructive" />;
-    if (tone === "success") return <CircleCheckIcon className="size-4 shrink-0 text-foreground" />;
-    return <InfoIcon className="size-4 shrink-0 text-muted-foreground" />;
+    if (tone === "error") return <OctagonXIcon className="shrink-0 text-destructive" />;
+    if (tone === "success") return <CircleCheckIcon className="shrink-0 text-foreground" />;
+    return <InfoIcon className="shrink-0 text-muted-foreground" />;
 }
 
 /** Bottom-right output notification that opens the full log in a centered dialog. */
@@ -44,54 +42,46 @@ export function AppOutput()
     return (
         <>
             {isOutputNoticeVisible ? (
-                <div
+                <Item
                     role="status"
-                    className={cn(
-                        "fixed right-4 bottom-4 z-40 w-[min(24rem,calc(100vw-2rem))] rounded-xl border bg-popover text-popover-foreground shadow-lg",
-                        outputTone === "error" && "border-destructive/50",
-                    )}
+                    variant="outline"
+                    className="fixed right-4 bottom-4 z-40 w-[min(24rem,calc(100vw-2rem))] shadow-lg"
                 >
                     <button
                         type="button"
-                        className="flex w-full items-start gap-3 p-4 pr-11 text-left"
+                        className="flex min-w-0 flex-1 items-start gap-3 text-left"
                         onClick={() =>
                         {
                             dismissOutputNotice();
                             setOutputDialogOpen(true);
                         }}
                     >
-                        <OutputIcon tone={outputTone} />
-                        <span className="min-w-0 flex-1">
-                            <span className="block font-medium">{outputTitle}</span>
-                            <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">{summary}</span>
-                            <span className="mt-1 block text-[11px] text-muted-foreground">Click to view details</span>
-                        </span>
+                        <ItemMedia><OutputIcon tone={outputTone} /></ItemMedia>
+                        <ItemContent>
+                            <ItemTitle>{outputTitle}</ItemTitle>
+                            <ItemDescription className="truncate">{summary}</ItemDescription>
+                        </ItemContent>
                     </button>
-                    <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label="Dismiss output notification"
-                        className="absolute top-2 right-2"
-                        onClick={dismissOutputNotice}
-                    >
-                        <XIcon />
-                    </Button>
-                </div>
+                    <ItemActions>
+                        <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label="Dismiss output notification"
+                            onClick={dismissOutputNotice}
+                        >
+                            <XIcon />
+                        </Button>
+                    </ItemActions>
+                </Item>
             ) : null}
-            <AlertDialog open={isOutputDialogOpen} onOpenChange={setOutputDialogOpen}>
-                <AlertDialogContent className="max-h-[80vh] w-[calc(100vw-2rem)] max-w-3xl grid-rows-[auto_minmax(0,1fr)_auto] data-[size=default]:max-w-3xl">
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>{outputTitle}</AlertDialogTitle>
-                    </AlertDialogHeader>
-                    <AlertDialogDescription className="min-h-0 overflow-auto text-left">
-                        <pre className="font-mono text-[12px] whitespace-pre-wrap text-foreground">{output}</pre>
-                    </AlertDialogDescription>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Close</AlertDialogCancel>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
+            <Dialog open={isOutputDialogOpen} onOpenChange={setOutputDialogOpen}>
+                <DialogContent className="max-h-[80vh] w-[calc(100vw-2rem)] max-w-3xl grid-rows-[auto_minmax(0,1fr)_auto]">
+                    <DialogHeader><DialogTitle>{outputTitle}</DialogTitle></DialogHeader>
+                    <div className="min-h-0 overflow-auto"><pre className="font-mono text-code whitespace-pre-wrap text-foreground">{output}</pre></div>
+                    <DialogFooter><Button variant="outline" onClick={() => setOutputDialogOpen(false)}>Close</Button></DialogFooter>
+                </DialogContent>
+            </Dialog>
         </>
     );
 }

@@ -1,13 +1,14 @@
-import { ContextMenu } from "@base-ui/react/context-menu";
 import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
 import { useState } from "react";
 import { PencilIcon, PlusIcon, SaveIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/toast";
 import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { fileName, ruleDisplayName, uniqueAgentPath, uniqueRulePath, catalogLayerNames } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
+import { cn } from "@/lib/Utils";
 
 /** Available insertion gaps around a rule row. */
 type RuleDropPosition = "before" | "after";
@@ -101,12 +102,12 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                 const bounds = event.currentTarget.getBoundingClientRect();
                 onDrop?.(event.clientY < bounds.top + bounds.height / 2 ? "before" : "after");
             }}
-            className={`group/tab relative flex w-full min-w-0 items-center ${isDraggable ? "cursor-grab active:cursor-grabbing" : ""} ${isDragging ? "opacity-40" : ""} ${active ? "bg-accent" : "hover:bg-accent/50"}`}
+            className={cn("group/tab relative flex w-full min-w-0 items-center text-sm", isDraggable && "cursor-grab active:cursor-grabbing", isDragging && "opacity-40", active ? "bg-accent font-medium text-foreground" : "hover:bg-accent/50")}
         >
             {dropPosition ? (
                 <span
                     aria-hidden
-                    className={`pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-full bg-blue-500 ring-2 ring-background ${dropPosition === "before" ? "top-0 -translate-y-1/2" : "bottom-0 translate-y-1/2"}`}
+                    className={cn("pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-full bg-primary ring-2 ring-background", dropPosition === "before" ? "top-0 -translate-y-1/2" : "bottom-0 translate-y-1/2")}
                 />
             ) : null}
             {isRenaming ? (
@@ -131,7 +132,7 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                             setIsRenaming(false);
                         }
                     }}
-                    className={`my-0.5 h-6 min-w-0 flex-1 rounded border border-input bg-background pr-2 text-sm outline-none focus:ring-2 focus:ring-ring/50 ${indent ? "ml-5 pl-1" : "ml-2 pl-1"}`}
+                    className={cn("my-0.5 h-7 min-w-0 flex-1 rounded border border-input bg-background pr-2 text-sm outline-none focus:ring-2 focus:ring-ring/50", indent ? "ml-5 pl-1" : "ml-2 pl-1")}
                 />
             ) : (
                 <button
@@ -139,7 +140,7 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                     title={label}
                     disabled={disabled}
                     onClick={onClick}
-                    className={`min-w-0 flex-1 truncate py-1 pr-2 text-left disabled:opacity-50 ${indent ? "pl-6" : "pl-3"}`}
+                    className={cn("min-w-0 flex-1 truncate py-1.5 pr-2 text-left disabled:opacity-50", indent ? "pl-6" : "pl-3")}
                 >
                     {label}
                 </button>
@@ -148,7 +149,7 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                 <span
                     title="Unsaved changes"
                     aria-label="Unsaved changes"
-                    className="mr-1 flex h-5 w-5 shrink-0 items-center justify-center text-blue-600 dark:text-blue-400"
+                    className="mr-1 flex size-5 shrink-0 items-center justify-center text-primary"
                 >
                     <span className="size-2 rounded-full bg-current" />
                 </span>
@@ -158,50 +159,46 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
 
     if (!selection) return row;
     return (
-        <ContextMenu.Root>
-            <ContextMenu.Trigger render={row} />
-            <ContextMenu.Portal>
-                <ContextMenu.Positioner className="isolate z-50" sideOffset={4}>
-                    <ContextMenu.Popup className="min-w-40 origin-(--transform-origin) rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
+        <ContextMenu>
+            <ContextMenuTrigger render={row} />
+            <ContextMenuContent>
+                        <ContextMenuGroup>
                         {onRename ? (
                             <>
-                                <ContextMenu.Item
+                                <ContextMenuItem
                                     disabled={disabled}
                                     onClick={() =>
                                     {
                                         setRenameValue(label);
                                         setIsRenaming(true);
                                     }}
-                                    className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50"
                                 >
-                                    <PencilIcon className="size-4" />
+                                    <PencilIcon />
                                     <span>Rename</span>
-                                </ContextMenu.Item>
-                                <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+                                </ContextMenuItem>
+                                <ContextMenuSeparator />
                             </>
                         ) : null}
-                        <ContextMenu.Item
+                        <ContextMenuItem
                             disabled={disabled || !canSave}
                             onClick={() => requestEditorAction(selection, "save")}
-                            className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50"
                         >
-                            <SaveIcon className="size-4" />
+                            <SaveIcon />
                             <span>Save</span>
-                            <span className="ml-auto text-[11px] text-muted-foreground">Ctrl+S</span>
-                        </ContextMenu.Item>
-                        <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-                        <ContextMenu.Item
+                            <ContextMenuShortcut>Ctrl+S</ContextMenuShortcut>
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem
+                            variant="destructive"
                             disabled={disabled || !canDelete}
                             onClick={() => requestEditorAction(selection, "delete")}
-                            className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive outline-none select-none data-highlighted:bg-destructive/10 data-disabled:pointer-events-none data-disabled:opacity-50"
                         >
-                            <Trash2Icon className="size-4" />
+                            <Trash2Icon />
                             <span>Delete</span>
-                        </ContextMenu.Item>
-                    </ContextMenu.Popup>
-                </ContextMenu.Positioner>
-            </ContextMenu.Portal>
-        </ContextMenu.Root>
+                        </ContextMenuItem>
+                        </ContextMenuGroup>
+            </ContextMenuContent>
+        </ContextMenu>
     );
 }
 
@@ -337,13 +334,13 @@ interface SectionProps
 function Section({ title, disabled, active, onClick, onNew }: SectionProps)
 {
     return (
-        <div className="mt-3 flex items-center justify-between px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-1">
+        <div className="mt-3 flex items-center justify-between px-3 text-sm font-semibold text-foreground first:mt-1">
             {onClick ? (
                 <button
                     type="button"
                     disabled={disabled}
                     onClick={onClick}
-                    className={`min-w-0 truncate rounded-sm px-1 py-0.5 text-left uppercase tracking-wide disabled:opacity-50 ${active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+                    className={cn("min-w-0 truncate rounded-sm px-1 py-1 text-left disabled:opacity-50", active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50")}
                 >
                     {title}
                 </button>
@@ -351,7 +348,7 @@ function Section({ title, disabled, active, onClick, onNew }: SectionProps)
                 <span>{title}</span>
             )}
             {onNew ? (
-                <Button size="icon-sm" variant="ghost" type="button" disabled={disabled} aria-label="New" className="border-0 text-muted-foreground" onClick={onNew}>
+                <Button size="icon-sm" variant="ghost" type="button" disabled={disabled} aria-label="New" onClick={onNew}>
                     <PlusIcon />
                 </Button>
             ) : null}
@@ -381,7 +378,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
     return (
         <ScrollArea className="h-full">
-            <div className="py-2 text-[13px]">
+            <div className="py-2 text-sm">
                 {view === "project" ? (
                     <>
                         <Section title="Config" />
@@ -546,7 +543,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                             />
                                         </div>
                                         {selection.kind === "layer" && selection.name === layerName ? (
-                                            <Button size="icon-sm" variant="ghost" type="button" disabled={isBusy} className="mr-3 border-0 text-muted-foreground" aria-label="New option" onClick={() => setSelection({ kind: "layer-option-new", layer: layerName })}>
+                                            <Button size="icon-sm" variant="ghost" type="button" disabled={isBusy} className="mr-3" aria-label="New option" onClick={() => setSelection({ kind: "layer-option-new", layer: layerName })}>
                                                 <PlusIcon />
                                             </Button>
                                         ) : null}

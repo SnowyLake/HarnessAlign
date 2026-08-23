@@ -2,6 +2,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/Utils"
 
+/** Root layout for an empty state. */
 function Empty({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -68,12 +69,13 @@ function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/** Supporting text for an empty state. */
 function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
   return (
-    <div
+    <p
       data-slot="empty-description"
       className={cn(
-        "text-sm/relaxed text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
+        "text-sm text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
         className
       )}
       {...props}

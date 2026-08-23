@@ -44,13 +44,13 @@ const sourceEditorTheme = EditorView.theme({
         height: "100%",
         backgroundColor: "var(--background)",
         color: "var(--foreground)",
-        fontSize: "12px",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        fontSize: "var(--text-code)",
+        fontFamily: "var(--font-mono)",
     },
     ".cm-scroller": {
         overflow: "auto",
         fontFamily: "inherit",
-        lineHeight: "1.5",
+        lineHeight: "var(--text-code--line-height)",
     },
     ".cm-content": {
         caretColor: "var(--foreground)",
@@ -195,7 +195,7 @@ export function SourceEditor({
     return (
         <div
             className={cn(
-                "flex w-full min-w-0 flex-col rounded-md border border-border bg-background font-mono text-[12px] has-[.cm-focused]:ring-1 has-[.cm-focused]:ring-ring",
+                "flex w-full min-w-0 flex-col rounded-md border border-border bg-background font-mono text-code has-[.cm-focused]:ring-1 has-[.cm-focused]:ring-ring",
                 autoHeight ? "min-h-0 overflow-visible" : "min-h-40 overflow-hidden",
                 className,
             )}

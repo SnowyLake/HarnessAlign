@@ -5,19 +5,22 @@
 
 import type { AgentFormat, Config, HarnessConfig, LayerSelection, RuleInput, Workspace } from "@shared/models/Workspace";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
-import { ContextMenu } from "@base-ui/react/context-menu";
 import { ChevronRightIcon, GripVerticalIcon, PencilIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SourceEditor } from "@/components/ui/source-editor";
 import { toast } from "@/components/ui/toast";
 import { persistLayerOptionRename, persistLayerRename, persistProjectConfig, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { catalogLayerNames, defaultLayerOption, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { catalogLayerNames, cn, defaultLayerOption, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
 /** Form bindings that preserve drafts and respond to tree or keyboard commands. */
@@ -123,15 +126,17 @@ function TargetBoxes({ selected }: { selected: string[] | undefined })
 {
     const workspace = useAppStore((state) => state.workspace);
     return (
-        <fieldset className="grid gap-1">
-            <legend className="text-[12px] text-muted-foreground">targets (none means all)</legend>
+        <FieldSet>
+            <FieldLegend variant="label">Targets <span className="font-normal text-muted-foreground">(none means all)</span></FieldLegend>
+            <FieldGroup className="gap-2">
             {(workspace?.config.harnesses ?? []).map((harness) => (
-                <label key={harness.name} className="flex items-center gap-2 text-foreground">
-                    <input type="checkbox" name="targets" value={harness.name} defaultChecked={selected?.includes(harness.name) ?? false} />
-                    {harness.name}
-                </label>
+                <Field key={harness.name} orientation="horizontal">
+                    <Checkbox id={`target-${harness.name}`} name="targets" value={harness.name} defaultChecked={selected?.includes(harness.name) ?? false} />
+                    <FieldLabel htmlFor={`target-${harness.name}`}>{harness.name}</FieldLabel>
+                </Field>
             ))}
-        </fieldset>
+            </FieldGroup>
+        </FieldSet>
     );
 }
 
@@ -204,7 +209,7 @@ function EditableHeading({ name, value, onChange }: EditableHeadingProps)
                         setIsEditing(false);
                     }
                 }}
-                className="h-8 min-w-0 flex-1 rounded-md bg-background px-1 text-lg font-semibold outline-none ring-2 ring-ring/50"
+                className="h-9 min-w-0 flex-1 rounded-md bg-background px-1 text-lg font-semibold outline-none ring-2 ring-ring/50"
             />
         );
     }
@@ -214,7 +219,7 @@ function EditableHeading({ name, value, onChange }: EditableHeadingProps)
             <input type="hidden" name={name} value={value} />
             <h1
                 tabIndex={0}
-                className="min-w-0 flex-1 cursor-text truncate px-1 text-lg font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                className="min-w-0 flex-1 cursor-text break-all px-1 text-lg font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                 onClick={startEdit}
                 onKeyDown={(event) =>
                 {
@@ -282,7 +287,7 @@ function ConfigForm({ workspace, showTitle = true, children }: { workspace: Work
                 <>
                     <h2 className="text-base font-semibold">config.json</h2>
                     <FormError message={formError} />
-                    <Label className="grid gap-1 text-[12px] text-muted-foreground">name<Input name="name" defaultValue={draftText(editor.draft, "name", workspace.config.name)} /></Label>
+                    <Field><FieldLabel htmlFor="config-name">Name</FieldLabel><Input id="config-name" name="name" defaultValue={draftText(editor.draft, "name", workspace.config.name)} /></Field>
                 </>
             ) : (
                 <>
@@ -369,14 +374,14 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
                     });
                 }}
             >
-                <details
-                    className={`group overflow-hidden rounded-lg border bg-card ${harness ? "" : "border-dashed"}`}
+                <Card size="sm">
+                <Collapsible
                     open={isOpen}
-                    onToggle={(event) => setIsOpen(event.currentTarget.open)}
+                    onOpenChange={setIsOpen}
                 >
-                    <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 select-none [&::-webkit-details-marker]:hidden">
-                        <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
-                        {isRenaming ? (
+                    {isRenaming ? (
+                        <CardHeader className="flex flex-row items-center gap-2">
+                            <ChevronRightIcon className={cn("shrink-0 transition-transform", isOpen && "rotate-90")} />
                             <input
                                 autoFocus
                                 type="text"
@@ -404,19 +409,24 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
                                 className="h-6 min-w-20 max-w-64 rounded-md bg-background px-1 font-medium outline-none ring-2 ring-ring/50"
                                 style={{ width: `${Math.max(harnessName.length + 1, 5)}ch` }}
                             />
-                        ) : (
-                            <>
+                        </CardHeader>
+                    ) : (
+                        <CollapsibleTrigger render={<button type="button" className="w-full text-left" />}>
+                            <CardHeader className="flex flex-row items-center gap-2">
+                                <ChevronRightIcon className={cn("shrink-0 transition-transform", isOpen && "rotate-90")} />
                                 <input type="hidden" name="name" value={harnessName} />
-                                <span className="min-w-0 truncate px-1 font-medium">{harnessName || "New harness"}</span>
-                            </>
-                        )}
-                    </summary>
-                    <div className="grid gap-3 border-t p-4">
+                                <CardTitle className="flex-1 break-all">{harnessName || "New harness"}</CardTitle>
+                            </CardHeader>
+                        </CollapsibleTrigger>
+                    )}
+                    <CollapsibleContent>
+                    <CardContent><FieldGroup>
                         <FormError message={formError} />
-                        <Label className="grid gap-1 text-[12px] text-muted-foreground">config_path<Input name="configPath" defaultValue={draftText(editor.draft, "configPath", harness?.configPath ?? "")} /></Label>
-                        <Label className="grid gap-1 text-[12px] text-muted-foreground">
-                            agent file format
+                        <Field><FieldLabel htmlFor={`${editorKey}-config-path`}>Config path</FieldLabel><Input id={`${editorKey}-config-path`} name="configPath" defaultValue={draftText(editor.draft, "configPath", harness?.configPath ?? "")} /></Field>
+                        <Field>
+                            <FieldLabel htmlFor={`${editorKey}-format`}>Agent file format</FieldLabel>
                             <Select
+                                items={[{ label: "md (YAML metadata)", value: "md" }, { label: "toml", value: "toml" }]}
                                 name="agentFileFormat"
                                 value={agentFileFormat}
                                 onValueChange={(value) =>
@@ -427,34 +437,34 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
                                     editor.handleValueChange("agentFileFormat", nextFormat);
                                 }}
                             >
-                                <SelectTrigger size="sm" className="w-full">
+                                <SelectTrigger id={`${editorKey}-format`} className="w-full">
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="md">md (YAML metadata)</SelectItem>
-                                    <SelectItem value="toml">toml</SelectItem>
+                                    <SelectGroup><SelectItem value="md">md (YAML metadata)</SelectItem><SelectItem value="toml">toml</SelectItem></SelectGroup>
                                 </SelectContent>
                             </Select>
-                        </Label>
+                        </Field>
                         {agentFileFormat === "toml" ? (
-                            <Label className="grid gap-1 text-[12px] text-muted-foreground">instructions_field<Input name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", harness?.instructionsField ?? "")} /></Label>
+                            <Field><FieldLabel htmlFor={`${editorKey}-instructions-field`}>Instructions field</FieldLabel><Input id={`${editorKey}-instructions-field`} name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", harness?.instructionsField ?? "")} /></Field>
                         ) : null}
                         <div className="flex justify-end">
-                            <Button type="submit" size="sm" disabled={isBusy} onMouseDown={(event) => event.preventDefault()}>Save</Button>
+                            <Button type="submit" disabled={isBusy} onMouseDown={(event) => event.preventDefault()}>Save</Button>
                         </div>
-                    </div>
-                </details>
+                    </FieldGroup></CardContent>
+                    </CollapsibleContent>
+                </Collapsible>
+                </Card>
         </form>
     );
 
     return (
         <>
-            <ContextMenu.Root>
-                <ContextMenu.Trigger render={card} />
-                <ContextMenu.Portal>
-                    <ContextMenu.Positioner className="isolate z-50" sideOffset={4}>
-                        <ContextMenu.Popup className="min-w-36 origin-(--transform-origin) rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
-                            <ContextMenu.Item
+            <ContextMenu>
+                <ContextMenuTrigger render={card} />
+                <ContextMenuContent>
+                            <ContextMenuGroup>
+                            <ContextMenuItem
                                 disabled={isBusy}
                                 onClick={() =>
                                 {
@@ -462,24 +472,22 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
                                     setSelection(original ? { kind: "harness", name: original } : { kind: "harness-new" });
                                     setIsRenaming(true);
                                 }}
-                                className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50"
                             >
-                                <PencilIcon className="size-4" />
+                                <PencilIcon />
                                 <span>Rename</span>
-                            </ContextMenu.Item>
-                            <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-                            <ContextMenu.Item
+                            </ContextMenuItem>
+                            <ContextMenuSeparator />
+                            <ContextMenuItem
+                                variant="destructive"
                                 disabled={isBusy || !original}
                                 onClick={() => setDeleteOpen(true)}
-                                className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive outline-none select-none data-highlighted:bg-destructive/10 data-disabled:pointer-events-none data-disabled:opacity-50"
                             >
-                                <Trash2Icon className="size-4" />
+                                <Trash2Icon />
                                 <span>Delete</span>
-                            </ContextMenu.Item>
-                        </ContextMenu.Popup>
-                    </ContextMenu.Positioner>
-                </ContextMenu.Portal>
-            </ContextMenu.Root>
+                            </ContextMenuItem>
+                            </ContextMenuGroup>
+                </ContextMenuContent>
+            </ContextMenu>
             <ConfirmDialog
                 open={deleteOpen}
                 onOpenChange={setDeleteOpen}
@@ -554,7 +562,7 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
                 }}
             />
             <FormError message={formError} />
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">initial option<Input name="initialOption" defaultValue={draftText(editor.draft, "initialOption", "")} /></Label>
+            <Field><FieldLabel htmlFor="initial-option">Initial option</FieldLabel><Input id="initial-option" name="initialOption" defaultValue={draftText(editor.draft, "initialOption", "")} /></Field>
         </form>
     );
 }
@@ -614,7 +622,7 @@ function LayerForm({ workspace, name }: { workspace: Workspace; name: string })
                     }}
                 />
                 <FormError message={formError} />
-                <p className="text-[12px] text-muted-foreground">
+                <p className="text-sm text-muted-foreground">
                     {options.length === 1 ? "1 option" : `${options.length} options`}. Add this layer to a project from the Project page.
                 </p>
             </form>
@@ -666,35 +674,38 @@ function NewLayerCard({ workspace, onAdd, onCancel }: { workspace: Workspace; on
     const available = catalogLayerNames(workspace).filter((name) => !layerSelection.some((item) => item.name === name));
 
     return (
-        <div className="grid gap-3 rounded-lg border border-dashed bg-card p-4">
-            <div className="flex items-center gap-2">
-                <h3 className="min-w-0 flex-1 truncate font-medium">New layer</h3>
-                <Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label="Cancel new layer" className="border-0 text-muted-foreground" onClick={onCancel}>
-                    <XIcon />
-                </Button>
-            </div>
+        <Card size="sm">
+            <CardHeader>
+                <CardTitle>New layer</CardTitle>
+                <CardAction><Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label="Cancel new layer" onClick={onCancel}>
+                    <XIcon data-icon="inline-start" />
+                </Button></CardAction>
+            </CardHeader>
+            <CardContent>
             {available.length === 0 ? (
-                <p className="text-[12px] text-muted-foreground">Every catalog layer is already in this project.</p>
+                <p className="text-sm text-muted-foreground">Every catalog layer is already in this project.</p>
             ) : (
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">
-                    layer
+                <Field>
+                    <FieldLabel htmlFor="new-project-layer">Layer</FieldLabel>
                     <Select
+                        items={[{ label: "Choose a layer", value: null }, ...available.map((name) => ({ label: name, value: name }))]}
                         value={null}
                         onValueChange={(value) =>
                         {
                             if (value !== null) onAdd(value);
                         }}
                     >
-                        <SelectTrigger size="sm" className="w-full" disabled={isBusy}>
+                        <SelectTrigger id="new-project-layer" size="sm" className="w-full" disabled={isBusy}>
                             <SelectValue placeholder="Choose a layer" />
                         </SelectTrigger>
                         <SelectContent>
-                            {available.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+                            <SelectGroup>{available.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}</SelectGroup>
                         </SelectContent>
                     </Select>
-                </Label>
+                </Field>
             )}
-        </div>
+            </CardContent>
+        </Card>
     );
 }
 
@@ -708,7 +719,8 @@ function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, o
     const options = Object.hasOwn(workspace.layerOptions, selection.name) ? workspace.layerOptions[selection.name] ?? [] : [];
 
     return (
-        <div
+        <Card
+            size="sm"
             draggable={!isBusy}
             onDragStart={(event) =>
             {
@@ -726,18 +738,19 @@ function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, o
                 onDrop();
             }}
             onFocusCapture={() => setSelection({ kind: "config" })}
-            className={`grid gap-3 rounded-lg border bg-card p-4 ${isDragging ? "opacity-40" : ""}`}
+            className={cn(isDragging && "opacity-40")}
         >
-            <div className="flex items-center gap-2">
-                <GripVerticalIcon className="size-4 shrink-0 cursor-grab text-muted-foreground" />
-                <h3 className="min-w-0 flex-1 truncate font-medium">{selection.name}</h3>
-                <Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label={`Remove ${selection.name}`} className="border-0 text-muted-foreground" onClick={() => setRemoveOpen(true)}>
+            <CardHeader className="flex flex-row items-center gap-2">
+                <GripVerticalIcon className="shrink-0 cursor-grab text-muted-foreground" />
+                <CardTitle className="flex-1 break-all">{selection.name}</CardTitle>
+                <Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label={`Remove ${selection.name}`} onClick={() => setRemoveOpen(true)}>
                     <XIcon />
                 </Button>
-            </div>
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">
-                selected option
+            </CardHeader>
+            <CardContent><Field>
+                <FieldLabel htmlFor={`layer-option-${selection.name}`}>Selected option</FieldLabel>
                 <Select
+                    items={options.map((option) => ({ label: option.name, value: option.name }))}
                     value={selection.option}
                     onValueChange={(value) =>
                     {
@@ -745,12 +758,12 @@ function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, o
                         setLayerSelection(useAppStore.getState().layerSelection.map((item) => item.name === selection.name ? { ...item, option: value } : item));
                     }}
                 >
-                    <SelectTrigger size="sm" className="w-full"><SelectValue /></SelectTrigger>
+                    <SelectTrigger id={`layer-option-${selection.name}`} size="sm" className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                        {options.map((option) => <SelectItem key={option.name} value={option.name}>{option.name}</SelectItem>)}
+                        <SelectGroup>{options.map((option) => <SelectItem key={option.name} value={option.name}>{option.name}</SelectItem>)}</SelectGroup>
                     </SelectContent>
                 </Select>
-            </Label>
+            </Field></CardContent>
             <ConfirmDialog
                 open={removeOpen}
                 onOpenChange={setRemoveOpen}
@@ -764,7 +777,7 @@ function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, o
                     toast.add({ title: `Removed layer ${selection.name}`, type: "success" });
                 }}
             />
-        </div>
+        </Card>
     );
 }
 
@@ -860,10 +873,10 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                         }}
                     />
                     <FormError message={formError} />
-                    <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
-                        body
-                        <SourceEditor className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", sharedExisting?.body ?? "# Title\n\nbody\n")} />
-                    </Label>
+                    <Field className="min-h-0 flex-1">
+                        <FieldTitle>Body</FieldTitle>
+                        <SourceEditor aria-label="Shared rule body" className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", sharedExisting?.body ?? "# Title\n\nbody\n")} />
+                    </Field>
                 </form>
                 {deleteDialog}
             </>
@@ -914,10 +927,10 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                 />
                 <FormError message={formError} />
                 <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} />
-                <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
-                    body
-                    <SourceEditor className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", existing?.body ?? "# Title\n\nbody\n")} />
-                </Label>
+                <Field className="min-h-0 flex-1">
+                    <FieldTitle>Body</FieldTitle>
+                    <SourceEditor aria-label="Rule body" className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", existing?.body ?? "# Title\n\nbody\n")} />
+                </Field>
             </form>
             {deleteDialog}
         </>
@@ -1009,10 +1022,10 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                 />
                 <FormError message={formError} />
                 <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} />
-                <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
-                    body
-                    <SourceEditor className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", existing?.body ?? "")} />
-                </Label>
+                <Field className="min-h-0 flex-1">
+                    <FieldTitle>Body</FieldTitle>
+                    <SourceEditor aria-label="Layer option body" className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", existing?.body ?? "")} />
+                </Field>
             </form>
             {existing ? (
                 <ConfirmDialog
@@ -1110,35 +1123,54 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                     }}
                 />
                 <FormError message={formError} />
-                <Label className="grid gap-1 text-[12px] text-muted-foreground">description<Input name="description" defaultValue={draftText(editor.draft, "description", existing?.description ?? "")} /></Label>
+                <Field>
+                    <FieldLabel htmlFor="agent-description">Description</FieldLabel>
+                    <Input id="agent-description" name="description" defaultValue={draftText(editor.draft, "description", existing?.description ?? "")} />
+                </Field>
                 {workspace.config.harnesses.map((harness) => (
-                    <details key={harness.name} className="group overflow-hidden rounded-md border bg-card">
-                        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground select-none [&::-webkit-details-marker]:hidden">
-                            <ChevronRightIcon className="size-4 shrink-0 transition-transform group-open:rotate-90" />
-                            {harness.name} metadata (JSON)
-                        </summary>
-                        <SourceEditor
-                            name={`meta-${harness.name}`}
-                            language="json"
-                            autoHeight
-                            className="rounded-none border-0 border-t"
-                            defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))}
-                        />
-                    </details>
+                    <Card key={harness.name} size="sm">
+                        <Collapsible>
+                            <CollapsibleTrigger render={<button type="button" className="group/collapsible-trigger w-full text-left" />}>
+                                <CardHeader className="flex flex-row items-center gap-2">
+                                    <ChevronRightIcon className="shrink-0 transition-transform group-data-[panel-open]/collapsible-trigger:rotate-90" />
+                                    <CardTitle className="flex-1 break-all">{harness.name} metadata (JSON)</CardTitle>
+                                </CardHeader>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                                <CardContent>
+                                    <SourceEditor
+                                        name={`meta-${harness.name}`}
+                                        language="json"
+                                        aria-label={`${harness.name} metadata JSON`}
+                                        autoHeight
+                                        defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))}
+                                    />
+                                </CardContent>
+                            </CollapsibleContent>
+                        </Collapsible>
+                    </Card>
                 ))}
-                <details className="group overflow-hidden rounded-md border bg-card">
-                    <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground select-none [&::-webkit-details-marker]:hidden">
-                        <ChevronRightIcon className="size-4 shrink-0 transition-transform group-open:rotate-90" />
-                        body
-                    </summary>
-                    <SourceEditor
-                        name="body"
-                        language="markdown"
-                        autoHeight
-                        className="rounded-none border-0 border-t"
-                        defaultValue={draftText(editor.draft, "body", existing?.body ?? "Instructions.\n")}
-                    />
-                </details>
+                <Card size="sm">
+                    <Collapsible>
+                        <CollapsibleTrigger render={<button type="button" className="group/collapsible-trigger w-full text-left" />}>
+                            <CardHeader className="flex flex-row items-center gap-2">
+                                <ChevronRightIcon className="shrink-0 transition-transform group-data-[panel-open]/collapsible-trigger:rotate-90" />
+                                <CardTitle>Body</CardTitle>
+                            </CardHeader>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                            <CardContent>
+                                <SourceEditor
+                                    name="body"
+                                    language="markdown"
+                                    aria-label="Agent instructions"
+                                    autoHeight
+                                    defaultValue={draftText(editor.draft, "body", existing?.body ?? "Instructions.\n")}
+                                />
+                            </CardContent>
+                        </CollapsibleContent>
+                    </Collapsible>
+                </Card>
             </form>
             {existing ? (
                 <ConfirmDialog
@@ -1176,7 +1208,7 @@ function GeneratedFileView({ workspace, path }: { workspace: Workspace; path: st
     if (!file)
     {
         return (
-            <Empty className="border-0">
+            <Empty>
                 <EmptyHeader>
                     <EmptyTitle>Generated file not found</EmptyTitle>
                     <EmptyDescription>Generate or reload the project to refresh the actual output files.</EmptyDescription>
@@ -1187,8 +1219,8 @@ function GeneratedFileView({ workspace, path }: { workspace: Workspace; path: st
     return (
         <div className="grid w-full min-w-0 gap-3">
             <div className="min-w-0">
-                <h2 className="truncate text-base font-semibold">{file.path}</h2>
-                <p className="text-[12px] text-muted-foreground">{`.halign/generated/${file.path}`}</p>
+                <h2 className="break-all text-base font-semibold">{file.path}</h2>
+                <p className="text-sm text-muted-foreground">{`.halign/generated/${file.path}`}</p>
             </div>
             <SourceEditor
                 aria-label={file.path}
@@ -1205,7 +1237,7 @@ function GeneratedFileView({ workspace, path }: { workspace: Workspace; path: st
 function GeneratedEmpty()
 {
     return (
-        <Empty className="border-0">
+        <Empty>
             <EmptyHeader>
                 <EmptyTitle>No generated files</EmptyTitle>
                 <EmptyDescription>Run Generate to populate `.halign/generated/`.</EmptyDescription>
@@ -1218,7 +1250,7 @@ function GeneratedEmpty()
 function MissingEditorEmpty({ title, description }: { title: string; description: string })
 {
     return (
-        <Empty className="border-0">
+        <Empty>
             <EmptyHeader>
                 <EmptyTitle>{title}</EmptyTitle>
                 <EmptyDescription>{description}</EmptyDescription>
@@ -1257,7 +1289,7 @@ export function ProjectEditor()
     if (!workspace)
     {
         return (
-            <Empty className="border-0">
+            <Empty>
                 <EmptyHeader>
                     <EmptyTitle>No workspace</EmptyTitle>
                     <EmptyDescription>The user workspace is not loaded yet.</EmptyDescription>
@@ -1301,13 +1333,13 @@ export function ProjectEditor()
                 <div className="flex items-center justify-between gap-3">
                     <div>
                         <h2 className="text-base font-semibold">Harnesses</h2>
-                        <p className="text-[12px] text-muted-foreground">Configure every target harness declared by this project.</p>
+                        <p className="text-sm text-muted-foreground">Configure every target harness declared by this project.</p>
                     </div>
-                    <Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label="New harness" className="border-0 text-muted-foreground" onClick={() => setSelection({ kind: "harness-new" })}>
+                    <Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label="New harness" onClick={() => setSelection({ kind: "harness-new" })}>
                         <PlusIcon />
                     </Button>
                 </div>
-                <div className="grid gap-3 xl:grid-cols-2">
+                <div className="grid gap-3">
                     {workspace.config.harnesses.map((harness) => (
                         <HarnessCard
                             key={harness.name}
@@ -1326,7 +1358,7 @@ export function ProjectEditor()
                 <div className="flex items-center justify-between gap-3">
                     <div>
                         <h2 className="text-base font-semibold">Layers</h2>
-                        <p className="text-[12px] text-muted-foreground">Add existing Layers, choose one option each, and drag them into generation order.</p>
+                        <p className="text-sm text-muted-foreground">Add existing Layers, choose one option each, and drag them into generation order.</p>
                     </div>
                     <Button
                         type="button"
@@ -1334,7 +1366,6 @@ export function ProjectEditor()
                         variant="ghost"
                         disabled={isBusy || isAddingLayer || catalogLayerNames(workspace).every((name) => layerSelection.some((item) => item.name === name))}
                         aria-label="New layer"
-                        className="border-0 text-muted-foreground"
                         onClick={() => setIsAddingLayer(true)}
                     >
                         <PlusIcon />
@@ -1375,7 +1406,7 @@ export function ProjectEditor()
                         />
                     ) : null}
                     {catalogLayerNames(workspace).length === 0 ? (
-                        <p className="text-[12px] text-muted-foreground">Create a layer on the Layers page, then add it here.</p>
+                        <p className="text-sm text-muted-foreground">Create a layer on the Layers page, then add it here.</p>
                     ) : null}
                 </div>
             </section>
@@ -1397,7 +1428,7 @@ function SkillsSourcesSection({ workspace }: { workspace: Workspace })
             <div className="flex items-center justify-between gap-3">
                 <div>
                     <h2 className="text-base font-semibold">Skills</h2>
-                    <p className="text-[12px] text-muted-foreground">Register GitHub repositories used by the Skills page for discover and download.</p>
+                    <p className="text-sm text-muted-foreground">Register GitHub repositories used by the Skills page for discover and download.</p>
                 </div>
                 <Button
                     type="button"
@@ -1405,7 +1436,6 @@ function SkillsSourcesSection({ workspace }: { workspace: Workspace })
                     variant="ghost"
                     disabled={isBusy || isAdding}
                     aria-label="New skill source"
-                    className="border-0 text-muted-foreground"
                     onClick={() =>
                     {
                         setFormError(undefined);
@@ -1418,18 +1448,16 @@ function SkillsSourcesSection({ workspace }: { workspace: Workspace })
             <FormError message={formError} />
             <div className="grid gap-3">
                 {workspace.config.skillSources.map((source) => (
-                    <div key={`${source.owner}/${source.name}`} className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3">
-                        <div className="min-w-0 flex-1">
-                            <div className="truncate font-medium">https://github.com/{source.owner}/{source.name}</div>
-                            <div className="text-[12px] text-muted-foreground">branch: {source.branch}</div>
-                        </div>
-                        <Button
+                    <Card key={`${source.owner}/${source.name}`} size="sm">
+                        <CardHeader>
+                            <CardTitle className="break-all">https://github.com/{source.owner}/{source.name}</CardTitle>
+                            <CardDescription className="break-all">Branch: {source.branch}</CardDescription>
+                        <CardAction><Button
                             type="button"
                             size="icon-sm"
                             variant="ghost"
                             disabled={isBusy}
                             aria-label={`Remove ${source.owner}/${source.name}`}
-                            className="border-0 text-muted-foreground"
                             onClick={() =>
                             {
                                 setFormError(undefined);
@@ -1445,8 +1473,9 @@ function SkillsSourcesSection({ workspace }: { workspace: Workspace })
                             }}
                         >
                             <XIcon />
-                        </Button>
-                    </div>
+                        </Button></CardAction>
+                        </CardHeader>
+                    </Card>
                 ))}
                 {isAdding ? (
                     <NewSkillSourceCard
@@ -1461,7 +1490,7 @@ function SkillsSourcesSection({ workspace }: { workspace: Workspace })
                     />
                 ) : null}
                 {workspace.config.skillSources.length === 0 && !isAdding ? (
-                    <p className="text-[12px] text-muted-foreground">No skill sources registered.</p>
+                    <p className="text-sm text-muted-foreground">No skill sources registered.</p>
                 ) : null}
             </div>
         </section>
@@ -1487,7 +1516,6 @@ function NewSkillSourceCard({
 
     return (
         <form
-            className="grid gap-3 rounded-lg border border-dashed bg-card p-4"
             onSubmit={(event) =>
             {
                 event.preventDefault();
@@ -1507,23 +1535,20 @@ function NewSkillSourceCard({
                 });
             }}
         >
-            <div className="flex items-center gap-2">
-                <h3 className="min-w-0 flex-1 truncate font-medium">New skill source</h3>
-                <Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label="Cancel new skill source" className="border-0 text-muted-foreground" onClick={onCancel}>
+            <Card>
+            <CardHeader>
+                <CardTitle>New skill source</CardTitle>
+                <CardDescription>Register a GitHub repository for skill discovery.</CardDescription>
+                <CardAction><Button type="button" size="icon-sm" variant="ghost" disabled={isBusy} aria-label="Cancel new skill source" onClick={onCancel}>
                     <XIcon />
-                </Button>
-            </div>
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">
-                Repository URL
-                <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repo" disabled={isBusy} />
-            </Label>
-            <Label className="grid gap-1 text-[12px] text-muted-foreground">
-                Branch (optional)
-                <Input value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" disabled={isBusy} />
-            </Label>
-            <div>
-                <Button type="submit" size="sm" disabled={isBusy || !url.trim()}>Save</Button>
-            </div>
+                </Button></CardAction>
+            </CardHeader>
+            <CardContent><FieldGroup>
+                <Field><FieldLabel htmlFor="skill-source-url">Repository URL</FieldLabel><Input id="skill-source-url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repo" disabled={isBusy} /></Field>
+                <Field><FieldLabel htmlFor="skill-source-branch">Branch (optional)</FieldLabel><Input id="skill-source-branch" value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" disabled={isBusy} /></Field>
+            </FieldGroup></CardContent>
+            <CardFooter><Button type="submit" disabled={isBusy || !url.trim()}>Save</Button></CardFooter>
+            </Card>
         </form>
     );
 }
@@ -1537,7 +1562,7 @@ export function WorkspaceEditor()
     if (!workspace)
     {
         return (
-            <Empty className="border-0">
+            <Empty>
                 <EmptyHeader>
                     <EmptyTitle>No workspace</EmptyTitle>
                     <EmptyDescription>The user workspace is not loaded yet.</EmptyDescription>
