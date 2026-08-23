@@ -3,8 +3,8 @@
  * Saves go through Main path checks; this module never imports Node or Electron.
  */
 
-import type { AgentFormat, Config, HarnessConfig, LayerSelection, RuleInput, Workspace } from "@shared/models/Workspace";
-import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
+import type { HarnessConfig, LayerSelection, Workspace } from "@shared/models/Workspace";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type RefObject } from "react";
 import { ChevronRightIcon, GripVerticalIcon, PencilIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -19,11 +19,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SourceEditor } from "@/components/ui/source-editor";
 import { toast } from "@/components/ui/toast";
-import { persistLayerOptionRename, persistLayerRename, persistProjectConfig, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { catalogLayerNames, cn, defaultLayerOption, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { catalogLayerNames, cn, defaultLayerOption, ruleDisplayName } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
-/** Form bindings that preserve drafts and respond to tree or keyboard commands. */
+/** Form bindings that preserve drafts and respond to tree commands. */
 interface EditorFormBinding
 {
     draft: EditorDraft | undefined;
@@ -82,8 +82,9 @@ function useEditorAction(editorKey: string, onSave: (() => void) | undefined, on
 }
 
 /** Bind an uncontrolled form to persistent drafts and external save or delete commands. */
-function useEditorForm(editorKey: string, onDelete?: () => void): EditorFormBinding
+function useEditorForm(selection: Selection, onDelete?: () => void): EditorFormBinding
 {
+    const editorKey = selectionKey(selection);
     const draft = useAppStore((state) => state.editorDrafts[editorKey]);
     const setEditorDraft = useAppStore((state) => state.setEditorDraft);
     const formRef = useRef<HTMLFormElement>(null);
@@ -93,13 +94,13 @@ function useEditorForm(editorKey: string, onDelete?: () => void): EditorFormBind
     {
         if (!formRef.current) return;
         baselineRef.current = draft?.baseline ?? formSnapshot(formRef.current);
-    }, [editorKey]);
+    }, [draft?.baseline, editorKey]);
 
     const handleChange: FormEventHandler<HTMLFormElement> = (event) =>
     {
         const current = formSnapshot(event.currentTarget);
         const baseline = baselineRef.current ?? current;
-        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { baseline, current });
+        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current });
     };
 
     const handleValueChange = (name: string, value: string): void =>
@@ -108,17 +109,22 @@ function useEditorForm(editorKey: string, onDelete?: () => void): EditorFormBind
         const current = formSnapshot(formRef.current);
         current[name] = [value];
         const baseline = baselineRef.current ?? current;
-        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { baseline, current });
+        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current });
     };
 
     useEditorAction(editorKey, () => formRef.current?.requestSubmit(), onDelete);
     return { draft, formRef, handleChange, handleValueChange };
 }
 
-/** Build a rule payload, omitting `targets` when every harness is selected. */
-function rulePayload(path: string, priority: number, targets: string[] | undefined, body: string): RuleInput
+/** Persist one mounted editor form and refresh it under any resulting selection. */
+async function persistEditorForm(workspace: Workspace, selection: Selection, snapshot: FormSnapshot): Promise<void>
 {
-    return targets === undefined ? { path, priority, body } : { path, priority, targets, body };
+    const result = await persistEditorSnapshot(workspace, selection, snapshot);
+    const state = useAppStore.getState();
+    state.clearEditorDraft(selectionKey(selection));
+    state.clearEditorDraft(selectionKey(result.selection));
+    await refreshWorkspace(result.selection);
+    toast.add({ title: result.message, type: "success" });
 }
 
 /** Checkbox list of harness targets; empty means all harnesses. */
@@ -138,17 +144,6 @@ function TargetBoxes({ selected }: { selected: string[] | undefined })
             </FieldGroup>
         </FieldSet>
     );
-}
-
-/** Read checked harness names, omitting `targets` when none or all current harnesses are checked. */
-function readTargets(root: HTMLElement, harnessNames: readonly string[]): string[] | undefined
-{
-    const values = [...root.querySelectorAll("input[name=targets]")]
-        .filter((node) => (node as HTMLInputElement).checked)
-        .map((node) => (node as HTMLInputElement).value);
-    if (values.length === 0) return undefined;
-    if (values.length === harnessNames.length && harnessNames.every((name) => values.includes(name))) return undefined;
-    return values;
 }
 
 /** Inline form error banner. */
@@ -234,25 +229,24 @@ function EditableHeading({ name, value, onChange }: EditableHeadingProps)
     );
 }
 
-/** Title row with a click-to-edit heading and Save on the right. */
-function EditorNameHeader({ name, value, onChange, isBusy }: { name: string; value: string; onChange: (value: string) => void; isBusy: boolean })
+/** Title row with a click-to-edit heading and an optional creation action. */
+function EditorNameHeader({ name, value, onChange, isBusy, submitLabel }: { name: string; value: string; onChange: (value: string) => void; isBusy: boolean; submitLabel?: string | undefined })
 {
     return (
         <div className="flex items-center justify-between gap-3">
             <EditableHeading name={name} value={value} onChange={onChange} />
-            <Button type="submit" size="sm" disabled={isBusy} onMouseDown={(event) => event.preventDefault()}>Save</Button>
+            {submitLabel ? <Button type="submit" size="sm" disabled={isBusy} onMouseDown={(event) => event.preventDefault()}>{submitLabel}</Button> : null}
         </div>
     );
 }
 
 /** Editor for `config.json` title and saved ordered layer selection. */
-function ConfigForm({ workspace, showTitle = true, children }: { workspace: Workspace; showTitle?: boolean; children?: ReactNode })
+function ConfigForm({ workspace, showTitle = true }: { workspace: Workspace; showTitle?: boolean })
 {
     const setSelection = useAppStore((state) => state.setSelection);
-    const layerSelection = useAppStore((state) => state.layerSelection);
     const [formError, setFormError] = useState<string | undefined>();
-    const editorKey = selectionKey({ kind: "config" });
-    const editor = useEditorForm(editorKey);
+    const selection: Selection = { kind: "config" };
+    const editor = useEditorForm(selection);
     const [configName, setConfigName] = useState(draftText(editor.draft, "name", workspace.config.name));
 
     return (
@@ -264,19 +258,11 @@ function ConfigForm({ workspace, showTitle = true, children }: { workspace: Work
             onSubmit={(event) =>
             {
                 event.preventDefault();
-                const form = new FormData(event.currentTarget);
+                const snapshot = formSnapshot(event.currentTarget);
                 setFormError(undefined);
                 void runMutation(async () =>
                 {
-                    const next: Config = {
-                        ...workspace.config,
-                        name: String(form.get("name") ?? "").trim(),
-                        layers: layerSelection.map((selection) => ({ name: selection.name, selected: selection.option })),
-                    };
-                    await window.appApi.workspace.saveConfig(next);
-                    useAppStore.getState().clearEditorDraft(editorKey);
-                    await refreshWorkspace({ kind: "config" });
-                    toast.add({ title: "Saved config.json", type: "success" });
+                    await persistEditorForm(workspace, selection, snapshot);
                 }).then((result) =>
                 {
                     if (!result.ok) setFormError(result.message);
@@ -301,7 +287,6 @@ function ConfigForm({ workspace, showTitle = true, children }: { workspace: Work
                                 editor.handleValueChange("name", value);
                             }}
                         />
-                        {children}
                     </div>
                     <FormError message={formError} />
                 </>
@@ -321,8 +306,9 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
     const [isOpen, setIsOpen] = useState(isInitiallyOpen);
     const [isRenaming, setIsRenaming] = useState(false);
     const renameStartRef = useRef(original ?? "");
-    const editorKey = selectionKey(original ? { kind: "harness", name: original } : { kind: "harness-new" });
-    const editor = useEditorForm(editorKey, original ? () => setDeleteOpen(true) : undefined);
+    const selection: Selection = original ? { kind: "harness", name: original } : { kind: "harness-new" };
+    const editorKey = selectionKey(selection);
+    const editor = useEditorForm(selection, original ? () => setDeleteOpen(true) : undefined);
     const [harnessName, setHarnessName] = useState(draftText(editor.draft, "name", original ?? ""));
     const [agentFileFormat, setAgentFileFormat] = useState<"toml" | "md">(
         draftText(editor.draft, "agentFileFormat", harness?.agentFormat === "toml" ? "toml" : "md") === "toml" ? "toml" : "md",
@@ -337,37 +323,11 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
-                    const form = new FormData(event.currentTarget);
-                    const agentFileFormat = form.get("agentFileFormat") === "toml" ? "toml" : "md";
-                    const agentFormat: AgentFormat = agentFileFormat === "toml" ? "toml" : "yaml";
-                    const harness: HarnessConfig = agentFormat === "toml"
-                        ? {
-                            name: String(form.get("name") ?? "").trim(),
-                            configPath: String(form.get("configPath") ?? "").trim(),
-                            agentFormat,
-                            agentExtension: agentFileFormat,
-                            instructionsField: String(form.get("instructionsField") ?? "").trim(),
-                        }
-                        : {
-                            name: String(form.get("name") ?? "").trim(),
-                            configPath: String(form.get("configPath") ?? "").trim(),
-                            agentFormat,
-                            agentExtension: agentFileFormat,
-                        };
+                    const snapshot = formSnapshot(event.currentTarget);
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        if (original === undefined) await window.appApi.workspace.addHarness(harness);
-                        else
-                        {
-                            if (original !== harness.name) await window.appApi.workspace.renameHarness(original, harness.name);
-                            const current = await window.appApi.workspace.load();
-                            const harnesses = current.config.harnesses.map((item) => (item.name === harness.name ? harness : item));
-                            await window.appApi.workspace.saveConfig({ ...current.config, harnesses });
-                        }
-                        useAppStore.getState().clearEditorDraft(editorKey);
-                        await refreshWorkspace({ kind: "harness", name: harness.name });
-                        toast.add({ title: `Saved harness ${harness.name}`, type: "success" });
+                        await persistEditorForm(workspace, selection, snapshot);
                     }).then((result) =>
                     {
                         if (!result.ok) setFormError(result.message);
@@ -448,9 +408,11 @@ function HarnessCard({ workspace, harness, isInitiallyOpen = false }: { workspac
                         {agentFileFormat === "toml" ? (
                             <Field><FieldLabel htmlFor={`${editorKey}-instructions-field`}>Instructions field</FieldLabel><Input id={`${editorKey}-instructions-field`} name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", harness?.instructionsField ?? "")} /></Field>
                         ) : null}
-                        <div className="flex justify-end">
-                            <Button type="submit" disabled={isBusy} onMouseDown={(event) => event.preventDefault()}>Save</Button>
-                        </div>
+                        {!original ? (
+                            <div className="flex justify-end">
+                                <Button type="submit" disabled={isBusy} onMouseDown={(event) => event.preventDefault()}>Create harness</Button>
+                            </div>
+                        ) : null}
                     </FieldGroup></CardContent>
                     </CollapsibleContent>
                 </Collapsible>
@@ -522,8 +484,8 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
     const isBusy = useAppStore((state) => state.isBusy);
     const setSelection = useAppStore((state) => state.setSelection);
     const [formError, setFormError] = useState<string | undefined>();
-    const editorKey = selectionKey({ kind: "layer-new" });
-    const editor = useEditorForm(editorKey);
+    const selection: Selection = { kind: "layer-new" };
+    const editor = useEditorForm(selection);
     const [layerName, setLayerName] = useState(draftText(editor.draft, "name", "new-layer"));
 
     return (
@@ -535,16 +497,11 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
             onSubmit={(event) =>
             {
                 event.preventDefault();
-                const form = new FormData(event.currentTarget);
-                const name = String(form.get("name") ?? "").trim();
-                const initialOption = String(form.get("initialOption") ?? "").trim();
+                const snapshot = formSnapshot(event.currentTarget);
                 setFormError(undefined);
                 void runMutation(async () =>
                 {
-                    await window.appApi.workspace.addLayer(name, initialOption);
-                    useAppStore.getState().clearEditorDraft(editorKey);
-                    await refreshWorkspace({ kind: "layer-option", path: `.halign/layers/${name}/${initialOption}.md` });
-                    toast.add({ title: `Created layer ${name}`, type: "success" });
+                    await persistEditorForm(workspace, selection, snapshot);
                 }).then((result) =>
                 {
                     if (!result.ok) setFormError(result.message);
@@ -555,6 +512,7 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
                 name="name"
                 value={layerName}
                 isBusy={isBusy}
+                submitLabel="Create layer"
                 onChange={(value) =>
                 {
                     setLayerName(value);
@@ -574,8 +532,9 @@ function LayerForm({ workspace, name }: { workspace: Workspace; name: string })
     const [formError, setFormError] = useState<string | undefined>();
     const [deleteOpen, setDeleteOpen] = useState(false);
     const options = Object.hasOwn(workspace.layerOptions, name) ? workspace.layerOptions[name] ?? [] : [];
-    const editorKey = selectionKey({ kind: "layer", name });
-    const editor = useEditorForm(editorKey, () => setDeleteOpen(true));
+    const selection: Selection = { kind: "layer", name };
+    const editorKey = selectionKey(selection);
+    const editor = useEditorForm(selection, () => setDeleteOpen(true));
     const [layerName, setLayerName] = useState(draftText(editor.draft, "name", name));
 
     if (options.length === 0)
@@ -592,19 +551,11 @@ function LayerForm({ workspace, name }: { workspace: Workspace; name: string })
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
-                    const nextName = String(new FormData(event.currentTarget).get("name") ?? "").trim();
-                    if (!nextName || nextName === name)
-                    {
-                        setLayerName(name);
-                        editor.handleValueChange("name", name);
-                        return;
-                    }
+                    const snapshot = formSnapshot(event.currentTarget);
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        await persistLayerRename(name, nextName);
-                        useAppStore.getState().clearEditorDraft(editorKey);
-                        toast.add({ title: `Renamed layer to ${nextName}`, type: "success" });
+                        await persistEditorForm(workspace, selection, snapshot);
                     }).then((result) =>
                     {
                         if (!result.ok) setFormError(result.message);
@@ -623,7 +574,7 @@ function LayerForm({ workspace, name }: { workspace: Workspace; name: string })
                 />
                 <FormError message={formError} />
                 <p className="text-sm text-muted-foreground">
-                    {options.length === 1 ? "1 option" : `${options.length} options`}. Add this layer to a project from the Project page.
+                    {options.length === 1 ? "1 option" : `${options.length} options`}. Add this layer to the project from the Home page.
                 </p>
             </form>
             <ConfirmDialog
@@ -655,7 +606,7 @@ function LayerForm({ workspace, name }: { workspace: Workspace; name: string })
     );
 }
 
-/** Props for one ordered Layer card on the Project page. */
+/** Props for one ordered Layer card on the Home page. */
 interface LayerCardProps
 {
     workspace: Workspace;
@@ -800,12 +751,8 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
         : undefined;
     const existingPath = sharedExisting?.path ?? existing?.path;
     const editorKey = selectionKey(selection);
-    const editor = useEditorForm(editorKey, existingPath ? () => setDeleteOpen(true) : undefined);
+    const editor = useEditorForm(selection, existingPath ? () => setDeleteOpen(true) : undefined);
     const [ruleName, setRuleName] = useState(draftText(editor.draft, "name", ruleDisplayName(existingPath ?? defaultPath)));
-    const rulePaths = [...workspace.rootRules, ...workspace.sharedRules].map((item) => item.path);
-
-    /** Resolve the saved path from the heading name. */
-    const pathFromName = (name: string): string => uniqueRulePath(existingPath ?? defaultPath, name, rulePaths);
 
     const deleteDialog = existingPath ? (
         <ConfirmDialog
@@ -844,18 +791,11 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     onSubmit={(event) =>
                     {
                         event.preventDefault();
-                        const form = new FormData(event.currentTarget);
-                        const original = sharedExisting?.path;
-                        const path = pathFromName(String(form.get("name") ?? ""));
-                        const body = String(form.get("body") ?? "");
+                        const snapshot = formSnapshot(event.currentTarget);
                         setFormError(undefined);
                         void runMutation(async () =>
                         {
-                            await window.appApi.workspace.saveSharedRule(path, body);
-                            if (original && original !== path) await window.appApi.workspace.deleteSource(original);
-                            useAppStore.getState().clearEditorDraft(editorKey);
-                            await refreshWorkspace({ kind: "rule", path });
-                            toast.add({ title: `Saved ${path}`, type: "success" });
+                            await persistEditorForm(workspace, selection, snapshot);
                         }).then((result) =>
                         {
                             if (!result.ok) setFormError(result.message);
@@ -866,6 +806,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                         name="name"
                         value={ruleName}
                         isBusy={isBusy}
+                        submitLabel={selection.kind === "rule-new" ? "Create rule" : undefined}
                         onChange={(value) =>
                         {
                             setRuleName(value);
@@ -892,23 +833,11 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
-                    const form = event.currentTarget;
-                    const data = new FormData(form);
-                    const original = existing?.path;
-                    const payload = rulePayload(
-                        pathFromName(String(data.get("name") ?? "")),
-                        existing?.priority ?? workspace.rootRules.length,
-                        readTargets(form, workspace.config.harnesses.map((harness) => harness.name)),
-                        String(data.get("body") ?? ""),
-                    );
+                    const snapshot = formSnapshot(event.currentTarget);
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        await window.appApi.workspace.saveRule(payload);
-                        if (original && original !== payload.path) await window.appApi.workspace.deleteSource(original);
-                        useAppStore.getState().clearEditorDraft(editorKey);
-                        await refreshWorkspace({ kind: "rule", path: payload.path });
-                        toast.add({ title: `Saved ${payload.path}`, type: "success" });
+                        await persistEditorForm(workspace, selection, snapshot);
                     }).then((result) =>
                     {
                         if (!result.ok) setFormError(result.message);
@@ -919,6 +848,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     name="name"
                     value={ruleName}
                     isBusy={isBusy}
+                    submitLabel={selection.kind === "rule-new" ? "Create rule" : undefined}
                     onChange={(value) =>
                     {
                         setRuleName(value);
@@ -950,7 +880,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
     const layerConfig = workspace.config.layers.find((candidate) => candidate.name === layer);
     const canDelete = Boolean(existing && layerConfig?.selected !== existing.name && (workspace.layerOptions[existing.layer]?.length ?? 0) > 1);
     const editorKey = selectionKey(selection);
-    const editor = useEditorForm(editorKey, canDelete ? () => setDeleteOpen(true) : undefined);
+    const editor = useEditorForm(selection, canDelete ? () => setDeleteOpen(true) : undefined);
     const [optionName, setOptionName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-option"));
 
     if (selection.kind === "layer-option" && !existing)
@@ -971,39 +901,11 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
-                    const form = event.currentTarget;
-                    const data = new FormData(form);
-                    const nextName = ruleDisplayName(String(data.get("name") ?? "").trim() || "new-option");
-                    const targets = readTargets(form, workspace.config.harnesses.map((harness) => harness.name));
-                    const body = String(data.get("body") ?? "");
+                    const snapshot = formSnapshot(event.currentTarget);
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        if (existing)
-                        {
-                            const path = existing.name === nextName
-                                ? existing.path
-                                : await persistLayerOptionRename(existing.layer, existing.name, nextName);
-                            await window.appApi.workspace.saveLayerOption({
-                                path,
-                                body,
-                                ...(targets ? { targets } : {}),
-                            });
-                            useAppStore.getState().clearEditorDraft(editorKey);
-                            await refreshWorkspace({ kind: "layer-option", path });
-                            toast.add({ title: `Saved ${path}`, type: "success" });
-                            return;
-                        }
-                        await window.appApi.workspace.addLayerOption(layer, nextName);
-                        const path = `.halign/layers/${layer}/${nextName}.md`;
-                        await window.appApi.workspace.saveLayerOption({
-                            path,
-                            body,
-                            ...(targets ? { targets } : {}),
-                        });
-                        useAppStore.getState().clearEditorDraft(editorKey);
-                        await refreshWorkspace({ kind: "layer-option", path });
-                        toast.add({ title: `Created option ${nextName}`, type: "success" });
+                        await persistEditorForm(workspace, selection, snapshot);
                     }).then((result) =>
                     {
                         if (!result.ok) setFormError(result.message);
@@ -1014,6 +916,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                     name="name"
                     value={optionName}
                     isBusy={isBusy}
+                    submitLabel={selection.kind === "layer-option-new" ? "Create option" : undefined}
                     onChange={(value) =>
                     {
                         setOptionName(value);
@@ -1064,7 +967,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
     const [formError, setFormError] = useState<string | undefined>();
     const [deleteOpen, setDeleteOpen] = useState(false);
     const editorKey = selectionKey(selection);
-    const editor = useEditorForm(editorKey, existing ? () => setDeleteOpen(true) : undefined);
+    const editor = useEditorForm(selection, existing ? () => setDeleteOpen(true) : undefined);
     const [agentName, setAgentName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-agent"));
 
     return (
@@ -1076,36 +979,11 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
-                    const form = new FormData(event.currentTarget);
-                    const harnesses: Record<string, Record<string, unknown>> = {};
-                    try
-                    {
-                        for (const harness of workspace.config.harnesses)
-                        {
-                            harnesses[harness.name] = JSON.parse(String(form.get(`meta-${harness.name}`) ?? "{}")) as Record<string, unknown>;
-                        }
-                    }
-                    catch (error)
-                    {
-                        setFormError(error instanceof Error ? error.message : String(error));
-                        return;
-                    }
+                    const snapshot = formSnapshot(event.currentTarget);
                     setFormError(undefined);
                     void runMutation(async () =>
                     {
-                        const path = uniqueAgentPath(existing?.path, String(form.get("name") ?? ""), workspace.agents.map((agent) => agent.path));
-                        const agent = {
-                            path,
-                            name: ruleDisplayName(path),
-                            description: String(form.get("description") ?? "").trim(),
-                            harnesses,
-                            body: String(form.get("body") ?? ""),
-                        };
-                        await window.appApi.workspace.saveAgent(agent);
-                        if (existing && existing.path !== agent.path) await window.appApi.workspace.deleteSource(existing.path);
-                        useAppStore.getState().clearEditorDraft(editorKey);
-                        await refreshWorkspace({ kind: "agent", path: agent.path });
-                        toast.add({ title: `Saved ${agent.path}`, type: "success" });
+                        await persistEditorForm(workspace, selection, snapshot);
                     }).then((result) =>
                     {
                         if (!result.ok) setFormError(result.message);
@@ -1116,6 +994,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                     name="name"
                     value={agentName}
                     isBusy={isBusy}
+                    submitLabel={selection.kind === "agent-new" ? "Create agent" : undefined}
                     onChange={(value) =>
                     {
                         setAgentName(value);
@@ -1273,14 +1152,13 @@ function moveLayerSelection(selection: readonly LayerSelection[], sourceName: st
     return next;
 }
 
-/** Unified Project page for config, harnesses, and ordered Layers without contextual navigation. */
+/** Unified Home page for config, harnesses, and ordered Layers without contextual navigation. */
 export function ProjectEditor()
 {
     const workspace = useAppStore((state) => state.workspace);
     const selection = useAppStore((state) => state.selection);
     const setSelection = useAppStore((state) => state.setSelection);
     const isBusy = useAppStore((state) => state.isBusy);
-    const requestEditorAction = useAppStore((state) => state.requestEditorAction);
     const layerSelection = useAppStore((state) => state.layerSelection);
     const setLayerSelection = useAppStore((state) => state.setLayerSelection);
     const [draggedLayer, setDraggedLayer] = useState<string>();
@@ -1300,34 +1178,7 @@ export function ProjectEditor()
 
     return (
         <div className="mx-auto grid w-full max-w-6xl gap-6 pb-4">
-            <ConfigForm workspace={workspace} showTitle={false}>
-                <Button
-                    type="button"
-                    size="sm"
-                    disabled={isBusy}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() =>
-                    {
-                        void runMutation(async () =>
-                        {
-                            await persistProjectConfig(workspace);
-                            await refreshWorkspace(
-                                selection.kind === "harness" || selection.kind === "harness-new" ? selection : { kind: "config" },
-                            );
-                            toast.add({ title: "Saved config.json", type: "success" });
-                        }).then((result) =>
-                        {
-                            if (!result.ok) return;
-                            if (selection.kind === "harness" || selection.kind === "harness-new")
-                            {
-                                requestEditorAction(selection, "save");
-                            }
-                        });
-                    }}
-                >
-                    Save
-                </Button>
-            </ConfigForm>
+            <ConfigForm workspace={workspace} showTitle={false} />
 
             <section className="grid gap-3">
                 <div className="flex items-center justify-between gap-3">
@@ -1416,7 +1267,7 @@ export function ProjectEditor()
     );
 }
 
-/** Project-page section for registering and removing GitHub skill sources. */
+/** Home-page section for registering and removing GitHub skill sources. */
 function SkillsSourcesSection({ workspace }: { workspace: Workspace })
 {
     const isBusy = useAppStore((state) => state.isBusy);
@@ -1547,7 +1398,7 @@ function NewSkillSourceCard({
                 <Field><FieldLabel htmlFor="skill-source-url">Repository URL</FieldLabel><Input id="skill-source-url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repo" disabled={isBusy} /></Field>
                 <Field><FieldLabel htmlFor="skill-source-branch">Branch (optional)</FieldLabel><Input id="skill-source-branch" value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" disabled={isBusy} /></Field>
             </FieldGroup></CardContent>
-            <CardFooter><Button type="submit" disabled={isBusy || !url.trim()}>Save</Button></CardFooter>
+            <CardFooter><Button type="submit" disabled={isBusy || !url.trim()}>Add source</Button></CardFooter>
             </Card>
         </form>
     );

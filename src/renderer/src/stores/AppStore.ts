@@ -43,6 +43,7 @@ export type FormSnapshot = Record<string, string[]>;
 /** Unsaved editor values and the persisted baseline used for dirty checks. */
 export interface EditorDraft
 {
+    selection: Selection;
     baseline: FormSnapshot;
     current: FormSnapshot;
 }
@@ -50,7 +51,7 @@ export interface EditorDraft
 /** Commands that can be requested from a workspace tree item. */
 export type EditorAction = "save" | "delete";
 
-/** One tree or keyboard command waiting for the matching editor to handle it. */
+/** One tree command waiting for the matching editor to handle it. */
 export interface PendingEditorAction
 {
     id: number;

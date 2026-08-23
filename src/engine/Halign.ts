@@ -20,7 +20,11 @@ export type { LayerOptionInput, RuleInput, SharedRule, Workspace } from "./Edit.
 export { HalignError } from "./Model.js";
 export { atomicWrite, resolveUserHome } from "./FsSafe.js";
 export { loadConfig, loadLayerOptions, loadSharedRules, validateConfig } from "./Load.js";
-export { addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace, importUserSkills, listUserSkills, loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule } from "./Edit.js";
+export {
+    addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace, importUserSkills, listUserSkills, loadWorkspace,
+    removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, renameSource, saveAgent,
+    saveConfig, saveLayerOption, saveRule, saveSharedRule, updateHarness,
+} from "./Edit.js";
 export { assertSafeZipEntry, hashSkillDirectory, installSkillFromDirectory, loadSkills, parseGitHubSkillSource, readSkillFrontmatter } from "./Skills.js";
 export { downgradeMarkdownHeadings, renderMarkdownToc } from "./Render.js";
 export { buildOutputs, check, generate, reportGenerate, safeOutputRelative } from "./Generate.js";

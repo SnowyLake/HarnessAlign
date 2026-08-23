@@ -425,7 +425,7 @@ export function SkillsPanel()
                         type="button"
                         variant="outline"
                         disabled={isBusy || workspace.config.skillSources.length === 0}
-                        title={workspace.config.skillSources.length === 0 ? "Register a GitHub source on the Project page" : undefined}
+                        title={workspace.config.skillSources.length === 0 ? "Register a GitHub source on the Home page" : undefined}
                         onClick={handleDiscover}
                     >
                         <SearchIcon data-icon="inline-start" />
@@ -477,7 +477,7 @@ export function SkillsPanel()
                     <Empty className="py-8"><EmptyHeader><EmptyTitle>No skills to show</EmptyTitle><EmptyDescription>
                         {installed.length === 0
                             ? workspace.config.skillSources.length === 0
-                                ? "No installed skills yet. Register a GitHub source on the Project page, then Discover, or Import local skills."
+                                ? "No installed skills yet. Register a GitHub source on the Home page, then Discover, or Import local skills."
                                 : "No installed skills yet. Use Discover or Import."
                             : "No matching skills."}
                     </EmptyDescription></EmptyHeader></Empty>

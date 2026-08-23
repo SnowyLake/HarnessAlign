@@ -14,9 +14,9 @@ import {
     assertWindowsSafeName,
     codePointCompare,
     type Config,
+    errorText,
     type Harness,
     type HarnessConfig,
-    HARNESS_NAME,
     HalignError,
     hasOwn,
     isRecord,
@@ -191,6 +191,15 @@ function ruleKind(path: string): "root" | "shared"
 {
     if (path.startsWith(".halign/rules/shared/")) return "shared";
     return "root";
+}
+
+/** Classify editable rule and agent source paths. */
+function editableSourceKind(path: string): "root-rule" | "shared-rule" | "agent" | undefined
+{
+    if (path.startsWith(".halign/agents/")) return "agent";
+    if (path.startsWith(".halign/rules/shared/")) return "shared-rule";
+    if (path.startsWith(".halign/rules/")) return "root-rule";
+    return undefined;
 }
 
 /** Return whether a discovered layer directory exists. */
@@ -413,6 +422,38 @@ export async function deleteSource(rootPath: string, relativePath: string): Prom
     await fs.unlink(path);
 }
 
+/** Atomically move one rule or agent Markdown source within its source kind. */
+export async function renameSource(rootPath: string, from: string, to: string): Promise<void>
+{
+    const root = resolve(rootPath);
+    const sourceRelative = managedRelative(from, from);
+    const destinationRelative = managedRelative(to, to);
+    const sourceKind = editableSourceKind(sourceRelative);
+    const destinationKind = editableSourceKind(destinationRelative);
+    if (!sourceKind || sourceKind !== destinationKind)
+    {
+        throw new HalignError(`${from}: source rename must stay within one root-rule, shared-rule, or agent type, got ${valueText(to)}`);
+    }
+    if (sourceKind === "agent")
+    {
+        assertAgentPath(sourceRelative);
+        assertAgentPath(destinationRelative);
+    }
+    else
+    {
+        assertRulePath(sourceRelative, sourceKind === "shared-rule" ? "shared" : "root");
+        assertRulePath(destinationRelative, sourceKind === "shared-rule" ? "shared" : "root");
+    }
+    const source = await resolveManaged(root, sourceRelative, sourceRelative);
+    const destination = await resolveManaged(root, destinationRelative, destinationRelative);
+    const sourceStats = await lstatIfExists(source);
+    if (!sourceStats) throw new HalignError(`${sourceRelative}: file does not exist`);
+    if (sourceStats.isSymbolicLink()) throw reparseError(root, source, false);
+    if (!sourceStats.isFile()) throw new HalignError(`${sourceRelative}: managed source must be a file`);
+    if (await lstatIfExists(destination)) throw new HalignError(`${destinationRelative}: destination already exists`);
+    await fs.rename(source, destination);
+}
+
 /** Create a layer with its first empty option without adding it to the project selection. */
 export async function addLayer(rootPath: string, name: string, initialOption: string): Promise<Config>
 {
@@ -592,50 +633,109 @@ function replaceHarnessName(targets: Harness[], from: string, to: string): Harne
     return targets.map((target) => (target === from ? to : target));
 }
 
-/** Rename a harness and cascade rule targets plus agent metadata keys. */
-export async function renameHarness(rootPath: string, from: string, to: string): Promise<void>
+/** Update a harness and restore original sources if any cascaded write fails. */
+export async function updateHarness(rootPath: string, from: string, harness: HarnessConfig): Promise<Config>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    if (!config.harnesses.some((harness) => harness.name === from))
+    const existing = config.harnesses.find((candidate) => candidate.name === from);
+    if (!existing)
     {
         throw new HalignError(`.halign/config.json: harness is not configured, got ${valueText(from)}`);
     }
-    if (!HARNESS_NAME.test(to))
-    {
-        throw new HalignError(`.halign/config.json: name must match ${HARNESS_NAME.source}, got ${valueText(to)}`);
-    }
-    assertWindowsSafeName(to, ".halign/config.json");
-    if (from.toLowerCase() !== to.toLowerCase() && config.harnesses.some((harness) => harness.name.toLowerCase() === to.toLowerCase()))
-    {
-        throw new HalignError(`.halign/config.json: harness names must be unique without case sensitivity, got ${valueText(to)}`);
-    }
-    const nextConfig: Config = {
+    const nextConfig = validateConfig(configDocument({
         ...config,
-        harnesses: config.harnesses.map((harness) => (harness.name === from ? { ...harness, name: to } : harness)),
-    };
-    validateConfig(configDocument(nextConfig));
+        harnesses: config.harnesses.map((candidate) => (candidate.name === from ? harness : candidate)),
+    }));
     const [rules, layerOptions, agents] = await Promise.all([
         loadRules(root, config.harnesses),
         loadLayerOptions(root, config),
         loadAgents(root, config.harnesses),
     ]);
-    const nextRules = rules.map((rule) => ({ ...rule, targets: replaceHarnessName(rule.targets, from, to) }));
-    const nextLayerOptions = Object.values(layerOptions).flat().map((option) => ({ ...option, targets: replaceHarnessName(option.targets, from, to) }));
+    const nextRules = rules.map((rule) => ({ ...rule, targets: replaceHarnessName(rule.targets, from, harness.name) }));
+    const nextLayerOptions = Object.values(layerOptions).flat().map((option) => ({ ...option, targets: replaceHarnessName(option.targets, from, harness.name) }));
     const nextAgents = agents.map((agent) =>
     {
         const harnesses: Record<string, Metadata> = {};
         for (const [name, metadata] of Object.entries(agent.harnesses))
         {
-            harnesses[name === from ? to : name] = metadata;
+            harnesses[name === from ? harness.name : name] = metadata;
         }
         return { ...agent, harnesses };
     });
+    const writes: Array<{ path: string; content: Buffer; original?: Buffer }> = [{
+        path: ".halign/config.json",
+        content: Buffer.from(`${JSON.stringify(configDocument(nextConfig), null, 2)}\n`, "utf8"),
+    }];
+    for (const rule of nextRules) assertTargets(rule.path, rule.targets, nextConfig.harnesses);
+    for (const option of nextLayerOptions) assertTargets(option.path, option.targets, nextConfig.harnesses);
     for (const agent of nextAgents) assertAgentInput(agent, nextConfig.harnesses);
-    await writeConfig(root, nextConfig);
-    for (const rule of nextRules) await saveRule(root, rule);
-    for (const option of nextLayerOptions) await saveLayerOption(root, option);
-    for (const agent of nextAgents) await saveAgent(root, agent);
+    if (from !== harness.name)
+    {
+        for (const rule of nextRules)
+        {
+            writes.push({ path: rule.path, content: serializeFrontmatter({ priority: rule.priority, targets: rule.targets }, rule.body, rule.path) });
+        }
+        for (const option of nextLayerOptions)
+        {
+            writes.push({ path: option.path, content: serializeLayerOption(option.targets, option.body) });
+        }
+        for (const agent of nextAgents)
+        {
+            writes.push({
+                path: agent.path,
+                content: serializeFrontmatter({ name: agent.name, description: agent.description, harnesses: agent.harnesses }, agent.body, agent.path),
+            });
+        }
+    }
+    for (const write of writes)
+    {
+        const path = await resolveManaged(root, write.path, write.path);
+        write.original = await fs.readFile(path);
+    }
+    const written: typeof writes = [];
+    try
+    {
+        for (const write of writes)
+        {
+            await writeManaged(root, write.path, write.content);
+            written.push(write);
+        }
+        return nextConfig;
+    }
+    catch (error)
+    {
+        const rollbackFailures: string[] = [];
+        for (const write of written.reverse())
+        {
+            try
+            {
+                await writeManaged(root, write.path, write.original!);
+            }
+            catch (rollbackError)
+            {
+                rollbackFailures.push(`${write.path}: ${errorText(rollbackError)}`);
+            }
+        }
+        if (rollbackFailures.length > 0)
+        {
+            throw new HalignError(`Harness update failed: ${errorText(error)}; rollback failed: ${rollbackFailures.join("; ")}`);
+        }
+        throw error;
+    }
+}
+
+/** Rename a harness and cascade rule targets plus agent metadata keys. */
+export async function renameHarness(rootPath: string, from: string, to: string): Promise<void>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const harness = config.harnesses.find((candidate) => candidate.name === from);
+    if (!harness)
+    {
+        throw new HalignError(`.halign/config.json: harness is not configured, got ${valueText(from)}`);
+    }
+    await updateHarness(root, from, { ...harness, name: to });
 }
 
 /** Remove a harness after it is unused by rules and agents. */

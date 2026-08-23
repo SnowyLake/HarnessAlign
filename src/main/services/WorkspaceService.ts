@@ -22,11 +22,13 @@ import {
     renameHarness,
     renameLayer,
     renameLayerOption,
+    renameSource,
     saveAgent,
     saveConfig,
     saveLayerOption,
     saveRule,
     saveSharedRule,
+    updateHarness,
 } from "../../engine/Edit.js";
 import { check, generate, readGeneratedFiles, reportGenerate } from "../../engine/Generate.js";
 import { reportSetup, setup } from "../../engine/Setup.js";
@@ -103,6 +105,12 @@ export class WorkspaceService
         return deleteSource(await userRoot(), path);
     }
 
+    /** Atomically rename a rule or agent source within its source kind. */
+    async renameSource(from: string, to: string): Promise<void>
+    {
+        return renameSource(await userRoot(), from, to);
+    }
+
     /** Create a layer directory with its first empty option. */
     async addLayer(name: string, initialOption: string): Promise<Config>
     {
@@ -155,6 +163,12 @@ export class WorkspaceService
     async renameHarness(from: string, to: string): Promise<void>
     {
         return renameHarness(await userRoot(), from, to);
+    }
+
+    /** Update a harness and cascade its name when necessary. */
+    async updateHarness(from: string, harness: HarnessConfig): Promise<Config>
+    {
+        return updateHarness(await userRoot(), from, harness);
     }
 
     /** Register a GitHub skill source URL. */

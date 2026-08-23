@@ -10,7 +10,13 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { atomicWrite, addHarness, addLayer, addLayerOption, addSkillSource, assertSafeZipEntry, buildOutputs, check, deleteSource, downgradeMarkdownHeadings, ensureUserWorkspace, generate, HalignError, hashSkillDirectory, importUserSkills, installSkillFromDirectory, listUserSkills, loadConfig, loadSkills, loadWorkspace, main, parseGitHubSkillSource, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, renderMarkdownToc, reportGenerate, reportSetup, safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup, validateConfig } from "../src/engine/Halign.js";
+import {
+    atomicWrite, addHarness, addLayer, addLayerOption, addSkillSource, assertSafeZipEntry, buildOutputs, check, deleteSource,
+    downgradeMarkdownHeadings, ensureUserWorkspace, generate, HalignError, hashSkillDirectory, importUserSkills, installSkillFromDirectory,
+    listUserSkills, loadConfig, loadSkills, loadWorkspace, main, parseGitHubSkillSource, removeHarness, removeLayer, removeLayerOption,
+    removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, renameSource, renderMarkdownToc, reportGenerate, reportSetup,
+    safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup, updateHarness, validateConfig,
+} from "../src/engine/Halign.js";
 
 const config = {
     version: 1,
@@ -508,12 +514,42 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
         await removeLayer(root, "workflow");
         await assert.rejects(readdir(join(root, ".halign", "layers", "workflow")));
 
-        await renameHarness(root, "cursor", "atlas");
+        const renamedRuleBody = await readFile(join(root, ".halign", "rules", "cursor.md"), "utf8");
+        await renameSource(root, ".halign/rules/cursor.md", ".halign/rules/renamed-cursor.md");
+        await assert.rejects(readFile(join(root, ".halign", "rules", "cursor.md")));
+        assert.equal(await readFile(join(root, ".halign", "rules", "renamed-cursor.md"), "utf8"), renamedRuleBody);
+        const baseBeforeCollision = await readFile(join(root, ".halign", "rules", "base.md"), "utf8");
+        await assert.rejects(renameSource(root, ".halign/rules/base.md", ".halign/rules/renamed-cursor.md"), /destination already exists/u);
+        assert.equal(await readFile(join(root, ".halign", "rules", "base.md"), "utf8"), baseBeforeCollision);
+
+        const configBeforeInvalidHarness = await readFile(join(root, ".halign", "config.json"), "utf8");
+        await assert.rejects(updateHarness(root, "cursor", {
+            name: "invalid name",
+            configPath: ".atlas",
+            agentFormat: "toml",
+            agentExtension: "toml",
+            instructionsField: "instructions",
+        }), /name must match/u);
+        assert.equal(await readFile(join(root, ".halign", "config.json"), "utf8"), configBeforeInvalidHarness);
+
+        await updateHarness(root, "cursor", {
+            name: "atlas",
+            configPath: ".atlas",
+            agentFormat: "toml",
+            agentExtension: "toml",
+            instructionsField: "instructions",
+        });
         const renamed = await loadWorkspace(root);
-        assert.ok(renamed.config.harnesses.some((harness) => harness.name === "atlas"));
+        assert.deepEqual(renamed.config.harnesses.find((harness) => harness.name === "atlas"), {
+            name: "atlas",
+            configPath: ".atlas",
+            agentFormat: "toml",
+            agentExtension: "toml",
+            instructionsField: "instructions",
+        });
         assert.ok(!renamed.config.harnesses.some((harness) => harness.name === "cursor"));
-        assert.deepEqual(renamed.rootRules.map((rule) => rule.path), [".halign/rules/cursor.md", ".halign/rules/base.md"]);
-        assert.deepEqual(renamed.rootRules.find((rule) => rule.path === ".halign/rules/cursor.md")?.targets, ["atlas"]);
+        assert.deepEqual(renamed.rootRules.map((rule) => rule.path), [".halign/rules/renamed-cursor.md", ".halign/rules/base.md"]);
+        assert.deepEqual(renamed.rootRules.find((rule) => rule.path === ".halign/rules/renamed-cursor.md")?.targets, ["atlas"]);
         assert.deepEqual(renamed.layerOptions.soul?.find((option) => option.name === "kei")?.targets, ["atlas"]);
         assert.ok(renamed.agents[0]?.harnesses.atlas);
         assert.equal(renamed.agents[0]?.harnesses.cursor, undefined);
@@ -535,7 +571,7 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
         assert.ok(!afterRemove.config.harnesses.some((harness) => harness.name === "nova"));
         assert.equal(afterRemove.agents[0]?.harnesses.nova, undefined);
 
-        await deleteSource(root, ".halign/rules/cursor.md");
+        await deleteSource(root, ".halign/rules/renamed-cursor.md");
         await assert.rejects(saveRule(root, { path: ".halign/rules/../escape.md", priority: 1, body: "no" }), /must stay inside \.halign/u);
         await assert.rejects(saveRule(root, { path: ".halign/generated/x.md", priority: 1, body: "no" }), /managed \.halign sources/u);
         await assert.rejects(saveSharedRule(root, ".halign/rules/base.md", "no"), /must stay under \.halign\/rules\/shared/u);

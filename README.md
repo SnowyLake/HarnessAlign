@@ -100,7 +100,7 @@ halign setup --layer soul=kei
 窗口可以:
 
 - 打开 `%USERPROFILE%\.halign` 这份用户配置.
-- 在 Project 页编辑输出标题, Harness 列表, 以及当前项目选用的 Layer 顺序与选项.
+- 在 Home 页编辑输出标题, Harness 列表, 以及当前项目选用的 Layer 顺序与选项.
 - 在 Layers 页新建, 修改, 重命名或删除 Layer 及其选项.
 - 在 Rules 页编辑参与 `AGENTS.md` 的根规则, 以及独立部署的 shared-rules.
 - 在 Agents 页编辑共享正文和各 Harness 的原生 metadata.
@@ -109,7 +109,7 @@ halign setup --layer soul=kei
 - 使用当前未保存的 Layer 选择执行 Generate, Check 和 Setup.
 - 在 Settings 页切换主题, 或打开 `%USERPROFILE%\.halign`.
 
-Project 页 Layers 下方可以注册或移除 GitHub skill 仓库地址. 点 Save 后, 当前 Layer 顺序与选择会写回 `config.json`.
+Home 页 Layers 下方可以注册或移除 GitHub skill 仓库地址. 点击顶部 Save 或按 Ctrl+S 后, 所有页面的草稿以及当前 Layer 顺序与选择会统一写回. 编辑树标签的右键 Save 仍只保存该标签, 不绑定 Ctrl+S.
 
 桌面应用不创建 `%USERPROFILE%` 下缺失的 Harness 根目录. Setup 的部署规则与 CLI 相同. Skills 的 GitHub 下载只发生在桌面应用里; CLI 的 `setup` 只复制已经存在于 `.halign/skills/` 的内容.
 
@@ -230,7 +230,7 @@ Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正�
 
 项目 Skills 放在 `.halign/skills/` 下, 每个 skill 一个目录, 并带 `SKILL.md`. `index.json` 记录来源, 不要手工编辑.
 
-桌面应用可以从 Project 页登记的 GitHub 仓库发现并安装 skill, 也可以从 `%USERPROFILE%\.agents\skills` 导入已有目录. CLI 不会联网下载 skill; `halign setup` 只把已经安装到项目里的 skill 覆盖部署到用户目录.
+桌面应用可以从 Home 页登记的 GitHub 仓库发现并安装 skill, 也可以从 `%USERPROFILE%\.agents\skills` 导入已有目录. CLI 不会联网下载 skill; `halign setup` 只把已经安装到项目里的 skill 覆盖部署到用户目录.
 
 没有项目 Skills, 或 `.halign/skills/` 里只有 `index.json` 时, skills 部署会跳过并视为成功. shared-rules 仍然必需.
 

@@ -2,10 +2,10 @@ import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/mode
 import { useState } from "react";
 import { PencilIcon, PlusIcon, SaveIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/toast";
-import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation, saveRenamedSource } from "@/features/workspace/WorkspaceTasks";
 import { fileName, ruleDisplayName, uniqueAgentPath, uniqueRulePath, catalogLayerNames } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 import { cn } from "@/lib/Utils";
@@ -185,7 +185,6 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                         >
                             <SaveIcon />
                             <span>Save</span>
-                            <ContextMenuShortcut>Ctrl+S</ContextMenuShortcut>
                         </ContextMenuItem>
                         <ContextMenuSeparator />
                         <ContextMenuItem
@@ -217,15 +216,16 @@ async function renameRuleFromTree(workspace: Workspace, rule: RuleInput | Shared
         nextPath = uniqueRulePath(rule.path, name, [...workspace.rootRules, ...workspace.sharedRules].map((item) => item.path));
         if (nextPath !== rule.path)
         {
-            if ("priority" in rule) await window.appApi.workspace.saveRule({ ...rule, path: nextPath });
-            else await window.appApi.workspace.saveSharedRule(nextPath, rule.body);
-            await window.appApi.workspace.deleteSource(rule.path);
+            await window.appApi.workspace.renameSource(rule.path, nextPath);
 
             const state = useAppStore.getState();
             const previousKey = selectionKey({ kind: "rule", path: rule.path });
             const nextKey = selectionKey({ kind: "rule", path: nextPath });
             const draft = state.editorDrafts[previousKey];
-            if (draft) state.setEditorDraft(nextKey, draft);
+            if (draft) state.setEditorDraft(nextKey, {
+                ...draft,
+                selection: { kind: "rule", path: nextPath },
+            });
             state.clearEditorDraft(previousKey);
         }
         await refreshWorkspace({ kind: "rule", path: nextPath });
@@ -288,6 +288,7 @@ async function renameLayerFromTree(workspace: Workspace, from: string, to: strin
     const result = await runMutation(async () =>
     {
         await persistLayerRename(from, nextName);
+        await refreshWorkspace({ kind: "layer", name: nextName });
     });
     if (result.ok) toast.add({ title: `Renamed layer to ${nextName}`, type: "success" });
     return result.ok;
@@ -305,13 +306,15 @@ async function renameAgentFromTree(workspace: Workspace, path: string, name: str
         const nextName = ruleDisplayName(nextPath);
         if (nextPath !== agent.path || nextName !== agent.name)
         {
-            await window.appApi.workspace.saveAgent({ ...agent, path: nextPath, name: nextName });
-            if (nextPath !== agent.path) await window.appApi.workspace.deleteSource(agent.path);
+            await saveRenamedSource(agent.path, nextPath, (savePath) => window.appApi.workspace.saveAgent({ ...agent, path: savePath, name: nextName }));
             const state = useAppStore.getState();
             const previousKey = selectionKey({ kind: "agent", path: agent.path });
             const nextKey = selectionKey({ kind: "agent", path: nextPath });
             const draft = state.editorDrafts[previousKey];
-            if (draft) state.setEditorDraft(nextKey, draft);
+            if (draft) state.setEditorDraft(nextKey, {
+                ...draft,
+                selection: { kind: "agent", path: nextPath },
+            });
             state.clearEditorDraft(previousKey);
         }
         await refreshWorkspace({ kind: "agent", path: nextPath });

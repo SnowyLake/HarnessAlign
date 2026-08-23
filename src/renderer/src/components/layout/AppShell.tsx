@@ -4,11 +4,11 @@ import {
     BotIcon,
     CircleCheckIcon,
     FileOutputIcon,
-    FolderCogIcon,
+    HouseIcon,
     Layers3Icon,
-    LayoutDashboardIcon,
     PaletteIcon,
     RocketIcon,
+    SaveIcon,
     ScrollTextIcon,
     Settings2Icon,
     SparklesIcon,
@@ -23,13 +23,10 @@ import {
     SidebarFooter,
     SidebarGroup,
     SidebarGroupContent,
-    SidebarHeader,
     SidebarInset,
     SidebarMenu,
     SidebarMenuButton,
     SidebarMenuItem,
-    SidebarRail,
-    useSidebar,
 } from "@/components/ui/sidebar";
 import { useAppStore, visibleView, type AppView } from "@/stores/AppStore";
 
@@ -39,12 +36,12 @@ interface NavItem
     view: AppView;
     label: string;
     description: string;
-    icon: typeof LayoutDashboardIcon;
+    icon: typeof HouseIcon;
 }
 
 /** Primary workspace modules shown above the bottom utility navigation. */
 const WORKSPACE_NAV_ITEMS: NavItem[] = [
-    { view: "project", label: "Project", description: "Configure harnesses, layers, and skill sources.", icon: FolderCogIcon },
+    { view: "project", label: "Home", description: "Configure harnesses, layers, and skill sources.", icon: HouseIcon },
     { view: "rules", label: "Rules", description: "Edit repository and shared instructions.", icon: ScrollTextIcon },
     { view: "layers", label: "Layers", description: "Manage selectable instruction layers.", icon: Layers3Icon },
     { view: "agents", label: "Agents", description: "Define reusable subagent profiles.", icon: BotIcon },
@@ -56,19 +53,19 @@ const WORKSPACE_NAV_ITEMS: NavItem[] = [
 export interface AppShellProps
 {
     children: ReactNode;
+    onSave: () => void;
     onGenerate: () => void;
     onCheck: () => void;
     onSetup: () => void;
 }
 
 /** App chrome: shadcn Sidebar inset, header actions, and page children. */
-export function AppShell({ children, onGenerate, onCheck, onSetup }: AppShellProps)
+export function AppShell({ children, onSave, onGenerate, onCheck, onSetup }: AppShellProps)
 {
     const view = useAppStore((state) => state.view);
     const setView = useAppStore((state) => state.setView);
     const workspace = useAppStore((state) => state.workspace);
     const isBusy = useAppStore((state) => state.isBusy);
-    const { toggleSidebar } = useSidebar();
     const [version, setVersion] = useState("");
     const [setupOpen, setSetupOpen] = useState(false);
     const effectiveView = visibleView(view);
@@ -89,20 +86,10 @@ export function AppShell({ children, onGenerate, onCheck, onSetup }: AppShellPro
     return (
         <>
             <Sidebar collapsible="icon" variant="inset">
-                <SidebarHeader className="px-2 py-2">
-                    <SidebarMenu>
-                        <SidebarMenuItem>
-                            <SidebarMenuButton tooltip="Toggle sidebar" onClick={toggleSidebar}>
-                                <LayoutDashboardIcon />
-                                <span className="text-sm font-semibold">Harness Align</span>
-                            </SidebarMenuButton>
-                        </SidebarMenuItem>
-                    </SidebarMenu>
-                </SidebarHeader>
                 <SidebarContent>
-                    <SidebarGroup>
+                    <SidebarGroup className="pt-0 group-data-[collapsible=icon]:px-1">
                         <SidebarGroupContent>
-                            <SidebarMenu>
+                            <SidebarMenu className="gap-2">
                                 {WORKSPACE_NAV_ITEMS.map((item) => (
                                     <SidebarMenuItem key={item.view}>
                                         <SidebarMenuButton
@@ -119,7 +106,7 @@ export function AppShell({ children, onGenerate, onCheck, onSetup }: AppShellPro
                         </SidebarGroupContent>
                     </SidebarGroup>
                 </SidebarContent>
-                <SidebarFooter className="gap-1 px-2 py-2">
+                <SidebarFooter className="gap-1 px-2 py-2 group-data-[collapsible=icon]:px-1">
                     <div className="px-2 pb-1 text-xs text-sidebar-foreground/70 group-data-[collapsible=icon]:hidden">
                         {version ? `v${version}` : "—"}
                     </div>
@@ -148,9 +135,8 @@ export function AppShell({ children, onGenerate, onCheck, onSetup }: AppShellPro
                         </SidebarMenuItem>
                     </SidebarMenu>
                 </SidebarFooter>
-                <SidebarRail />
             </Sidebar>
-            <SidebarInset className="min-h-0 overflow-hidden">
+            <SidebarInset className="min-h-0 overflow-hidden md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-0">
                 <header className="flex min-h-16 shrink-0 items-center justify-between gap-4 border-b border-border px-4">
                     <div className="min-w-0">
                         <div className="truncate text-lg font-semibold">{pageTitle}</div>
@@ -163,6 +149,16 @@ export function AppShell({ children, onGenerate, onCheck, onSetup }: AppShellPro
                                 Working...
                             </span>
                         ) : null}
+                        <Button
+                            variant="outline"
+                            disabled={!workspace || isBusy}
+                            title="Save all changes (Ctrl+S)"
+                            aria-keyshortcuts="Control+S"
+                            onClick={onSave}
+                        >
+                            <SaveIcon data-icon="inline-start" />
+                            Save
+                        </Button>
                         <Button variant="outline" disabled={!workspace || isBusy} onClick={onCheck}>
                             <CircleCheckIcon data-icon="inline-start" />
                             Check
@@ -177,7 +173,7 @@ export function AppShell({ children, onGenerate, onCheck, onSetup }: AppShellPro
                         </Button>
                     </div>
                 </header>
-                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden" inert={isBusy} aria-busy={isBusy}>{children}</div>
             </SidebarInset>
             <ConfirmDialog
                 open={setupOpen}

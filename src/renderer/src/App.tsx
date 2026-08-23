@@ -12,7 +12,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
 import { ShowcasePage } from "@/features/showcase/ShowcasePage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
-import { refreshWorkspace, runCommand } from "@/features/workspace/WorkspaceTasks";
+import { refreshWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore, visibleView, type WorkspaceView } from "@/stores/AppStore";
 
 /** Root React tree for the desktop shell. */
@@ -53,6 +53,21 @@ export function App()
         };
         media.addEventListener("change", sync);
         return () => media.removeEventListener("change", sync);
+    }, []);
+
+    /** Save every retained workspace change from the header. */
+    const handleSave = (): void => void saveWorkspaceChanges();
+
+    useEffect(() =>
+    {
+        const handleKeyDown = (event: KeyboardEvent): void =>
+        {
+            if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.key.toLowerCase() !== "s") return;
+            event.preventDefault();
+            void saveWorkspaceChanges();
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
     }, []);
 
     /** Generate outputs for the current ordered layer selection. */
@@ -111,8 +126,8 @@ export function App()
     return (
         <Toaster>
             <TooltipProvider>
-                <SidebarProvider className="h-full min-h-0">
-                    <AppShell onGenerate={handleGenerate} onCheck={handleCheck} onSetup={handleSetup}>
+                <SidebarProvider open={false} className="h-full min-h-0">
+                    <AppShell onSave={handleSave} onGenerate={handleGenerate} onCheck={handleCheck} onSetup={handleSetup}>
                         <div className="min-h-0 flex-1 overflow-hidden">{page}</div>
                     </AppShell>
                     <AppOutput />
