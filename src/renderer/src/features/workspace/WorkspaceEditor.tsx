@@ -1058,7 +1058,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
         <>
             <form
                 ref={editor.formRef}
-                className="flex h-full min-h-0 w-full min-w-0 flex-col gap-3"
+                className="flex min-h-full w-full min-w-0 flex-col gap-3"
                 onChange={editor.handleChange}
                 onSubmit={(event) =>
                 {
@@ -1112,20 +1112,33 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                 <FormError message={formError} />
                 <Label className="grid gap-1 text-[12px] text-muted-foreground">description<Input name="description" defaultValue={draftText(editor.draft, "description", existing?.description ?? "")} /></Label>
                 {workspace.config.harnesses.map((harness) => (
-                    <Label key={harness.name} className="grid gap-1 text-[12px] text-muted-foreground">
-                        {harness.name} metadata (JSON)
+                    <details key={harness.name} className="group overflow-hidden rounded-md border bg-card">
+                        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground select-none [&::-webkit-details-marker]:hidden">
+                            <ChevronRightIcon className="size-4 shrink-0 transition-transform group-open:rotate-90" />
+                            {harness.name} metadata (JSON)
+                        </summary>
                         <SourceEditor
                             name={`meta-${harness.name}`}
                             language="json"
-                            className="h-28 min-h-28"
+                            autoHeight
+                            className="rounded-none border-0 border-t"
                             defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))}
                         />
-                    </Label>
+                    </details>
                 ))}
-                <Label className="flex min-h-0 flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
-                    body
-                    <SourceEditor className="min-h-40 flex-1" name="body" language="markdown" defaultValue={draftText(editor.draft, "body", existing?.body ?? "Instructions.\n")} />
-                </Label>
+                <details className="group overflow-hidden rounded-md border bg-card">
+                    <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground select-none [&::-webkit-details-marker]:hidden">
+                        <ChevronRightIcon className="size-4 shrink-0 transition-transform group-open:rotate-90" />
+                        body
+                    </summary>
+                    <SourceEditor
+                        name="body"
+                        language="markdown"
+                        autoHeight
+                        className="rounded-none border-0 border-t"
+                        defaultValue={draftText(editor.draft, "body", existing?.body ?? "Instructions.\n")}
+                    />
+                </details>
             </form>
             {existing ? (
                 <ConfirmDialog

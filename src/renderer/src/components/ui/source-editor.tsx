@@ -33,6 +33,7 @@ export interface SourceEditorProps
     defaultValue?: string;
     language?: SourceLanguage;
     readOnly?: boolean;
+    autoHeight?: boolean;
     className?: string;
     "aria-label"?: string;
 }
@@ -137,6 +138,7 @@ export function SourceEditor({
     defaultValue = "",
     language = "plain",
     readOnly = false,
+    autoHeight = false,
     className,
     "aria-label": ariaLabel,
 }: SourceEditorProps)
@@ -168,6 +170,12 @@ export function SourceEditor({
                     languageExtension(language),
                     syntaxHighlighting(sourceHighlightStyle),
                     sourceEditorTheme,
+                    autoHeight
+                        ? EditorView.theme({
+                            "&": { height: "auto" },
+                            ".cm-scroller": { overflow: "visible" },
+                        })
+                        : [],
                     EditorState.readOnly.of(readOnly),
                     EditorView.editable.of(!readOnly),
                     EditorView.contentAttributes.of(ariaLabel ? { "aria-label": ariaLabel } : {}),
@@ -187,12 +195,13 @@ export function SourceEditor({
     return (
         <div
             className={cn(
-                "flex min-h-40 w-full min-w-0 flex-col overflow-hidden rounded-md border border-border bg-background font-mono text-[12px] has-[.cm-focused]:ring-1 has-[.cm-focused]:ring-ring",
+                "flex w-full min-w-0 flex-col rounded-md border border-border bg-background font-mono text-[12px] has-[.cm-focused]:ring-1 has-[.cm-focused]:ring-ring",
+                autoHeight ? "min-h-0 overflow-visible" : "min-h-40 overflow-hidden",
                 className,
             )}
         >
             {name !== undefined ? <input ref={inputRef} type="hidden" name={name} defaultValue={defaultValue} /> : null}
-            <div ref={hostRef} className="min-h-0 flex-1 [&_.cm-editor]:h-full" />
+            <div ref={hostRef} className={autoHeight ? undefined : "min-h-0 flex-1 [&_.cm-editor]:h-full"} />
         </div>
     );
 }
