@@ -20,7 +20,7 @@ import {
     lineNumbers,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/Utils";
 
 /** Language packs the workspace editors actually need. */
@@ -34,6 +34,8 @@ export interface SourceEditorProps
     language?: SourceLanguage;
     readOnly?: boolean;
     autoHeight?: boolean;
+    /** Re-measure the editor when its surrounding layout changes. */
+    resizeKey?: unknown;
     className?: string;
     "aria-label"?: string;
 }
@@ -139,12 +141,14 @@ export function SourceEditor({
     language = "plain",
     readOnly = false,
     autoHeight = false,
+    resizeKey,
     className,
     "aria-label": ariaLabel,
 }: SourceEditorProps)
 {
     const hostRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const viewRef = useRef<EditorView | null>(null);
 
     useEffect(() =>
     {
@@ -188,9 +192,19 @@ export function SourceEditor({
                 ],
             }),
         });
-        return () => view.destroy();
+        viewRef.current = view;
+        return () =>
+        {
+            viewRef.current = null;
+            view.destroy();
+        };
         // Mount once; WorkspacePage remounts the pane when the selection changes.
     }, []);
+
+    useLayoutEffect(() =>
+    {
+        viewRef.current?.requestMeasure();
+    }, [resizeKey]);
 
     return (
         <div

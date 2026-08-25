@@ -103,7 +103,7 @@ halign setup --layer soul=kei
 - 在 Home 页编辑输出标题, Harness 列表, 以及当前项目选用的 Layer 顺序与选项.
 - 在 Layers 页新建, 修改, 重命名或删除 Layer 及其选项.
 - 在 Rules 页编辑参与 `AGENTS.md` 的根规则, 以及独立部署的 shared-rules.
-- 在 Agents 页编辑共享正文和各 Harness 的原生 metadata.
+- 在 Agents 页编辑共享正文, 并在单一 metadata 编辑器中按 Harness 切换各自的原生 metadata.
 - 在 Skills 页从已注册的 GitHub 仓库发现, 下载, 检查或应用更新, 从 `%USERPROFILE%\.agents\skills` 导入, 或移除已安装的项目 Skills.
 - 在 Generated 页查看最近一次生成结果. 不要手工改这些文件.
 - 使用当前未保存的 Layer 选择执行 Generate, Check 和 Setup.

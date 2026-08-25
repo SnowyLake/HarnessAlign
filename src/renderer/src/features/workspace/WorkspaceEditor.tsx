@@ -18,6 +18,7 @@ import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SourceEditor } from "@/components/ui/source-editor";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/toast";
 import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { catalogLayerNames, cn, defaultLayerOption, ruleDisplayName } from "@/lib/Utils";
@@ -969,6 +970,10 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
     const editorKey = selectionKey(selection);
     const editor = useEditorForm(selection, existing ? () => setDeleteOpen(true) : undefined);
     const [agentName, setAgentName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-agent"));
+    const [activeMetadataName, setActiveMetadataName] = useState(workspace.config.harnesses[0]!.name);
+    const selectedMetadataName = workspace.config.harnesses.some((harness) => harness.name === activeMetadataName)
+        ? activeMetadataName
+        : workspace.config.harnesses[0]!.name;
 
     return (
         <>
@@ -1006,50 +1011,40 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                     <FieldLabel htmlFor="agent-description">Description</FieldLabel>
                     <Input id="agent-description" name="description" defaultValue={draftText(editor.draft, "description", existing?.description ?? "")} />
                 </Field>
-                {workspace.config.harnesses.map((harness) => (
-                    <Card key={harness.name} size="sm">
-                        <Collapsible>
-                            <CollapsibleTrigger render={<button type="button" className="group/collapsible-trigger w-full text-left" />}>
-                                <CardHeader className="flex flex-row items-center gap-2">
-                                    <ChevronRightIcon className="shrink-0 transition-transform group-data-[panel-open]/collapsible-trigger:rotate-90" />
-                                    <CardTitle className="flex-1 break-all">{harness.name} metadata (JSON)</CardTitle>
-                                </CardHeader>
-                            </CollapsibleTrigger>
-                            <CollapsibleContent>
-                                <CardContent>
-                                    <SourceEditor
-                                        name={`meta-${harness.name}`}
-                                        language="json"
-                                        aria-label={`${harness.name} metadata JSON`}
-                                        autoHeight
-                                        defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))}
-                                    />
-                                </CardContent>
-                            </CollapsibleContent>
-                        </Collapsible>
-                    </Card>
-                ))}
-                <Card size="sm">
-                    <Collapsible>
-                        <CollapsibleTrigger render={<button type="button" className="group/collapsible-trigger w-full text-left" />}>
-                            <CardHeader className="flex flex-row items-center gap-2">
-                                <ChevronRightIcon className="shrink-0 transition-transform group-data-[panel-open]/collapsible-trigger:rotate-90" />
-                                <CardTitle>Body</CardTitle>
-                            </CardHeader>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent>
-                            <CardContent>
+                <Field>
+                    <Tabs value={selectedMetadataName} onValueChange={(value) => setActiveMetadataName(String(value))} className="min-w-0 gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <FieldTitle>Metadata (JSON)</FieldTitle>
+                            <TabsList className="ml-auto w-fit shrink-0" aria-label="Agent metadata harness">
+                                {workspace.config.harnesses.map((harness) => (
+                                    <TabsTrigger key={harness.name} value={harness.name}>{harness.name}</TabsTrigger>
+                                ))}
+                            </TabsList>
+                        </div>
+                        {workspace.config.harnesses.map((harness) => (
+                            <TabsContent key={harness.name} value={harness.name} keepMounted className="min-w-0">
                                 <SourceEditor
-                                    name="body"
-                                    language="markdown"
-                                    aria-label="Agent instructions"
+                                    name={`meta-${harness.name}`}
+                                    language="json"
+                                    aria-label={`${harness.name} metadata JSON`}
                                     autoHeight
-                                    defaultValue={draftText(editor.draft, "body", existing?.body ?? "Instructions.\n")}
+                                    resizeKey={selectedMetadataName}
+                                    defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))}
                                 />
-                            </CardContent>
-                        </CollapsibleContent>
-                    </Collapsible>
-                </Card>
+                            </TabsContent>
+                        ))}
+                    </Tabs>
+                </Field>
+                <Field>
+                    <FieldTitle>Body</FieldTitle>
+                    <SourceEditor
+                        name="body"
+                        language="markdown"
+                        aria-label="Agent instructions"
+                        autoHeight
+                        defaultValue={draftText(editor.draft, "body", existing?.body ?? "Instructions.\n")}
+                    />
+                </Field>
             </form>
             {existing ? (
                 <ConfirmDialog
