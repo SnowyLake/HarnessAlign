@@ -33,6 +33,7 @@
 
 - 支持 Node 24 与 npm 11. 当前 `engines` 范围是 Node `>=24 <25`, npm `>=11 <12`. 只使用 npm, 不引入其他包管理器.
 - CLI runtime 仅使用 `yaml` 和 `smol-toml`. React, Ant Design, CodeMirror, electron-vite, Zod 和 `fflate` 不进入 CLI 运行时.
+- Renderer 的通用界面框架固定为 Ant Design 6 与 `@ant-design/icons`. 标准控件和主题优先使用官方组件与 Design Token, CodeMirror 仅用于 Markdown 和 JSON 源码编辑. 不引入第二套通用 UI 组件或主题系统.
 - `fflate` 只允许 Electron Main 导入, 并且必须加入 `electron.vite.config.ts` 的 main `exclude`.
 - `src/shared/` 只保存可同时被 Main, Preload 和 Renderer 导入的契约. 不得导入 Electron, Node 副作用, DOM 或 React.
 - Renderer 只调用 `window.appApi`. 禁止向 Renderer 暴露通用 `ipcRenderer`.
@@ -83,6 +84,7 @@
 - `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, `SettingsService`, `WorkspaceService`, `SkillRemoteService`.
 - `src/preload/` 只把 typed `window.appApi` 暴露给 Renderer.
 - `src/renderer/` 是 React UI. 标准界面控件直接使用 Ant Design 官方组件, `components/common/` 只保存 Ant Design 没有对应物的共享领域控件与反馈桥接, `features/` 保存业务界面, `stores/AppStore.ts` 只保存 UI 状态. `showcase` 视图仅开发模式可见.
+- `.agents/skills/antd/SKILL.md` 是本仓库的 Ant Design 开发辅助规则, 面向在仓库工作的 Agent. 它不属于 `.halign/skills/`, 不参与产品的 Skills 发现, 安装或 `setup` 部署.
 - `src/shared/` 保存 IPC 契约, DTO 和 Zod schema. 引擎类型与 Shared DTO 需要并行维护, Shared 不得 import 引擎.
 - `tests/Halign.test.ts` 是唯一测试源文件, 使用 Node 内置 `node:test` 覆盖解析, 渲染, 生成, 检查, 部署, Skills, 源文件写回和路径安全.
 - `dist/` 是引擎 `tsc` 输出. CLI 入口是 `dist/src/engine/Halign.js`.
@@ -145,12 +147,13 @@ CLI:
 ## 修改流程
 
 1. 阅读目标文件及其所有调用点, 确认真实数据流, CLI 边界, IPC 契约和失败边界.
-2. 实施满足需求的最小改动, 不做无关重构.
-3. 为新增分支, 解析规则或安全行为在 `tests/Halign.test.ts` 补充一个最小可运行测试.
-4. 新增 privileged capability 时同步更新 `src/shared` 契约, Main handler, Preload API 和 Renderer 调用.
-5. 用户可见行为变化时同步更新 `README.md`.
-6. 运行 `npm run verify` 和 `npm run build`.
-7. 重新注册或修改 CLI 入口时运行 `npm link`.
+2. 修改 Ant Design UI 前读取 `.agents/skills/antd/SKILL.md`, 使用 `@ant-design/cli` 核对当前版本的组件 API, Demo, Design Token 和语义结构, 不凭记忆猜测属性.
+3. 实施满足需求的最小改动, 不做无关重构.
+4. 为新增分支, 解析规则或安全行为在 `tests/Halign.test.ts` 补充一个最小可运行测试.
+5. 新增 privileged capability 时同步更新 `src/shared` 契约, Main handler, Preload API 和 Renderer 调用.
+6. 用户可见行为变化时同步更新 `README.md`.
+7. 运行 `npm run verify` 和 `npm run build`.
+8. 重新注册或修改 CLI 入口时运行 `npm link`.
 
 ## 验证
 
@@ -166,6 +169,7 @@ npm run dev
 - `npm run typecheck` 检查引擎, Main/Preload 和 Renderer. 引擎使用 `--noEmit`.
 - `npm run test` 会先编译引擎, 再使用 `node --test` 运行 `dist/tests/Halign.test.js`.
 - `npm run build` 使用 electron-vite 构建桌面壳. `npm run build:win` 再打 NSIS 安装包.
+- 修改 Ant Design UI 后, 按 `.agents/skills/antd/SKILL.md` 对变更路径运行 `antd lint <path> --format json`. `@ant-design/cli` 是按需开发辅助工具, 不加入应用依赖.
 - Windows sandbox 可能阻止 Node test runner 创建子进程. 发生真实权限错误时在获得权限后复跑, 不修改测试绕过边界.
 
 ## 语言与代码
