@@ -1,5 +1,8 @@
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import { ScrollArea } from "@/components/ui/scroll-area";
+/**
+ * Ant Design workspace layout for module lists and editors.
+ */
+
+import { Splitter } from "antd";
 import { ProjectEditor, WorkspaceEditor } from "@/features/workspace/WorkspaceEditor";
 import { SkillsPanel } from "@/features/workspace/SkillsPanel";
 import { WorkspaceTree } from "@/features/workspace/WorkspaceTree";
@@ -11,7 +14,7 @@ export interface WorkspacePageProps
     view: WorkspaceView;
 }
 
-/** Workspace module page with a contextual tree and responsive editor. */
+/** Render a full-width module or the Ant Design split list and editor view. */
 export function WorkspacePage({ view }: WorkspacePageProps)
 {
     const selection = useAppStore((state) => state.selection);
@@ -20,27 +23,26 @@ export function WorkspacePage({ view }: WorkspacePageProps)
     if (view === "project" || view === "skills")
     {
         return (
-            <ScrollArea className="h-full">
-                <div className="min-h-full min-w-0 p-4" key={`${workspaceRoot ?? ""}:${view}`}>
-                    {view === "project" ? <ProjectEditor /> : <SkillsPanel />}
-                </div>
-            </ScrollArea>
+            <div className="workspace-scroll" key={`${workspaceRoot ?? ""}:${view}`}>
+                <div className="workspace-wide-page">{view === "project" ? <ProjectEditor /> : <SkillsPanel />}</div>
+            </div>
         );
     }
 
     return (
-        <ResizablePanelGroup orientation="horizontal" className="h-full min-h-0">
-            <ResizablePanel defaultSize="24" minSize="16" className="min-h-0 border-r border-border bg-card">
-                <WorkspaceTree view={view} />
-            </ResizablePanel>
-            <ResizableHandle withHandle />
-            <ResizablePanel defaultSize="76" minSize="40" className="min-h-0">
-                <ScrollArea className="h-full">
-                    <div className="mx-auto h-full w-full max-w-5xl min-w-0 p-4" key={`${workspaceRoot ?? ""}:${selectionKey(selection)}`}>
-                        <WorkspaceEditor />
-                    </div>
-                </ScrollArea>
-            </ResizablePanel>
-        </ResizablePanelGroup>
+        <div className="workspace-module-page">
+            <div className="workspace-module-surface">
+                <Splitter className="workspace-splitter">
+                    <Splitter.Panel defaultSize={280} min={240} max={420}>
+                        <WorkspaceTree view={view} />
+                    </Splitter.Panel>
+                    <Splitter.Panel min={480}>
+                        <div className="workspace-scroll" key={`${workspaceRoot ?? ""}:${selectionKey(selection)}`}>
+                            <div className="workspace-editor-page"><WorkspaceEditor /></div>
+                        </div>
+                    </Splitter.Panel>
+                </Splitter>
+            </div>
+        </div>
     );
 }

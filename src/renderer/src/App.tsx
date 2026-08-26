@@ -3,12 +3,11 @@
  * Renderer work stays on `window.appApi`.
  */
 
-import { useEffect } from "react";
+import { App as AntApp, ConfigProvider, theme as antTheme } from "antd";
+import { useEffect, useState } from "react";
+import { FeedbackBridge } from "@/components/common/Feedback";
 import { AppShell } from "@/components/layout/AppShell";
 import { AppOutput } from "@/components/layout/AppOutput";
-import { SidebarProvider } from "@/components/ui/sidebar";
-import { Toaster } from "@/components/ui/toast";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
 import { ShowcasePage } from "@/features/showcase/ShowcasePage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
@@ -19,7 +18,10 @@ import { useAppStore, visibleView, type WorkspaceView } from "@/stores/AppStore"
 export function App()
 {
     const view = useAppStore((state) => state.view);
+    const themeMode = useAppStore((state) => state.theme);
+    const [prefersDark, setPrefersDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
     const effectiveView = visibleView(view);
+    const isDark = themeMode === "dark" || (themeMode === "system" && prefersDark);
 
     useEffect(() =>
     {
@@ -47,8 +49,10 @@ export function App()
     useEffect(() =>
     {
         const media = window.matchMedia("(prefers-color-scheme: dark)");
+        /** Synchronize the current system theme with Ant Design. */
         const sync = (): void =>
         {
+            setPrefersDark(media.matches);
             if (useAppStore.getState().theme === "system") applyTheme("system");
         };
         media.addEventListener("change", sync);
@@ -124,15 +128,42 @@ export function App()
             : <WorkspacePage view={effectiveView as WorkspaceView} />;
 
     return (
-        <Toaster>
-            <TooltipProvider>
-                <SidebarProvider open={false} className="h-full min-h-0">
-                    <AppShell onSave={handleSave} onGenerate={handleGenerate} onCheck={handleCheck} onSetup={handleSetup}>
-                        <div className="min-h-0 flex-1 overflow-hidden">{page}</div>
-                    </AppShell>
-                    <AppOutput />
-                </SidebarProvider>
-            </TooltipProvider>
-        </Toaster>
+        <ConfigProvider
+            componentSize="middle"
+            theme={{
+                algorithm: isDark ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
+                token: {
+                    colorPrimary: "#1677ff",
+                    colorInfo: "#1677ff",
+                    colorBgLayout: isDark ? "#0d0f12" : "#f4f6f8",
+                    colorBgContainer: isDark ? "#17191d" : "#ffffff",
+                    colorBorderSecondary: isDark ? "#2b2e34" : "#e7e9ec",
+                    borderRadius: 10,
+                    controlHeight: 38,
+                    fontFamily: '"Segoe UI Variable", "Segoe UI", system-ui, sans-serif',
+                },
+                components: {
+                    Button: { primaryShadow: "0 2px 0 rgba(5, 145, 255, 0.1)" },
+                    Card: { boxShadowTertiary: "0 1px 2px rgba(0, 0, 0, 0.03)" },
+                    Layout: {
+                        bodyBg: isDark ? "#0d0f12" : "#f4f6f8",
+                        headerBg: isDark ? "#17191d" : "#ffffff",
+                    },
+                    Menu: {
+                        itemBg: "transparent",
+                        itemSelectedBg: isDark ? "#172b4d" : "#e6f4ff",
+                        itemSelectedColor: "#1677ff",
+                    },
+                },
+            }}
+        >
+            <AntApp className="app-root">
+                <FeedbackBridge />
+                <AppShell onSave={handleSave} onGenerate={handleGenerate} onCheck={handleCheck} onSetup={handleSetup}>
+                    {page}
+                </AppShell>
+                <AppOutput />
+            </AntApp>
+        </ConfigProvider>
     );
 }

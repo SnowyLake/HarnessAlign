@@ -3,7 +3,7 @@
  * Command errors go to Output; mutation errors return for form Alerts.
  */
 
-import { toast } from "@/components/ui/toast";
+import { showError, showSuccess } from "@/components/common/Feedback";
 import { ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type FormSnapshot, type Selection } from "@/stores/AppStore";
 import type { AgentFormat, Config, HarnessConfig, RuleInput, Workspace } from "@shared/models/Workspace";
@@ -347,7 +347,7 @@ export async function saveWorkspaceChanges(): Promise<void>
         const state = useAppStore.getState();
         state.setWorkspace(currentWorkspace);
         state.setSelection(nextSelection);
-        toast.add({ title: "Saved all changes", type: "success" });
+        showSuccess("Saved all changes");
     }
     catch (error)
     {
@@ -364,7 +364,7 @@ export async function saveWorkspaceChanges(): Promise<void>
         {
             refreshMessage = ` Workspace refresh also failed: ${errorMessage(refreshError)}`;
         }
-        toast.add({ title: `Save failed: ${message}${refreshMessage}`, type: "error" });
+        showError(`Save failed: ${message}${refreshMessage}`);
     }
     finally
     {
@@ -414,7 +414,7 @@ export async function runMutation(work: () => Promise<void>): Promise<{ ok: true
     catch (error)
     {
         const message = errorMessage(error);
-        toast.add({ title: message, type: "error" });
+        showError(message);
         return { ok: false, message };
     }
     finally

@@ -1,27 +1,27 @@
-import { CircleCheckIcon, InfoIcon, OctagonXIcon, XIcon } from "lucide-react";
-import { useEffect } from "react";
-import {
-    Dialog,
-    DialogContent,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
+/**
+ * Ant Design command notification and full output modal.
+ */
+
+import { CheckCircleFilled, CloseCircleFilled, InfoCircleFilled } from "@ant-design/icons";
+import { App as AntApp, Button, Modal, theme as antTheme } from "antd";
+import { useEffect, type ReactNode } from "react";
 import { useAppStore, type OutputTone } from "@/stores/AppStore";
 
-/** Status icon used by the compact output notification. */
+const OUTPUT_NOTIFICATION_KEY = "command-output";
+
+/** Return the themed Ant Design icon for one output tone. */
 function OutputIcon({ tone }: { tone: OutputTone })
 {
-    if (tone === "error") return <OctagonXIcon className="shrink-0 text-destructive" />;
-    if (tone === "success") return <CircleCheckIcon className="shrink-0 text-foreground" />;
-    return <InfoIcon className="shrink-0 text-muted-foreground" />;
+    const { token } = antTheme.useToken();
+    if (tone === "error") return <CloseCircleFilled style={{ color: token.colorError }} />;
+    if (tone === "success") return <CheckCircleFilled style={{ color: token.colorSuccess }} />;
+    return <InfoCircleFilled style={{ color: token.colorInfo }} />;
 }
 
-/** Bottom-right output notification that opens the full log in a centered dialog. */
+/** Render command feedback through Ant Design notification and Modal components. */
 export function AppOutput()
 {
+    const { notification } = AntApp.useApp();
     const output = useAppStore((state) => state.output);
     const outputTone = useAppStore((state) => state.outputTone);
     const outputTitle = useAppStore((state) => state.outputTitle);
@@ -34,54 +34,31 @@ export function AppOutput()
 
     useEffect(() =>
     {
-        if (!isOutputNoticeVisible) return undefined;
-        const timeout = window.setTimeout(dismissOutputNotice, 15_000);
-        return () => window.clearTimeout(timeout);
-    }, [dismissOutputNotice, isOutputNoticeVisible, outputNoticeId]);
+        if (!isOutputNoticeVisible)
+        {
+            notification.destroy(OUTPUT_NOTIFICATION_KEY);
+            return;
+        }
+        notification.open({
+            key: OUTPUT_NOTIFICATION_KEY,
+            placement: "bottomRight",
+            duration: 15,
+            message: outputTitle,
+            description: summary,
+            icon: <OutputIcon tone={outputTone} />,
+            onClick: () =>
+            {
+                dismissOutputNotice();
+                setOutputDialogOpen(true);
+            },
+            onClose: dismissOutputNotice,
+        });
+    }, [dismissOutputNotice, isOutputNoticeVisible, notification, outputNoticeId, outputTitle, outputTone, setOutputDialogOpen, summary]);
 
+    const footer: ReactNode = <Button onClick={() => setOutputDialogOpen(false)}>Close</Button>;
     return (
-        <>
-            {isOutputNoticeVisible ? (
-                <Item
-                    role="status"
-                    variant="outline"
-                    className="fixed right-4 bottom-4 z-40 w-[min(24rem,calc(100vw-2rem))] shadow-lg"
-                >
-                    <button
-                        type="button"
-                        className="flex min-w-0 flex-1 items-start gap-3 text-left"
-                        onClick={() =>
-                        {
-                            dismissOutputNotice();
-                            setOutputDialogOpen(true);
-                        }}
-                    >
-                        <ItemMedia><OutputIcon tone={outputTone} /></ItemMedia>
-                        <ItemContent>
-                            <ItemTitle>{outputTitle}</ItemTitle>
-                            <ItemDescription className="truncate">{summary}</ItemDescription>
-                        </ItemContent>
-                    </button>
-                    <ItemActions>
-                        <Button
-                            type="button"
-                            size="icon-sm"
-                            variant="ghost"
-                            aria-label="Dismiss output notification"
-                            onClick={dismissOutputNotice}
-                        >
-                            <XIcon />
-                        </Button>
-                    </ItemActions>
-                </Item>
-            ) : null}
-            <Dialog open={isOutputDialogOpen} onOpenChange={setOutputDialogOpen}>
-                <DialogContent className="max-h-[80vh] w-[calc(100vw-2rem)] max-w-3xl grid-rows-[auto_minmax(0,1fr)_auto]">
-                    <DialogHeader><DialogTitle>{outputTitle}</DialogTitle></DialogHeader>
-                    <div className="min-h-0 overflow-auto"><pre className="font-mono text-code whitespace-pre-wrap text-foreground">{output}</pre></div>
-                    <DialogFooter><Button variant="outline" onClick={() => setOutputDialogOpen(false)}>Close</Button></DialogFooter>
-                </DialogContent>
-            </Dialog>
-        </>
+        <Modal open={isOutputDialogOpen} title={outputTitle} width={760} footer={footer} onCancel={() => setOutputDialogOpen(false)}>
+            <pre className="app-output-pre">{output}</pre>
+        </Modal>
     );
 }

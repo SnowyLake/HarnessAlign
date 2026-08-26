@@ -97,6 +97,8 @@ halign setup --layer soul=kei
 
 ## 桌面应用
 
+桌面 Renderer 使用 Ant Design 官方主题, 组件和图标, 并为 Markdown 与 JSON 编辑保留 CodeMirror. 界面采用顶部工作区命令栏, 横向模块导航, Home 数据概览和业务页主从编辑布局; 蓝色仅用于关键动作, 选中状态和反馈.
+
 窗口可以:
 
 - 打开 `%USERPROFILE%\.halign` 这份用户配置.

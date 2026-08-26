@@ -1,7 +1,5 @@
 /**
- * CodeMirror 6 source editor for workspace Markdown and JSON fields.
- * Hidden inputs participate in FormData drafts; Tab indents instead of moving focus.
- * The CLI never imports this module.
+ * CodeMirror source field styled from Ant Design tokens and bridged into native FormData.
  */
 
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -20,13 +18,13 @@ import {
     lineNumbers,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { useEffect, useLayoutEffect, useRef } from "react";
-import { cn } from "@/lib/Utils";
+import { theme as antTheme } from "antd";
+import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 
 /** Language packs the workspace editors actually need. */
 export type SourceLanguage = "markdown" | "json" | "plain";
 
-/** Props for a CodeMirror field that can participate in an uncontrolled form. */
+/** Props for a CodeMirror field that participates in an uncontrolled form. */
 export interface SourceEditorProps
 {
     name?: string;
@@ -34,95 +32,93 @@ export interface SourceEditorProps
     language?: SourceLanguage;
     readOnly?: boolean;
     autoHeight?: boolean;
-    /** Re-measure the editor when its surrounding layout changes. */
     resizeKey?: unknown;
     className?: string;
     "aria-label"?: string;
 }
 
-/** Editor chrome that follows the app light and dark CSS variables. */
+/** Inline CSS variables supplied to CodeMirror from the current Ant Design token set. */
+type SourceEditorStyle = CSSProperties & Record<`--source-${string}`, string>;
+
+/** CodeMirror chrome that reads the active Ant Design token variables. */
 const sourceEditorTheme = EditorView.theme({
     "&": {
         height: "100%",
-        backgroundColor: "var(--background)",
-        color: "var(--foreground)",
-        fontSize: "var(--text-code)",
-        fontFamily: "var(--font-mono)",
+        backgroundColor: "var(--source-bg)",
+        color: "var(--source-text)",
+        fontSize: "var(--source-font-size)",
+        fontFamily: "var(--source-font-family)",
     },
     ".cm-scroller": {
         overflow: "auto",
         fontFamily: "inherit",
-        lineHeight: "var(--text-code--line-height)",
+        lineHeight: "1.55",
     },
     ".cm-content": {
-        caretColor: "var(--foreground)",
-        padding: "8px 0",
+        caretColor: "var(--source-text)",
+        padding: "10px 0",
     },
     ".cm-cursor, .cm-dropCursor": {
-        borderLeftColor: "var(--foreground)",
+        borderLeftColor: "var(--source-text)",
     },
     ".cm-gutters": {
-        backgroundColor: "var(--background)",
-        color: "var(--muted-foreground)",
-        borderRight: "1px solid var(--border)",
+        backgroundColor: "var(--source-bg)",
+        color: "var(--source-muted)",
+        borderRight: "1px solid var(--source-border)",
     },
-    ".cm-activeLine": {
-        backgroundColor: "color-mix(in srgb, var(--accent) 80%, transparent)",
-    },
-    ".cm-activeLineGutter": {
-        backgroundColor: "color-mix(in srgb, var(--accent) 80%, transparent)",
-        color: "var(--foreground)",
+    ".cm-activeLine, .cm-activeLineGutter": {
+        backgroundColor: "var(--source-active)",
     },
     "&.cm-focused": {
         outline: "none",
     },
     ".cm-selectionBackground, .cm-content ::selection": {
-        backgroundColor: "color-mix(in srgb, var(--ring) 35%, transparent) !important",
+        backgroundColor: "var(--source-selection) !important",
     },
     "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
-        backgroundColor: "color-mix(in srgb, var(--ring) 35%, transparent) !important",
+        backgroundColor: "var(--source-selection) !important",
     },
     ".cm-searchMatch": {
-        backgroundColor: "color-mix(in srgb, var(--ring) 40%, transparent)",
+        backgroundColor: "var(--source-selection)",
     },
     ".cm-panels": {
-        backgroundColor: "var(--card)",
-        color: "var(--card-foreground)",
-        borderTop: "1px solid var(--border)",
+        backgroundColor: "var(--source-elevated)",
+        color: "var(--source-text)",
+        borderTop: "1px solid var(--source-border)",
     },
     ".cm-button": {
         backgroundImage: "none",
-        backgroundColor: "var(--secondary)",
-        color: "var(--secondary-foreground)",
-        border: "1px solid var(--border)",
+        backgroundColor: "var(--source-active)",
+        color: "var(--source-text)",
+        border: "1px solid var(--source-border)",
     },
     ".cm-textfield": {
-        backgroundColor: "var(--background)",
-        color: "var(--foreground)",
-        border: "1px solid var(--input)",
+        backgroundColor: "var(--source-bg)",
+        color: "var(--source-text)",
+        border: "1px solid var(--source-border)",
     },
 });
 
-/** Syntax colors that stay on the same CSS variables as the rest of the shell. */
+/** Neutral syntax colors that stay aligned with the Ant Design text hierarchy. */
 const sourceHighlightStyle = HighlightStyle.define([
-    { tag: tags.heading, color: "var(--foreground)", fontWeight: "700" },
+    { tag: tags.heading, color: "var(--source-text)", fontWeight: "700" },
     { tag: tags.strong, fontWeight: "700" },
     { tag: tags.emphasis, fontStyle: "italic" },
-    { tag: tags.link, color: "var(--ring)" },
-    { tag: tags.url, color: "var(--muted-foreground)" },
-    { tag: tags.comment, color: "var(--muted-foreground)", fontStyle: "italic" },
-    { tag: tags.keyword, color: "var(--foreground)", fontWeight: "600" },
-    { tag: tags.string, color: "var(--muted-foreground)" },
-    { tag: tags.number, color: "var(--foreground)" },
-    { tag: tags.bool, color: "var(--foreground)" },
-    { tag: tags.null, color: "var(--muted-foreground)" },
-    { tag: tags.propertyName, color: "var(--foreground)", fontWeight: "600" },
-    { tag: tags.atom, color: "var(--foreground)" },
-    { tag: tags.meta, color: "var(--muted-foreground)" },
-    { tag: tags.monospace, color: "var(--foreground)" },
-    { tag: tags.processingInstruction, color: "var(--muted-foreground)" },
-    { tag: tags.punctuation, color: "var(--muted-foreground)" },
-    { tag: tags.bracket, color: "var(--muted-foreground)" },
+    { tag: tags.link, color: "var(--source-accent)" },
+    { tag: tags.url, color: "var(--source-muted)" },
+    { tag: tags.comment, color: "var(--source-muted)", fontStyle: "italic" },
+    { tag: tags.keyword, color: "var(--source-text)", fontWeight: "600" },
+    { tag: tags.string, color: "var(--source-muted)" },
+    { tag: tags.number, color: "var(--source-text)" },
+    { tag: tags.bool, color: "var(--source-text)" },
+    { tag: tags.null, color: "var(--source-muted)" },
+    { tag: tags.propertyName, color: "var(--source-text)", fontWeight: "600" },
+    { tag: tags.atom, color: "var(--source-text)" },
+    { tag: tags.meta, color: "var(--source-muted)" },
+    { tag: tags.monospace, color: "var(--source-text)" },
+    { tag: tags.processingInstruction, color: "var(--source-muted)" },
+    { tag: tags.punctuation, color: "var(--source-muted)" },
+    { tag: tags.bracket, color: "var(--source-muted)" },
     { tag: tags.strikethrough, textDecoration: "line-through" },
 ]);
 
@@ -134,7 +130,7 @@ function languageExtension(language: SourceLanguage): Extension
     return [];
 }
 
-/** CodeMirror field that writes a hidden input so existing form snapshots keep working. */
+/** Render a CodeMirror field whose value is mirrored into a hidden native input. */
 export function SourceEditor({
     name,
     defaultValue = "",
@@ -146,9 +142,22 @@ export function SourceEditor({
     "aria-label": ariaLabel,
 }: SourceEditorProps)
 {
+    const { token } = antTheme.useToken();
     const hostRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const viewRef = useRef<EditorView | null>(null);
+    const style: SourceEditorStyle = {
+        "--source-bg": token.colorBgContainer,
+        "--source-text": token.colorText,
+        "--source-muted": token.colorTextSecondary,
+        "--source-border": token.colorBorder,
+        "--source-active": token.colorFillTertiary,
+        "--source-selection": token.colorFillSecondary,
+        "--source-elevated": token.colorBgElevated,
+        "--source-accent": token.colorPrimaryText,
+        "--source-font-size": `${token.fontSizeSM}px`,
+        "--source-font-family": '"Cascadia Mono", Consolas, monospace',
+    };
 
     useEffect(() =>
     {
@@ -174,12 +183,7 @@ export function SourceEditor({
                     languageExtension(language),
                     syntaxHighlighting(sourceHighlightStyle),
                     sourceEditorTheme,
-                    autoHeight
-                        ? EditorView.theme({
-                            "&": { height: "auto" },
-                            ".cm-scroller": { overflow: "visible" },
-                        })
-                        : [],
+                    autoHeight ? EditorView.theme({ "&": { height: "auto" }, ".cm-scroller": { overflow: "visible" } }) : [],
                     EditorState.readOnly.of(readOnly),
                     EditorView.editable.of(!readOnly),
                     EditorView.contentAttributes.of(ariaLabel ? { "aria-label": ariaLabel } : {}),
@@ -198,7 +202,6 @@ export function SourceEditor({
             viewRef.current = null;
             view.destroy();
         };
-        // Mount once; WorkspacePage remounts the pane when the selection changes.
     }, []);
 
     useLayoutEffect(() =>
@@ -207,15 +210,9 @@ export function SourceEditor({
     }, [resizeKey]);
 
     return (
-        <div
-            className={cn(
-                "flex w-full min-w-0 flex-col rounded-md border border-border bg-background font-mono text-code has-[.cm-focused]:ring-1 has-[.cm-focused]:ring-ring",
-                autoHeight ? "min-h-0 overflow-visible" : "min-h-40 overflow-hidden",
-                className,
-            )}
-        >
+        <div className={["source-editor", autoHeight ? "source-editor-auto" : "", className ?? ""].filter(Boolean).join(" ")} style={style}>
             {name !== undefined ? <input ref={inputRef} type="hidden" name={name} defaultValue={defaultValue} /> : null}
-            <div ref={hostRef} className={autoHeight ? undefined : "min-h-0 flex-1 [&_.cm-editor]:h-full"} />
+            <div ref={hostRef} className={autoHeight ? undefined : "source-editor-host"} />
         </div>
     );
 }

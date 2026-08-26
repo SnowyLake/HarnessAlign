@@ -1,14 +1,21 @@
 import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
+import { DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import { Badge, Button, Dropdown, Empty, Input, Typography, type MenuProps } from "antd";
 import { useState } from "react";
-import { PencilIcon, PlusIcon, SaveIcon, Trash2Icon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { toast } from "@/components/ui/toast";
+import { showSuccess } from "@/components/common/Feedback";
 import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation, saveRenamedSource } from "@/features/workspace/WorkspaceTasks";
-import { fileName, ruleDisplayName, uniqueAgentPath, uniqueRulePath, catalogLayerNames } from "@/lib/Utils";
+import { catalogLayerNames, fileName, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
-import { cn } from "@/lib/Utils";
+
+/** Contextual titles for the master list beside each workspace editor. */
+const TREE_COPY: Record<WorkspaceView, { title: string; description: string }> = {
+    project: { title: "Project structure", description: "Configuration and harness targets" },
+    rules: { title: "Rule library", description: "Repository and shared instructions" },
+    layers: { title: "Layer catalog", description: "Selectable instruction variants" },
+    agents: { title: "Agent profiles", description: "Reusable subagent definitions" },
+    skills: { title: "Project skills", description: "Installed capabilities" },
+    generated: { title: "Output files", description: "Generated harness content" },
+};
 
 /** Available insertion gaps around a rule row. */
 type RuleDropPosition = "before" | "after";
@@ -67,6 +74,29 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
         if (isSaved) setIsRenaming(false);
     };
 
+    const menuItems: NonNullable<MenuProps["items"]> = [];
+    if (onRename)
+    {
+        menuItems.push({ key: "rename", icon: <EditOutlined />, label: "Rename", disabled: Boolean(disabled) });
+        menuItems.push({ type: "divider" });
+    }
+    menuItems.push({ key: "save", icon: <SaveOutlined />, label: "Save", disabled: Boolean(disabled) || !canSave });
+    menuItems.push({ type: "divider" });
+    menuItems.push({ key: "delete", icon: <DeleteOutlined />, label: "Delete", danger: true, disabled: Boolean(disabled) || !canDelete });
+
+    /** Dispatch one context menu command to the selected editor row. */
+    const handleMenuClick: MenuProps["onClick"] = ({ key }) =>
+    {
+        if (!selection) return;
+        if (key === "rename")
+        {
+            setRenameValue(label);
+            setIsRenaming(true);
+        }
+        else if (key === "save") requestEditorAction(selection, "save");
+        else if (key === "delete") requestEditorAction(selection, "delete");
+    };
+
     const row = (
         <div
             draggable={isDraggable && !disabled && !isRenaming}
@@ -102,29 +132,27 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                 const bounds = event.currentTarget.getBoundingClientRect();
                 onDrop?.(event.clientY < bounds.top + bounds.height / 2 ? "before" : "after");
             }}
-            className={cn("group/tab relative flex w-full min-w-0 items-center text-sm", isDraggable && "cursor-grab active:cursor-grabbing", isDragging && "opacity-40", active ? "bg-accent font-medium text-foreground" : "hover:bg-accent/50")}
+            className="workspace-tree-row"
+            data-active={active || undefined}
+            data-indent={indent || undefined}
+            data-draggable={isDraggable || undefined}
+            data-dragging={isDragging || undefined}
         >
             {dropPosition ? (
-                <span
-                    aria-hidden
-                    className={cn("pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-full bg-primary ring-2 ring-background", dropPosition === "before" ? "top-0 -translate-y-1/2" : "bottom-0 translate-y-1/2")}
-                />
+                <span aria-hidden className="workspace-tree-drop" data-position={dropPosition} />
             ) : null}
             {isRenaming ? (
-                <input
+                <Input
                     autoFocus
+                    size="small"
                     value={renameValue}
                     disabled={disabled || isRenameBusy}
                     onClick={(event) => event.stopPropagation()}
                     onChange={(event) => setRenameValue(event.currentTarget.value)}
                     onBlur={() => void commitRename()}
+                    onPressEnter={() => void commitRename()}
                     onKeyDown={(event) =>
                     {
-                        if (event.key === "Enter")
-                        {
-                            event.preventDefault();
-                            void commitRename();
-                        }
                         if (event.key === "Escape")
                         {
                             event.preventDefault();
@@ -132,72 +160,29 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                             setIsRenaming(false);
                         }
                     }}
-                    className={cn("my-0.5 h-7 min-w-0 flex-1 rounded border border-input bg-background pr-2 text-sm outline-none focus:ring-2 focus:ring-ring/50", indent ? "ml-5 pl-1" : "ml-2 pl-1")}
+                    className="workspace-tree-rename"
                 />
             ) : (
-                <button
-                    type="button"
+                <Button
+                    type="text"
+                    block
                     title={label}
-                    disabled={disabled}
+                    disabled={Boolean(disabled)}
                     onClick={onClick}
-                    className={cn("min-w-0 flex-1 truncate py-1.5 pr-2 text-left disabled:opacity-50", indent ? "pl-6" : "pl-3")}
+                    className="workspace-tree-button"
                 >
                     {label}
-                </button>
+                </Button>
             )}
             {isDirty ? (
-                <span
-                    title="Unsaved changes"
-                    aria-label="Unsaved changes"
-                    className="mr-1 flex size-5 shrink-0 items-center justify-center text-primary"
-                >
-                    <span className="size-2 rounded-full bg-current" />
-                </span>
+                <Badge status="processing" title="Unsaved changes" aria-label="Unsaved changes" />
             ) : null}
         </div>
     );
 
     if (!selection) return row;
     return (
-        <ContextMenu>
-            <ContextMenuTrigger render={row} />
-            <ContextMenuContent>
-                        <ContextMenuGroup>
-                        {onRename ? (
-                            <>
-                                <ContextMenuItem
-                                    disabled={disabled}
-                                    onClick={() =>
-                                    {
-                                        setRenameValue(label);
-                                        setIsRenaming(true);
-                                    }}
-                                >
-                                    <PencilIcon />
-                                    <span>Rename</span>
-                                </ContextMenuItem>
-                                <ContextMenuSeparator />
-                            </>
-                        ) : null}
-                        <ContextMenuItem
-                            disabled={disabled || !canSave}
-                            onClick={() => requestEditorAction(selection, "save")}
-                        >
-                            <SaveIcon />
-                            <span>Save</span>
-                        </ContextMenuItem>
-                        <ContextMenuSeparator />
-                        <ContextMenuItem
-                            variant="destructive"
-                            disabled={disabled || !canDelete}
-                            onClick={() => requestEditorAction(selection, "delete")}
-                        >
-                            <Trash2Icon />
-                            <span>Delete</span>
-                        </ContextMenuItem>
-                        </ContextMenuGroup>
-            </ContextMenuContent>
-        </ContextMenu>
+        <Dropdown trigger={["contextMenu"]} menu={{ items: menuItems, onClick: handleMenuClick }}>{row}</Dropdown>
     );
 }
 
@@ -230,7 +215,7 @@ async function renameRuleFromTree(workspace: Workspace, rule: RuleInput | Shared
         }
         await refreshWorkspace({ kind: "rule", path: nextPath });
     });
-    if (result.ok) toast.add({ title: `Renamed to ${fileName(nextPath)}`, type: "success" });
+    if (result.ok) showSuccess(`Renamed to ${fileName(nextPath)}`);
     return result.ok;
 }
 
@@ -263,7 +248,7 @@ async function persistRuleOrder(workspace: Workspace, rules: readonly RuleInput[
         for (const rule of updates) await window.appApi.workspace.saveRule(rule);
         await refreshWorkspace(selection.kind === "rule" ? selection : undefined);
     });
-    if (result.ok) toast.add({ title: "Rule order updated", type: "success" });
+    if (result.ok) showSuccess("Rule order updated");
     else useAppStore.getState().setWorkspace(workspace);
 }
 
@@ -276,7 +261,7 @@ async function renameLayerOptionFromTree(workspace: Workspace, option: LayerOpti
         const nextPath = await persistLayerOptionRename(option.layer, option.name, nextName);
         await refreshWorkspace({ kind: "layer-option", path: nextPath });
     });
-    if (result.ok) toast.add({ title: `Renamed to ${nextName}.md`, type: "success" });
+    if (result.ok) showSuccess(`Renamed to ${nextName}.md`);
     return result.ok;
 }
 
@@ -290,7 +275,7 @@ async function renameLayerFromTree(workspace: Workspace, from: string, to: strin
         await persistLayerRename(from, nextName);
         await refreshWorkspace({ kind: "layer", name: nextName });
     });
-    if (result.ok) toast.add({ title: `Renamed layer to ${nextName}`, type: "success" });
+    if (result.ok) showSuccess(`Renamed layer to ${nextName}`);
     return result.ok;
 }
 
@@ -319,7 +304,7 @@ async function renameAgentFromTree(workspace: Workspace, path: string, name: str
         }
         await refreshWorkspace({ kind: "agent", path: nextPath });
     });
-    if (result.ok) toast.add({ title: `Renamed to ${fileName(nextPath)}`, type: "success" });
+    if (result.ok) showSuccess(`Renamed to ${fileName(nextPath)}`);
     return result.ok;
 }
 
@@ -337,23 +322,22 @@ interface SectionProps
 function Section({ title, disabled, active, onClick, onNew }: SectionProps)
 {
     return (
-        <div className="mt-3 flex items-center justify-between px-3 text-sm font-semibold text-foreground first:mt-1">
+        <div className="workspace-tree-section" data-active={active || undefined}>
             {onClick ? (
-                <button
-                    type="button"
-                    disabled={disabled}
+                <Button
+                    type="text"
+                    block
+                    disabled={Boolean(disabled)}
                     onClick={onClick}
-                    className={cn("min-w-0 truncate rounded-sm px-1 py-1 text-left disabled:opacity-50", active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50")}
+                    className="workspace-tree-section-button"
                 >
                     {title}
-                </button>
+                </Button>
             ) : (
-                <span>{title}</span>
+                <Typography.Text strong>{title}</Typography.Text>
             )}
             {onNew ? (
-                <Button size="icon-sm" variant="ghost" type="button" disabled={disabled} aria-label="New" onClick={onNew}>
-                    <PlusIcon />
-                </Button>
+                <Button size="small" type="text" disabled={Boolean(disabled)} aria-label="New" icon={<PlusOutlined />} onClick={onNew} />
             ) : null}
         </div>
     );
@@ -376,12 +360,18 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
     const [draggedRulePath, setDraggedRulePath] = useState<string>();
     const [ruleDropTarget, setRuleDropTarget] = useState<RuleDropTarget>();
 
-    if (!workspace) return <p className="p-3 text-muted-foreground">No project open.</p>;
+    if (!workspace) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No project open" />;
     const rootRuleTabs = sortRuleTabs(workspace.rootRules);
+    const copy = TREE_COPY[view];
 
     return (
-        <ScrollArea className="h-full">
-            <div className="py-2 text-sm">
+        <div className="workspace-tree">
+            <div className="workspace-tree-content">
+                <div className="workspace-tree-header">
+                    <Typography.Text className="section-eyebrow">Browse</Typography.Text>
+                    <Typography.Title level={5}>{copy.title}</Typography.Title>
+                    <Typography.Text type="secondary">{copy.description}</Typography.Text>
+                </div>
                 {view === "project" ? (
                     <>
                         <Section title="Config" />
@@ -532,8 +522,8 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                             const selected = workspace.config.layers.find((layer) => layer.name === layerName)?.selected;
                             return (
                                 <div key={layerName}>
-                                    <div className="flex items-center">
-                                        <div className="min-w-0 flex-1">
+                                    <div className="workspace-tree-layer-row">
+                                        <div className="workspace-tree-layer-main">
                                             <TreeButton
                                                 label={layerName}
                                                 active={selection.kind === "layer" && selection.name === layerName}
@@ -546,9 +536,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                             />
                                         </div>
                                         {selection.kind === "layer" && selection.name === layerName ? (
-                                            <Button size="icon-sm" variant="ghost" type="button" disabled={isBusy} className="mr-3" aria-label="New option" onClick={() => setSelection({ kind: "layer-option-new", layer: layerName })}>
-                                                <PlusIcon />
-                                            </Button>
+                                            <Button size="small" type="text" disabled={isBusy} aria-label="New option" icon={<PlusOutlined />} onClick={() => setSelection({ kind: "layer-option-new", layer: layerName })} />
                                         ) : null}
                                     </div>
                                     {(workspace.layerOptions[layerName] ?? []).map((option) => (
@@ -616,7 +604,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                     <>
                         <Section title="Files" />
                         {workspace.generatedFiles.length === 0 ? (
-                            <p className="px-3 py-2 text-muted-foreground">No generated files.</p>
+                            <Typography.Text type="secondary" className="workspace-tree-empty">No generated files.</Typography.Text>
                         ) : workspace.generatedFiles.map((file) => (
                             <TreeButton
                                 key={file.path}
@@ -629,6 +617,6 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                     </>
                 ) : null}
             </div>
-        </ScrollArea>
+        </div>
     );
 }

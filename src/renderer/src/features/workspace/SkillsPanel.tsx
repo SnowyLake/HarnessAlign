@@ -1,45 +1,28 @@
 /**
- * Skills page: one installed list with header actions for discover, update, and import.
+ * Ant Design Skills page for discovery, updates, import, and removal.
  */
 
-import { Fragment, useId, useState, type ReactNode } from "react";
+import {
+    CloudDownloadOutlined,
+    DeleteOutlined,
+    ExportOutlined,
+    FolderAddOutlined,
+    ReloadOutlined,
+    SearchOutlined,
+    SyncOutlined,
+    ThunderboltOutlined,
+    WarningOutlined,
+} from "@ant-design/icons";
 import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, UserSkill } from "@shared/models/Workspace";
-import {
-    ArrowUpCircleIcon,
-    CircleAlertIcon,
-    DownloadIcon,
-    ExternalLinkIcon,
-    FolderInputIcon,
-    RefreshCwIcon,
-    SearchIcon,
-    Trash2Icon,
-} from "lucide-react";
-import { ConfirmDialog } from "@/components/common/ConfirmDialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
-import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemSeparator, ItemTitle } from "@/components/ui/item";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-    Sheet,
-    SheetContent,
-    SheetDescription,
-    SheetFooter,
-    SheetHeader,
-    SheetTitle,
-} from "@/components/ui/sheet";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Avatar, Button, Card, Checkbox, Col, Drawer, Empty, Flex, Input, List, Modal, Row, Select, Space, Statistic, Tabs, Tag, Tooltip, Typography, type TabsProps } from "antd";
+import { useState, type ReactNode } from "react";
 import { refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore } from "@/stores/AppStore";
 
 /** Which list the panel currently shows. */
 type SkillsListView = "installed" | "discover";
 
-/** Origin chip key: all installed, one GitHub repo, local imports, or unknown. */
+/** Origin filter key for installed skills. */
 type OriginFilter = "all" | "local" | "unknown" | `github:${string}/${string}`;
 
 /** Counted origin option shown in the installed-skill filter. */
@@ -50,7 +33,7 @@ interface OriginBucket
     count: number;
 }
 
-/** Return whether any haystack contains the search query. */
+/** Return whether any haystack contains the normalized search query. */
 function matchesQuery(haystacks: readonly string[], query: string): boolean
 {
     const needle = query.trim().toLowerCase();
@@ -58,7 +41,7 @@ function matchesQuery(haystacks: readonly string[], query: string): boolean
     return haystacks.some((item) => item.toLowerCase().includes(needle));
 }
 
-/** Stable filter key for an installed skill origin. */
+/** Return the stable filter key for an installed skill origin. */
 function originFilterKey(origin: SkillOrigin): OriginFilter
 {
     if (origin.kind === "github") return `github:${origin.owner}/${origin.name}`;
@@ -66,7 +49,7 @@ function originFilterKey(origin: SkillOrigin): OriginFilter
     return "unknown";
 }
 
-/** Search haystacks for an installed skill, including GitHub provenance. */
+/** Return searchable fields for an installed skill. */
 function installedHaystacks(skill: ProjectSkill): string[]
 {
     const fields = [skill.id, skill.title, skill.description];
@@ -74,13 +57,13 @@ function installedHaystacks(skill: ProjectSkill): string[]
     return fields;
 }
 
-/** Search haystacks for a discovered remote skill. */
+/** Return searchable fields for a discovered remote skill. */
 function remoteHaystacks(skill: RemoteSkill): string[]
 {
     return [skill.id, skill.title, skill.description, `${skill.owner}/${skill.name}`, skill.sourcePath];
 }
 
-/** Build origin options from registered sources plus installed local / unknown counts. */
+/** Build counted origin filters from registered sources and installed skills. */
 function originBuckets(skillSources: readonly { owner: string; name: string }[], installed: readonly ProjectSkill[]): OriginBucket[]
 {
     const buckets: OriginBucket[] = skillSources.map((source) => ({
@@ -97,86 +80,44 @@ function originBuckets(skillSources: readonly { owner: string; name: string }[],
     return buckets;
 }
 
-/** Return whether an update result is an available replacement. */
+/** Return whether an update result describes an available replacement. */
 function isOutdated(update: SkillUpdate): boolean
 {
     return !update.error && update.currentHash !== update.remoteHash;
 }
 
-/** Icon button with a tooltip label. */
-function IconAction({
-    label,
-    disabled,
-    variant = "ghost",
-    onClick,
-    children,
-}: {
-    label: string;
-    disabled?: boolean;
-    variant?: "ghost" | "outline" | "destructive";
-    onClick?: () => void;
-    children: ReactNode;
-})
+/** Render one official icon button with a tooltip label. */
+function IconAction({ label, disabled, danger, onClick, icon }: { label: string; disabled?: boolean; danger?: boolean; onClick?: () => void; icon: ReactNode })
 {
     return (
-        <Tooltip>
-            <TooltipTrigger
-                render={(
-                    <Button
-                        type="button"
-                        size="icon-sm"
-                        variant={variant}
-                        disabled={disabled}
-                        aria-label={label}
-                        onClick={onClick}
-                    />
-                )}
-            >
-                {children}
-            </TooltipTrigger>
-            <TooltipContent>{label}</TooltipContent>
+        <Tooltip title={label}>
+            <Button type="text" danger={Boolean(danger)} disabled={Boolean(disabled)} aria-label={label} icon={icon} onClick={() => onClick?.()} />
         </Tooltip>
     );
 }
 
-/** GitHub repo link or local provenance badge shown beside a skill id. */
+/** Render GitHub provenance or a local origin tag. */
 function OriginMeta({ origin }: { origin: SkillOrigin })
 {
     if (origin.kind === "github")
     {
         const repo = `${origin.owner}/${origin.name}`;
         return (
-            <button
-                type="button"
-                className="min-w-0 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                aria-label={`Open ${repo} on GitHub`}
-                onClick={() =>
-                {
-                    void window.appApi.app.openExternal(`https://github.com/${origin.owner}/${origin.name}`).catch(() => undefined);
-                }}
+            <Button
+                type="link"
+                size="small"
+                icon={<ExportOutlined />}
+                onClick={() => void window.appApi.app.openExternal(`https://github.com/${repo}`).catch(() => undefined)}
             >
-                <Badge variant="outline" className="max-w-full">
-                    <span className="truncate">{repo}</span>
-                    <ExternalLinkIcon />
-                </Badge>
-            </button>
+                {repo}
+            </Button>
         );
     }
-    return (
-        <Badge variant="secondary">
-            {origin.kind === "local" ? "Local" : "Unknown"}
-        </Badge>
-    );
+    return <Tag>{origin.kind === "local" ? "Local" : "Unknown"}</Tag>;
 }
 
-/** One compact installed-skill row with provenance, update, and remove actions. */
-function InstalledSkillRow({
-    skill,
-    update,
-    isBusy,
-    onUpdate,
-    onRemove,
-}: {
+/** Render one installed skill row with update and removal actions. */
+function InstalledSkillRow({ skill, update, isBusy, onUpdate, onRemove }: {
     skill: ProjectSkill;
     update: SkillUpdate | undefined;
     isBusy: boolean;
@@ -184,45 +125,30 @@ function InstalledSkillRow({
     onRemove: (id: string) => void;
 })
 {
+    const actions: ReactNode[] = [];
+    if (update?.error)
+    {
+        actions.push(<IconAction key="error" label={update.error} danger icon={<WarningOutlined />} />);
+    }
+    else if (update && isOutdated(update))
+    {
+        actions.push(<IconAction key="update" label="Apply update" disabled={isBusy} onClick={() => onUpdate(skill.id)} icon={<SyncOutlined />} />);
+    }
+    actions.push(<IconAction key="remove" label="Remove" danger disabled={isBusy} onClick={() => onRemove(skill.id)} icon={<DeleteOutlined />} />);
+
     return (
-        <Item>
-            <ItemContent>
-                <ItemTitle>
-                    <span className="shrink-0">{skill.id}</span>
-                    <OriginMeta origin={skill.origin} />
-                </ItemTitle>
-                {skill.description ? (
-                    <ItemDescription title={skill.description}>{skill.description}</ItemDescription>
-                ) : null}
-            </ItemContent>
-            <ItemActions>
-                {update?.error ? (
-                    <IconAction label={update.error} variant="destructive">
-                        <CircleAlertIcon data-icon="inline-start" />
-                    </IconAction>
-                ) : update && isOutdated(update) ? (
-                    <IconAction label="Apply update" disabled={isBusy} variant="outline" onClick={() => onUpdate(skill.id)}>
-                        <ArrowUpCircleIcon data-icon="inline-start" />
-                    </IconAction>
-                ) : null}
-                <IconAction label="Remove" disabled={isBusy} variant="destructive" onClick={() => onRemove(skill.id)}>
-                    <Trash2Icon data-icon="inline-start" />
-                </IconAction>
-            </ItemActions>
-        </Item>
+        <List.Item actions={actions}>
+            <List.Item.Meta
+                avatar={<Avatar shape="square" icon={<ThunderboltOutlined />} />}
+                title={<Space size={8}><Typography.Text strong>{skill.id}</Typography.Text><OriginMeta origin={skill.origin} /></Space>}
+                description={skill.description || undefined}
+            />
+        </List.Item>
     );
 }
 
-/** Checkbox row used in the discover list and import sheet. */
-function SelectableSkillRow({
-    id,
-    title,
-    description,
-    detail,
-    checked,
-    disabled,
-    onToggle,
-}: {
+/** Render one selectable skill row for discover and import pickers. */
+function SelectableSkillRow({ id, title, description, detail, checked, disabled, onToggle }: {
     id: string;
     title: string;
     description: string;
@@ -232,29 +158,19 @@ function SelectableSkillRow({
     onToggle: (id: string) => void;
 })
 {
-    const inputId = useId();
     return (
-        <Item>
-            <Field orientation="horizontal" data-disabled={disabled || undefined}>
-                <Checkbox
-                    id={inputId}
-                    disabled={disabled}
-                    checked={checked}
-                    onCheckedChange={() => onToggle(id)}
-                />
-                <FieldContent>
-                    <ItemTitle>
-                        <FieldLabel htmlFor={inputId}>{title || id}</FieldLabel>
-                        {detail}
-                    </ItemTitle>
-                    {description ? <ItemDescription title={description}>{description}</ItemDescription> : null}
-                </FieldContent>
-            </Field>
-        </Item>
+        <List.Item>
+            <Checkbox checked={checked} disabled={Boolean(disabled)} onChange={() => onToggle(id)}>
+                <Space direction="vertical" size={2}>
+                    <Space size={8}><Typography.Text strong>{title || id}</Typography.Text>{detail}</Space>
+                    {description ? <Typography.Text type="secondary">{description}</Typography.Text> : null}
+                </Space>
+            </Checkbox>
+        </List.Item>
     );
 }
 
-/** Skills management page with a unified installed list and overlay pickers. */
+/** Render the complete Ant Design Skills management page. */
 export function SkillsPanel()
 {
     const workspace = useAppStore((state) => state.workspace);
@@ -267,22 +183,12 @@ export function SkillsPanel()
     const [userSkills, setUserSkills] = useState<UserSkill[]>([]);
     const [selectedRemote, setSelectedRemote] = useState<string[]>([]);
     const [selectedImport, setSelectedImport] = useState<string[]>([]);
-    const [importOpen, setImportOpen] = useState(false);
-    const [overwriteOpen, setOverwriteOpen] = useState(false);
+    const [isImportOpen, setIsImportOpen] = useState(false);
+    const [isOverwriteOpen, setIsOverwriteOpen] = useState(false);
     const [removeId, setRemoveId] = useState<string>();
     const [filter, setFilter] = useState("");
 
-    if (!workspace)
-    {
-        return (
-            <Empty>
-                <EmptyHeader>
-                    <EmptyTitle>No workspace</EmptyTitle>
-                    <EmptyDescription>The user workspace is not loaded yet.</EmptyDescription>
-                </EmptyHeader>
-            </Empty>
-        );
-    }
+    if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
 
     const installed = workspace.skills;
     const buckets = originBuckets(workspace.config.skillSources, installed);
@@ -296,19 +202,19 @@ export function SkillsPanel()
         ...buckets.map((bucket) => ({ label: `${bucket.label} (${bucket.count})`, value: bucket.key })),
     ];
 
-    /** Toggle a remote skill id in the install selection. */
+    /** Toggle a remote skill id in the installation selection. */
     const toggleRemote = (id: string): void =>
     {
-        setSelectedRemote((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+        setSelectedRemote((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
     };
 
     /** Toggle a user skill id in the import selection. */
     const toggleImport = (id: string): void =>
     {
-        setSelectedImport((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+        setSelectedImport((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
     };
 
-    /** Scan registered GitHub sources and show the discover list. */
+    /** Discover skills from every registered GitHub source. */
     const handleDiscover = (): void =>
     {
         void runCommand(async () =>
@@ -347,7 +253,7 @@ export function SkillsPanel()
         });
     };
 
-    /** Apply selected or single-skill updates and refresh the workspace. */
+    /** Apply selected updates and refresh the workspace. */
     const handleApplyUpdates = (ids: string[]): void =>
     {
         if (ids.length === 0) return;
@@ -360,242 +266,187 @@ export function SkillsPanel()
         });
     };
 
-    /** Open the user-skills picker after listing ~/.agents/skills. */
+    /** Open the user-skill import drawer after loading its contents. */
     const handleImport = (): void =>
     {
         void runCommand(async () =>
         {
-            const skills = await window.appApi.workspace.listUserSkills();
-            setUserSkills(skills);
+            setUserSkills(await window.appApi.workspace.listUserSkills());
             setSelectedImport([]);
-            setImportOpen(true);
+            setIsImportOpen(true);
         });
     };
 
-    /** Copy selected user skills, asking before overwriting project ids. */
+    /** Import selected user skills and optionally overwrite matching ids. */
     const handleImportConfirm = (overwrite: boolean): void =>
     {
         void runCommand(async () =>
         {
             const report = await window.appApi.workspace.importUserSkills(selectedImport, overwrite);
             setOutput(report, "success", "Import completed");
-            setImportOpen(false);
-            setOverwriteOpen(false);
+            setIsImportOpen(false);
+            setIsOverwriteOpen(false);
             await refreshWorkspace();
         });
     };
 
-    return (
-        <Tabs
-            className="mx-auto w-full max-w-6xl gap-4 pb-4"
-            value={listView}
-            onValueChange={(value) =>
-            {
-                const next = value as SkillsListView;
-                setListView(next);
-                if (next === "installed") setOriginFilter("all");
-            }}
-        >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-                <TabsList variant="line" aria-label="Skills view">
-                    <TabsTrigger value="installed">
-                        Installed <Badge variant="secondary">{installed.length}</Badge>
-                    </TabsTrigger>
-                    {listView === "discover" || discovered.length > 0 ? (
-                        <TabsTrigger value="discover">
-                            Discover <Badge variant="secondary">{discovered.length}</Badge>
-                        </TabsTrigger>
-                    ) : null}
-                </TabsList>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                    <Button type="button" variant="outline" disabled={isBusy} onClick={handleCheckUpdates}>
-                        <RefreshCwIcon data-icon="inline-start" />
-                        Check updates
-                    </Button>
-                    {outdated.length > 0 ? (
-                        <Button type="button" disabled={isBusy} onClick={() => handleApplyUpdates(outdated.map((item) => item.id))}>
-                            Apply {outdated.length}
-                        </Button>
-                    ) : null}
-                    <Button type="button" variant="outline" disabled={isBusy} onClick={handleImport}>
-                        <FolderInputIcon data-icon="inline-start" />
-                        Import
-                    </Button>
-                    <Button
-                        type="button"
-                        variant="outline"
-                        disabled={isBusy || workspace.config.skillSources.length === 0}
-                        title={workspace.config.skillSources.length === 0 ? "Register a GitHub source on the Home page" : undefined}
-                        onClick={handleDiscover}
-                    >
-                        <SearchIcon data-icon="inline-start" />
-                        Discover
-                    </Button>
-                    {listView === "discover" ? (
-                        <Button type="button" disabled={isBusy || selectedRemote.length === 0} onClick={handleDownload}>
-                            <DownloadIcon data-icon="inline-start" />
-                            Download
-                        </Button>
-                    ) : null}
-                </div>
-            </div>
+    const installedContent = filteredInstalled.length === 0
+        ? <Empty description={installed.length === 0 ? "No installed skills yet. Use Discover or Import." : "No matching skills."} />
+        : (
+            <List
+                dataSource={filteredInstalled}
+                renderItem={(skill) => (
+                    <InstalledSkillRow
+                        skill={skill}
+                        update={updateById.get(skill.id)}
+                        isBusy={isBusy}
+                        onUpdate={(id) => handleApplyUpdates([id])}
+                        onRemove={setRemoveId}
+                    />
+                )}
+            />
+        );
+    const discoverContent = filteredDiscovered.length === 0
+        ? <Empty description={discovered.length === 0 ? "No skills found in registered sources." : "No matching discovered skills."} />
+        : (
+            <List
+                dataSource={filteredDiscovered}
+                renderItem={(skill) => (
+                    <SelectableSkillRow
+                        id={skill.id}
+                        title={skill.id}
+                        description={skill.description}
+                        disabled={isBusy || skill.conflict}
+                        checked={selectedRemote.includes(skill.id)}
+                        onToggle={toggleRemote}
+                        detail={skill.conflict
+                            ? <Tag color="error">Conflict</Tag>
+                            : <Tag>{skill.owner}/{skill.name}@{skill.branch}</Tag>}
+                    />
+                )}
+            />
+        );
+    const tabItems: TabsProps["items"] = [
+        { key: "installed", label: <Space>Installed<Tag>{installed.length}</Tag></Space>, children: installedContent },
+        ...(listView === "discover" || discovered.length > 0
+            ? [{ key: "discover", label: <Space>Discover<Tag>{discovered.length}</Tag></Space>, children: discoverContent }]
+            : []),
+    ];
 
-            <div className="flex flex-wrap items-center gap-3">
-                <InputGroup className="min-w-64 flex-1">
-                    <InputGroupInput
-                        aria-label="Search skills"
+    return (
+        <div className="skills-page">
+            <Row gutter={[16, 16]}>
+                <Col xs={24} md={8}>
+                    <Card size="small" className="skills-stat-card"><Statistic title="Installed" value={installed.length} prefix={<ThunderboltOutlined />} /></Card>
+                </Col>
+                <Col xs={24} md={8}>
+                    <Card size="small" className="skills-stat-card"><Statistic title="Registered sources" value={workspace.config.skillSources.length} prefix={<SearchOutlined />} /></Card>
+                </Col>
+                <Col xs={24} md={8}>
+                    <Card size="small" className="skills-stat-card"><Statistic title="Updates available" value={outdated.length} prefix={<SyncOutlined />} {...(outdated.length > 0 ? { valueStyle: { color: "#1677ff" } } : {})} /></Card>
+                </Col>
+            </Row>
+            <Card
+                className="skills-catalog-card"
+                title={(
+                    <Space direction="vertical" size={0}>
+                        <Typography.Text strong>Skill library</Typography.Text>
+                        <Typography.Text type="secondary" className="card-subtitle">Manage capabilities available to this project.</Typography.Text>
+                    </Space>
+                )}
+                extra={(
+                    <Space wrap>
+                        <Button icon={<ReloadOutlined />} disabled={isBusy} onClick={handleCheckUpdates}>Check updates</Button>
+                        {outdated.length > 0 ? <Button type="primary" disabled={isBusy} onClick={() => handleApplyUpdates(outdated.map((item) => item.id))}>Apply {outdated.length}</Button> : null}
+                        <Button icon={<FolderAddOutlined />} disabled={isBusy} onClick={handleImport}>Import</Button>
+                        <Button
+                            icon={<SearchOutlined />}
+                            disabled={isBusy || workspace.config.skillSources.length === 0}
+                            title={workspace.config.skillSources.length === 0 ? "Register a GitHub source on the Home page" : undefined}
+                            onClick={handleDiscover}
+                        >
+                            Discover
+                        </Button>
+                        {listView === "discover" ? <Button type="primary" icon={<CloudDownloadOutlined />} disabled={isBusy || selectedRemote.length === 0} onClick={handleDownload}>Install selected</Button> : null}
+                    </Space>
+                )}
+            >
+                <Flex gap={12} wrap className="skills-filter-bar">
+                    <Input
+                        allowClear
+                        prefix={<SearchOutlined />}
                         value={filter}
                         onChange={(event) => setFilter(event.target.value)}
-                        placeholder={listView === "installed"
-                            ? "Search name, description, or repository..."
-                            : "Search discovered skills..."}
+                        placeholder={listView === "installed" ? "Search name, description, or repository..." : "Search discovered skills..."}
                         disabled={isBusy}
                     />
-                    <InputGroupAddon align="inline-start"><SearchIcon /></InputGroupAddon>
-                </InputGroup>
-                {listView === "installed" && buckets.length > 0 ? (
-                    <Select
-                        items={originItems}
-                        value={originFilter}
-                        onValueChange={(value) =>
+                    {listView === "installed" && buckets.length > 0
+                        ? <Select value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
+                        : null}
+                </Flex>
+                <Tabs activeKey={listView} items={tabItems} onChange={(key) =>
+                {
+                    const next = key as SkillsListView;
+                    setListView(next);
+                    if (next === "installed") setOriginFilter("all");
+                }} />
+            </Card>
+
+            <Drawer
+                open={isImportOpen}
+                title="Import user skills"
+                width={520}
+                onClose={() => setIsImportOpen(false)}
+                extra={(
+                    <Button
+                        type="primary"
+                        disabled={isBusy || selectedImport.length === 0}
+                        onClick={() =>
                         {
-                            if (value !== null) setOriginFilter(value);
+                            const overlap = selectedImport.filter((id) => installed.some((skill) => skill.id.toLowerCase() === id.toLowerCase()));
+                            if (overlap.length > 0) setIsOverwriteOpen(true);
+                            else handleImportConfirm(false);
                         }}
                     >
-                        <SelectTrigger aria-label="Filter skills by source" className="w-56 max-w-full"><SelectValue /></SelectTrigger>
-                        <SelectContent alignItemWithTrigger={false} align="end">
-                            <SelectGroup>
-                                {originItems.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
-                            </SelectGroup>
-                        </SelectContent>
-                    </Select>
-                ) : null}
-            </div>
-
-            <TabsContent value="installed">
-                {filteredInstalled.length === 0 ? (
-                    <Empty className="py-8"><EmptyHeader><EmptyTitle>No skills to show</EmptyTitle><EmptyDescription>
-                        {installed.length === 0
-                            ? workspace.config.skillSources.length === 0
-                                ? "No installed skills yet. Register a GitHub source on the Home page, then Discover, or Import local skills."
-                                : "No installed skills yet. Use Discover or Import."
-                            : "No matching skills."}
-                    </EmptyDescription></EmptyHeader></Empty>
-                ) : (
-                    <ItemGroup>
-                        {filteredInstalled.map((skill, index) => (
-                            <Fragment key={skill.id}>
-                                <InstalledSkillRow
-                                    skill={skill}
-                                    update={updateById.get(skill.id)}
-                                    isBusy={isBusy}
-                                    onUpdate={(id) => handleApplyUpdates([id])}
-                                    onRemove={setRemoveId}
-                                />
-                                {index < filteredInstalled.length - 1 ? <ItemSeparator /> : null}
-                            </Fragment>
-                        ))}
-                    </ItemGroup>
+                        Import
+                    </Button>
                 )}
-            </TabsContent>
-
-            <TabsContent value="discover">
-                {filteredDiscovered.length === 0 ? (
-                    <Empty className="py-8"><EmptyHeader><EmptyTitle>No skills to show</EmptyTitle><EmptyDescription>
-                        {discovered.length === 0 ? "No skills found in registered sources." : "No matching discovered skills."}
-                    </EmptyDescription></EmptyHeader></Empty>
-                ) : (
-                    <ItemGroup>
-                        {filteredDiscovered.map((skill, index) => (
-                            <Fragment key={`${skill.owner}/${skill.name}/${skill.sourcePath}/${skill.id}`}>
-                                <SelectableSkillRow
-                                    id={skill.id}
-                                    title={skill.id}
-                                    description={skill.description}
-                                    disabled={isBusy || skill.conflict}
-                                    checked={selectedRemote.includes(skill.id)}
-                                    onToggle={toggleRemote}
-                                    detail={skill.conflict ? (
-                                        <Badge variant="destructive">Conflict</Badge>
-                                    ) : (
-                                        <Badge variant="outline" className="max-w-full truncate">{skill.owner}/{skill.name}@{skill.branch}</Badge>
-                                    )}
-                                />
-                                {index < filteredDiscovered.length - 1 ? <ItemSeparator /> : null}
-                            </Fragment>
-                        ))}
-                    </ItemGroup>
-                )}
-            </TabsContent>
-
-            <Sheet open={importOpen} onOpenChange={setImportOpen}>
-                <SheetContent side="right" className="sm:max-w-lg">
-                    <SheetHeader>
-                        <SheetTitle>Import user skills</SheetTitle>
-                        <SheetDescription>Copy skills from ~/.agents/skills into this project.</SheetDescription>
-                    </SheetHeader>
-                    <div className="min-h-0 flex-1 overflow-auto">
-                        {userSkills.length === 0 ? (
-                            <Empty><EmptyHeader><EmptyTitle>No user skills</EmptyTitle><EmptyDescription>No skills were found in ~/.agents/skills.</EmptyDescription></EmptyHeader></Empty>
-                        ) : (
-                            <ItemGroup>
-                                {userSkills.map((skill, index) => (
-                                    <Fragment key={skill.id}>
-                                        <SelectableSkillRow
-                                            id={skill.id}
-                                            title={skill.id}
-                                            description={skill.description || skill.title}
-                                            checked={selectedImport.includes(skill.id)}
-                                            onToggle={toggleImport}
-                                        />
-                                        {index < userSkills.length - 1 ? <ItemSeparator /> : null}
-                                    </Fragment>
-                                ))}
-                            </ItemGroup>
+            >
+                <Typography.Paragraph type="secondary">Copy skills from ~/.agents/skills into this project.</Typography.Paragraph>
+                {userSkills.length === 0 ? <Empty description="No skills were found in ~/.agents/skills" /> : (
+                    <List
+                        dataSource={userSkills}
+                        renderItem={(skill) => (
+                            <SelectableSkillRow
+                                id={skill.id}
+                                title={skill.id}
+                                description={skill.description || skill.title}
+                                checked={selectedImport.includes(skill.id)}
+                                onToggle={toggleImport}
+                            />
                         )}
-                    </div>
-                    <SheetFooter>
-                        <Button
-                            type="button"
-                            disabled={isBusy || selectedImport.length === 0}
-                            onClick={() =>
-                            {
-                                const overlap = selectedImport.filter((id) => installed.some((skill) => skill.id.toLowerCase() === id.toLowerCase()));
-                                if (overlap.length > 0)
-                                {
-                                    setOverwriteOpen(true);
-                                    return;
-                                }
-                                handleImportConfirm(false);
-                            }}
-                        >
-                            Import
-                        </Button>
-                    </SheetFooter>
-                </SheetContent>
-            </Sheet>
+                    />
+                )}
+            </Drawer>
 
-            <ConfirmDialog
-                open={overwriteOpen}
-                onOpenChange={setOverwriteOpen}
+            <Modal
+                open={isOverwriteOpen}
                 title="Overwrite existing skills?"
-                description="One or more selected skills already exist in this project. Overwrite them?"
-                confirmLabel="Overwrite"
-                confirmDisabled={isBusy}
-                onConfirm={() => handleImportConfirm(true)}
-            />
-
-            <ConfirmDialog
+                okText="Overwrite"
+                confirmLoading={isBusy}
+                onCancel={() => setIsOverwriteOpen(false)}
+                onOk={() => handleImportConfirm(true)}
+            >
+                One or more selected skills already exist in this project.
+            </Modal>
+            <Modal
                 open={removeId !== undefined}
-                onOpenChange={(open) =>
-                {
-                    if (!open) setRemoveId(undefined);
-                }}
                 title="Remove skill?"
-                description={`Remove ${removeId ?? ""} from this project?`}
-                confirmLabel="Remove"
-                confirmDisabled={isBusy}
-                onConfirm={() =>
+                okText="Remove"
+                okButtonProps={{ danger: true }}
+                confirmLoading={isBusy}
+                onCancel={() => setRemoveId(undefined)}
+                onOk={() =>
                 {
                     if (!removeId) return;
                     void runMutation(async () =>
@@ -605,7 +456,9 @@ export function SkillsPanel()
                         await refreshWorkspace();
                     });
                 }}
-            />
-        </Tabs>
+            >
+                Remove {removeId ?? ""} from this project?
+            </Modal>
+        </div>
     );
 }

@@ -32,7 +32,7 @@
 ## 硬约束
 
 - 支持 Node 24 与 npm 11. 当前 `engines` 范围是 Node `>=24 <25`, npm `>=11 <12`. 只使用 npm, 不引入其他包管理器.
-- CLI runtime 仅使用 `yaml` 和 `smol-toml`. React, Tailwind, shadcn/Base UI, electron-vite, Zod 和 `fflate` 不进入 CLI 运行时.
+- CLI runtime 仅使用 `yaml` 和 `smol-toml`. React, Ant Design, CodeMirror, electron-vite, Zod 和 `fflate` 不进入 CLI 运行时.
 - `fflate` 只允许 Electron Main 导入, 并且必须加入 `electron.vite.config.ts` 的 main `exclude`.
 - `src/shared/` 只保存可同时被 Main, Preload 和 Renderer 导入的契约. 不得导入 Electron, Node 副作用, DOM 或 React.
 - Renderer 只调用 `window.appApi`. 禁止向 Renderer 暴露通用 `ipcRenderer`.
@@ -82,7 +82,7 @@
   - `Halign.ts` — ESM CLI 入口, 并对测试 re-export 公开 API
 - `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, `SettingsService`, `WorkspaceService`, `SkillRemoteService`.
 - `src/preload/` 只把 typed `window.appApi` 暴露给 Renderer.
-- `src/renderer/` 是 React UI. `components/ui` 是通用 primitive, `features/` 保存业务界面, `stores/AppStore.ts` 只保存 UI 状态. `showcase` 视图仅开发模式可见.
+- `src/renderer/` 是 React UI. 标准界面控件直接使用 Ant Design 官方组件, `components/common/` 只保存 Ant Design 没有对应物的共享领域控件与反馈桥接, `features/` 保存业务界面, `stores/AppStore.ts` 只保存 UI 状态. `showcase` 视图仅开发模式可见.
 - `src/shared/` 保存 IPC 契约, DTO 和 Zod schema. 引擎类型与 Shared DTO 需要并行维护, Shared 不得 import 引擎.
 - `tests/Halign.test.ts` 是唯一测试源文件, 使用 Node 内置 `node:test` 覆盖解析, 渲染, 生成, 检查, 部署, Skills, 源文件写回和路径安全.
 - `dist/` 是引擎 `tsc` 输出. CLI 入口是 `dist/src/engine/Halign.js`.
