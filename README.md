@@ -13,7 +13,6 @@
 - [Skills](#skills)
 - [部署结果](#部署结果)
 - [安全说明](#安全说明)
-- [开发技术栈](#开发技术栈)
 - [从源码构建](#从源码构建)
 
 ## 这是什么
@@ -98,7 +97,7 @@ halign setup --layer soul=kei
 
 ## 桌面应用
 
-桌面 Renderer 使用 Ant Design 官方主题, 组件和图标, 并为 Markdown 与 JSON 编辑保留 CodeMirror. 界面采用顶部工作区命令栏, 横向模块导航, Home 数据概览和业务页主从编辑布局; 蓝色仅用于关键动作, 选中状态和反馈.
+桌面应用采用简洁一致的现代界面, 使用顶部工作区命令栏, 横向模块导航, Home 数据概览和业务页主从编辑布局. 蓝色仅用于关键动作, 选中状态和反馈; Markdown 与 JSON 编辑器适合处理长文本和结构化内容.
 
 窗口可以:
 
@@ -258,17 +257,6 @@ Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正�
 - `setup` 不创建缺失的 Harness 根目录, 只更新配置中声明且已经存在的目标.
 - 路径逃逸, symlink, junction 和其他 reparse point 会被拒绝.
 - 配置或目标验证失败时, CLI 停止后续写入并返回非零退出码. 桌面应用把同一错误显示在日志区, 不写文件.
-
-## 开发技术栈
-
-- CLI 引擎使用 Node.js 24, TypeScript ESM, `yaml` 和 `smol-toml`.
-- 桌面壳使用 Electron 43 与 electron-vite 4, Renderer 使用 React 19.
-- Renderer 使用 Ant Design 6, `@ant-design/icons` 和官方 Design Token 构建主题与标准控件, CodeMirror 负责 Markdown 和 JSON 源码编辑, Zustand 保存 Renderer UI 状态.
-- Main / Preload / Renderer 通过 `window.appApi` 和 `src/shared/` 中的 Zod 契约通信, Renderer 不直接访问 Node 或 Electron API.
-
-项目不再使用 shadcn/ui. 标准界面统一使用 Ant Design 官方组件; 只有 Ant Design 没有对应能力的领域控件才放入 `src/renderer/src/components/common/`.
-
-仓库级 Ant Design Agent Skill 位于 `.agents/skills/antd/SKILL.md`. 它指导开发 Agent 使用官方 `@ant-design/cli` 查询当前版本的组件 API, Demo, Design Token 和语义结构, 并在 UI 修改后运行 `antd lint`. 该 Skill 只服务本仓库开发, 不属于用户的 `.halign/skills/`, 也不会被 `halign setup` 部署.
 
 ## 从源码构建
 
