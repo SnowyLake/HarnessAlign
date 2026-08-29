@@ -31,9 +31,7 @@ export interface SourceEditorProps
     defaultValue?: string;
     language?: SourceLanguage;
     readOnly?: boolean;
-    autoHeight?: boolean;
     resizeKey?: unknown;
-    className?: string;
     "aria-label"?: string;
 }
 
@@ -43,14 +41,14 @@ type SourceEditorStyle = CSSProperties & Record<`--source-${string}`, string>;
 /** CodeMirror chrome that reads the active Ant Design token variables. */
 const sourceEditorTheme = EditorView.theme({
     "&": {
-        height: "100%",
+        height: "auto",
         backgroundColor: "var(--source-bg)",
         color: "var(--source-text)",
         fontSize: "var(--source-font-size)",
         fontFamily: "var(--source-font-family)",
     },
     ".cm-scroller": {
-        overflow: "auto",
+        overflow: "visible",
         fontFamily: "inherit",
         lineHeight: "1.55",
     },
@@ -136,9 +134,7 @@ export function SourceEditor({
     defaultValue = "",
     language = "plain",
     readOnly = false,
-    autoHeight = false,
     resizeKey,
-    className,
     "aria-label": ariaLabel,
 }: SourceEditorProps)
 {
@@ -183,7 +179,6 @@ export function SourceEditor({
                     languageExtension(language),
                     syntaxHighlighting(sourceHighlightStyle),
                     sourceEditorTheme,
-                    autoHeight ? EditorView.theme({ "&": { height: "auto" }, ".cm-scroller": { overflow: "visible" } }) : [],
                     EditorState.readOnly.of(readOnly),
                     EditorView.editable.of(!readOnly),
                     EditorView.contentAttributes.of(ariaLabel ? { "aria-label": ariaLabel } : {}),
@@ -210,9 +205,9 @@ export function SourceEditor({
     }, [resizeKey]);
 
     return (
-        <div className={["source-editor", autoHeight ? "source-editor-auto" : "", className ?? ""].filter(Boolean).join(" ")} style={style}>
+        <div className="source-editor" style={style}>
             {name !== undefined ? <input ref={inputRef} type="hidden" name={name} defaultValue={defaultValue} /> : null}
-            <div ref={hostRef} className={autoHeight ? undefined : "source-editor-host"} />
+            <div ref={hostRef} />
         </div>
     );
 }

@@ -116,12 +116,12 @@ async function parseFrontmatter(root: string, path: string): Promise<[Record<str
     return [metadata, body];
 }
 
-/** Require a non-empty unique string array. */
+/** Require a unique string array. */
 function stringArray(value: unknown, path: string, field: string): string[]
 {
-    if (!Array.isArray(value) || value.length === 0 || !value.every((item) => typeof item === "string" && item.length > 0))
+    if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item.length > 0))
     {
-        throw new HalignError(`${path}: ${field} must be a non-empty string array, got ${valueText(value)}`);
+        throw new HalignError(`${path}: ${field} must be a string array, got ${valueText(value)}`);
     }
     if (new Set(value).size !== value.length)
     {
@@ -397,7 +397,7 @@ export async function loadRules(root: string, harnesses: HarnessConfig[]): Promi
         let targets: Harness[];
         if (!hasOwn(metadata, "targets"))
         {
-            targets = harnesses.map((harness) => harness.name);
+            targets = [];
         }
         else
         {
@@ -439,7 +439,7 @@ async function parseLayerSource(root: string, path: string): Promise<[Record<str
     return [metadata, text.slice(match[0].length)];
 }
 
-/** Load one layer directory and validate every direct option file. */
+/** Load one layer directory and validate every direct option file, allowing an empty catalog layer. */
 async function loadLayerDirectory(root: string, directory: string, layer: string, selected: string | undefined, harnesses: HarnessConfig[]): Promise<LayerOption[]>
 {
     await ensureRegularSource(root, directory);
@@ -480,7 +480,7 @@ async function loadLayerDirectory(root: string, directory: string, layer: string
         if (unknown.length > 0) throw new HalignError(`${path}: unknown layer field ${valueText(firstSorted(unknown))}`);
         const targets = hasOwn(metadata, "targets")
             ? stringArray(metadata.targets, path, "targets")
-            : harnesses.map((harness) => harness.name);
+            : [];
         const configured = new Set(harnesses.map((harness) => harness.name));
         const invalid = targets.find((target) => !configured.has(target));
         if (invalid !== undefined)
@@ -489,7 +489,6 @@ async function loadLayerDirectory(root: string, directory: string, layer: string
         }
         options.push({ path, layer, name, targets, body: body ? normalizedBody(body) : "" });
     }
-    if (options.length === 0) throw new HalignError(`${display(root, directory)}: layer must contain at least one Markdown option`);
     if (selected !== undefined && !options.some((option) => option.name === selected))
     {
         throw new HalignError(`.halign/config.json: layer ${valueText(layer)} selected option does not exist, got ${valueText(selected)}`);

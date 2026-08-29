@@ -1,11 +1,11 @@
 /**
- * Settings IPC handlers. Persist through SettingsService and push changes to the renderer.
+ * Settings IPC handlers. Persist through the settings service and push changes to the renderer.
  */
 
 import { ipcMain } from "electron";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import type { AppSettings } from "../../shared/models/AppSettings.js";
-import { settingsService } from "../services/SettingsService.js";
+import { getSettings, updateSettings } from "../services/SettingsService.js";
 import { assertTrusted, runIpc } from "../utils/Ipc.js";
 import { getMainWindow } from "../windows/MainWindow.js";
 
@@ -22,13 +22,13 @@ export function registerSettingsHandlers(): void
     ipcMain.handle(IPC_CHANNELS.settingsGet, (event) =>
     {
         assertTrusted(event);
-        return runIpc(() => settingsService.get());
+        return runIpc(getSettings);
     });
 
     ipcMain.handle(IPC_CHANNELS.settingsUpdate, (event, patch: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        const settings = await settingsService.update(patch);
+        const settings = await updateSettings(patch);
         emitChanged(settings);
         return settings;
     }));

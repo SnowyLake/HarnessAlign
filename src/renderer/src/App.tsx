@@ -12,7 +12,7 @@ import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
 import { ShowcasePage } from "@/features/showcase/ShowcasePage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
 import { refreshWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
-import { useAppStore, visibleView, type WorkspaceView } from "@/stores/AppStore";
+import { useAppStore, type WorkspaceView } from "@/stores/AppStore";
 
 /** Root React tree for the desktop shell. */
 export function App()
@@ -20,7 +20,6 @@ export function App()
     const view = useAppStore((state) => state.view);
     const themeMode = useAppStore((state) => state.theme);
     const [prefersDark, setPrefersDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
-    const effectiveView = visibleView(view);
     const isDark = themeMode === "dark" || (themeMode === "system" && prefersDark);
 
     useEffect(() =>
@@ -32,7 +31,6 @@ export function App()
             applyTheme(settings.theme);
             const loaded = await window.appApi.workspace.load();
             useAppStore.getState().setWorkspace(loaded);
-            useAppStore.getState().setSelection({ kind: "config" });
             useAppStore.getState().setOutput(`Loaded ${loaded.root}\\.halign`, "success", "Workspace loaded");
         })().catch((error: unknown) =>
         {
@@ -121,23 +119,29 @@ export function App()
     };
 
     /** Render the active feature page. */
-    const page = effectiveView === "settings"
+    const page = view === "settings"
         ? <SettingsPage />
-        : import.meta.env.DEV && effectiveView === "showcase"
+        : import.meta.env.DEV && view === "showcase"
             ? <ShowcasePage />
-            : <WorkspacePage view={effectiveView as WorkspaceView} />;
+            : <WorkspacePage view={view as WorkspaceView} />;
 
     return (
         <ConfigProvider
             componentSize="middle"
             theme={{
+                cssVar: { key: "harness-align" },
                 algorithm: isDark ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
                 token: {
-                    colorPrimary: "#1677ff",
-                    colorInfo: "#1677ff",
+                    colorPrimary: isDark ? "#4096ff" : "#1677ff",
+                    colorInfo: isDark ? "#4096ff" : "#1677ff",
                     colorBgLayout: isDark ? "#0d0f12" : "#f4f6f8",
                     colorBgContainer: isDark ? "#17191d" : "#ffffff",
+                    colorText: isDark ? "#f2f3f5" : "#1f2329",
+                    colorTextSecondary: isDark ? "#a6aab2" : "#646a73",
+                    colorBorder: isDark ? "#3a3e46" : "#d9dce1",
                     colorBorderSecondary: isDark ? "#2b2e34" : "#e7e9ec",
+                    controlItemBgHover: isDark ? "#202329" : "#f5f7fa",
+                    controlItemBgActive: isDark ? "#172b4d" : "#e6f4ff",
                     borderRadius: 10,
                     controlHeight: 38,
                     fontFamily: '"Segoe UI Variable", "Segoe UI", system-ui, sans-serif',
@@ -148,12 +152,15 @@ export function App()
                     Layout: {
                         bodyBg: isDark ? "#0d0f12" : "#f4f6f8",
                         headerBg: isDark ? "#17191d" : "#ffffff",
+                        lightSiderBg: isDark ? "#17191d" : "#ffffff",
                     },
                     Menu: {
+                        activeBarBorderWidth: 0,
                         itemBg: "transparent",
+                        itemMarginInline: 0,
                         itemSelectedBg: isDark ? "#172b4d" : "#e6f4ff",
-                        itemSelectedColor: "#1677ff",
                     },
+                    Statistic: { contentFontSize: 22 },
                 },
             }}
         >

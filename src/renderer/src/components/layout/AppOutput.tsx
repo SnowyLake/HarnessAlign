@@ -2,7 +2,7 @@
  * Ant Design command notification and full output modal.
  */
 
-import { CheckCircleFilled, CloseCircleFilled, InfoCircleFilled } from "@ant-design/icons";
+import { CheckCircleFilled, CloseCircleFilled } from "@ant-design/icons";
 import { App as AntApp, Button, Modal, theme as antTheme } from "antd";
 import { useEffect, type ReactNode } from "react";
 import { useAppStore, type OutputTone } from "@/stores/AppStore";
@@ -14,8 +14,7 @@ function OutputIcon({ tone }: { tone: OutputTone })
 {
     const { token } = antTheme.useToken();
     if (tone === "error") return <CloseCircleFilled style={{ color: token.colorError }} />;
-    if (tone === "success") return <CheckCircleFilled style={{ color: token.colorSuccess }} />;
-    return <InfoCircleFilled style={{ color: token.colorInfo }} />;
+    return <CheckCircleFilled style={{ color: token.colorSuccess }} />;
 }
 
 /** Render command feedback through Ant Design notification and Modal components. */

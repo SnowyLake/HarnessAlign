@@ -27,13 +27,10 @@ function snapshotText(snapshot: FormSnapshot, name: string, fallback = ""): stri
     return snapshot[name]?.[0] ?? fallback;
 }
 
-/** Normalize repeated target fields to the optional workspace rule representation. */
-function snapshotTargets(snapshot: FormSnapshot, harnessNames: readonly string[]): string[] | undefined
+/** Return the selected harness target allowlist. */
+function snapshotTargets(snapshot: FormSnapshot): string[]
 {
-    const targets = snapshot.targets ?? [];
-    if (targets.length === 0) return undefined;
-    if (targets.length === harnessNames.length && harnessNames.every((name) => targets.includes(name))) return undefined;
-    return targets;
+    return snapshot.targets ?? [];
 }
 
 /** Return the deterministic save phase for one editor selection. */
@@ -162,10 +159,9 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
         case "layer-new":
         {
             const name = snapshotText(snapshot, "name").trim();
-            const initialOption = snapshotText(snapshot, "initialOption").trim();
-            await window.appApi.workspace.addLayer(name, initialOption);
+            await window.appApi.workspace.addLayer(name);
             return {
-                selection: { kind: "layer-option", path: `.halign/layers/${name}/${initialOption}.md` },
+                selection: { kind: "layer", name },
                 message: `Created layer ${name}`,
             };
         }
@@ -203,10 +199,8 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
                     await window.appApi.workspace.saveSharedRule(savePath, body);
                     return;
                 }
-                const targets = snapshotTargets(snapshot, workspace.config.harnesses.map((harness) => harness.name));
-                const payload: RuleInput = targets === undefined
-                    ? { path: savePath, priority: existing?.priority ?? workspace.rootRules.length, body }
-                    : { path: savePath, priority: existing?.priority ?? workspace.rootRules.length, targets, body };
+                const targets = snapshotTargets(snapshot);
+                const payload: RuleInput = { path: savePath, priority: existing?.priority ?? workspace.rootRules.length, targets, body };
                 await window.appApi.workspace.saveRule(payload);
             };
             if (original) await saveRenamedSource(original, path, save);
@@ -226,7 +220,7 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             const layer = selection.kind === "layer-option-new" ? selection.layer : existing?.layer;
             if (!layer) throw new Error("Layer no longer exists for this option");
             const nextName = ruleDisplayName(snapshotText(snapshot, "name", existing?.name ?? "new-option").trim() || "new-option");
-            const targets = snapshotTargets(snapshot, workspace.config.harnesses.map((harness) => harness.name));
+            const targets = snapshotTargets(snapshot);
             const body = snapshotText(snapshot, "body");
             let path: string;
             if (existing)
@@ -234,14 +228,14 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
                 if (existing.name === nextName)
                 {
                     path = existing.path;
-                    await window.appApi.workspace.saveLayerOption({ path, body, ...(targets ? { targets } : {}) });
+                    await window.appApi.workspace.saveLayerOption({ path, targets, body });
                 }
                 else
                 {
                     path = await persistLayerOptionRename(existing.layer, existing.name, nextName);
                     try
                     {
-                        await window.appApi.workspace.saveLayerOption({ path, body, ...(targets ? { targets } : {}) });
+                        await window.appApi.workspace.saveLayerOption({ path, targets, body });
                     }
                     catch (error)
                     {
@@ -261,7 +255,7 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             {
                 await window.appApi.workspace.addLayerOption(layer, nextName);
                 path = `.halign/layers/${layer}/${nextName}.md`;
-                await window.appApi.workspace.saveLayerOption({ path, body, ...(targets ? { targets } : {}) });
+                await window.appApi.workspace.saveLayerOption({ path, targets, body });
             }
             return {
                 selection: { kind: "layer-option", path },
@@ -315,10 +309,10 @@ export async function saveWorkspaceChanges(): Promise<void>
         .filter(({ draft }) => draft.selection.kind !== "config")
         .sort((left, right) => editorSavePriority(left.draft.selection) - editorSavePriority(right.draft.selection) || left.key.localeCompare(right.key));
 
-    const { beginBusy, endBusy } = initial;
+    const { setIsBusy } = initial;
     let currentWorkspace = initial.workspace;
     let nextSelection = initial.selection;
-    beginBusy();
+    setIsBusy(true);
     try
     {
         currentWorkspace = await window.appApi.workspace.load();
@@ -368,7 +362,7 @@ export async function saveWorkspaceChanges(): Promise<void>
     }
     finally
     {
-        endBusy();
+        setIsBusy(false);
     }
 }
 
@@ -385,8 +379,8 @@ export async function refreshWorkspace(next?: Selection): Promise<void>
 /** Run Generate / Check / Setup work while holding busy; errors open the output notification flow. */
 export async function runCommand(work: () => Promise<void>): Promise<void>
 {
-    const { beginBusy, endBusy, setOutput } = useAppStore.getState();
-    beginBusy();
+    const { setIsBusy, setOutput } = useAppStore.getState();
+    setIsBusy(true);
     try
     {
         await work();
@@ -397,15 +391,15 @@ export async function runCommand(work: () => Promise<void>): Promise<void>
     }
     finally
     {
-        endBusy();
+        setIsBusy(false);
     }
 }
 
 /** Run a form save/delete while holding busy; failures toast briefly and return the full message. */
 export async function runMutation(work: () => Promise<void>): Promise<{ ok: true } | { ok: false; message: string }>
 {
-    const { beginBusy, endBusy } = useAppStore.getState();
-    beginBusy();
+    const { setIsBusy } = useAppStore.getState();
+    setIsBusy(true);
     try
     {
         await work();
@@ -419,7 +413,7 @@ export async function runMutation(work: () => Promise<void>): Promise<{ ok: true
     }
     finally
     {
-        endBusy();
+        setIsBusy(false);
     }
 }
 

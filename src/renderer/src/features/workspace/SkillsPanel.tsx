@@ -4,18 +4,22 @@
 
 import {
     CloudDownloadOutlined,
+    CloseOutlined,
     DeleteOutlined,
     ExportOutlined,
     FolderAddOutlined,
+    GithubOutlined,
+    PlusOutlined,
     ReloadOutlined,
     SearchOutlined,
     SyncOutlined,
     ThunderboltOutlined,
     WarningOutlined,
 } from "@ant-design/icons";
-import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, UserSkill } from "@shared/models/Workspace";
-import { Avatar, Button, Card, Checkbox, Col, Drawer, Empty, Flex, Input, List, Modal, Row, Select, Space, Statistic, Tabs, Tag, Tooltip, Typography, type TabsProps } from "antd";
+import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, UserSkill, Workspace } from "@shared/models/Workspace";
+import { Alert, Avatar, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Listy, Modal, Select, Space, Tabs, Tag, Tooltip, Typography, type TabsProps } from "antd";
 import { useState, type ReactNode } from "react";
+import { showSuccess } from "@/components/common/Feedback";
 import { refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore } from "@/stores/AppStore";
 
@@ -137,13 +141,14 @@ function InstalledSkillRow({ skill, update, isBusy, onUpdate, onRemove }: {
     actions.push(<IconAction key="remove" label="Remove" danger disabled={isBusy} onClick={() => onRemove(skill.id)} icon={<DeleteOutlined />} />);
 
     return (
-        <List.Item actions={actions}>
-            <List.Item.Meta
-                avatar={<Avatar shape="square" icon={<ThunderboltOutlined />} />}
-                title={<Space size={8}><Typography.Text strong>{skill.id}</Typography.Text><OriginMeta origin={skill.origin} /></Space>}
-                description={skill.description || undefined}
-            />
-        </List.Item>
+        <div className="app-list-row">
+            <Avatar shape="square" icon={<ThunderboltOutlined />} />
+            <div className="app-list-copy">
+                <Space size={8}><Typography.Text strong>{skill.id}</Typography.Text><OriginMeta origin={skill.origin} /></Space>
+                {skill.description ? <Typography.Text type="secondary">{skill.description}</Typography.Text> : null}
+            </div>
+            <Space size={4}>{actions}</Space>
+        </div>
     );
 }
 
@@ -159,15 +164,155 @@ function SelectableSkillRow({ id, title, description, detail, checked, disabled,
 })
 {
     return (
-        <List.Item>
-            <Checkbox checked={checked} disabled={Boolean(disabled)} onChange={() => onToggle(id)}>
-                <Space direction="vertical" size={2}>
-                    <Space size={8}><Typography.Text strong>{title || id}</Typography.Text>{detail}</Space>
-                    {description ? <Typography.Text type="secondary">{description}</Typography.Text> : null}
-                </Space>
-            </Checkbox>
-        </List.Item>
+        <Checkbox className="skills-selectable-row" checked={checked} disabled={Boolean(disabled)} onChange={() => onToggle(id)}>
+            <Space orientation="vertical" size={2}>
+                <Space size={8}><Typography.Text strong>{title || id}</Typography.Text>{detail}</Space>
+                {description ? <Typography.Text type="secondary">{description}</Typography.Text> : null}
+            </Space>
+        </Checkbox>
     );
+}
+
+/** Render the compact form for registering one GitHub skill source. */
+function NewSkillSourceForm({ onAdded, onCancel, onError }: {
+    onAdded: () => void;
+    onCancel: () => void;
+    onError: (message: string | undefined) => void;
+})
+{
+    const isBusy = useAppStore((state) => state.isBusy);
+    const [url, setUrl] = useState("");
+    const [branch, setBranch] = useState("");
+
+    return (
+        <form
+            onSubmit={(event) =>
+            {
+                event.preventDefault();
+                onError(undefined);
+                void runMutation(async () =>
+                {
+                    const input = branch.trim() ? { url: url.trim(), branch: branch.trim() } : { url: url.trim() };
+                    await window.appApi.workspace.addSkillSource(input);
+                    await refreshWorkspace();
+                    showSuccess("Skill source added");
+                    onAdded();
+                }).then((result) =>
+                {
+                    if (!result.ok) onError(result.message);
+                });
+            }}
+        >
+            <Card
+                size="small"
+                title="New GitHub source"
+                extra={<Button type="text" icon={<CloseOutlined />} disabled={isBusy} aria-label="Cancel new skill source" onClick={onCancel} />}
+            >
+                <Form component={false} layout="vertical" requiredMark={false}>
+                    <Form.Item label="Repository URL">
+                        <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repo" disabled={isBusy} />
+                    </Form.Item>
+                    <Form.Item label="Branch" extra="Leave blank to use the repository default branch.">
+                        <Input value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="Default branch" disabled={isBusy} />
+                    </Form.Item>
+                    <Button type="primary" htmlType="submit" disabled={isBusy || !url.trim()}>Register source</Button>
+                </Form>
+            </Card>
+        </form>
+    );
+}
+
+/** Render registered GitHub sources alongside the skill library they feed. */
+function SkillSourcesSection({ workspace }: { workspace: Workspace })
+{
+    const isBusy = useAppStore((state) => state.isBusy);
+    const [isAdding, setIsAdding] = useState(false);
+    const [formError, setFormError] = useState<string>();
+
+    return (
+        <section className="skills-section">
+            <header className="skills-section-header">
+                <Space orientation="vertical" size={0}>
+                    <Typography.Title level={5}>GitHub sources</Typography.Title>
+                    <Typography.Text type="secondary" className="card-subtitle">Repositories used for skill discovery and updates.</Typography.Text>
+                </Space>
+                <Button icon={<PlusOutlined />} disabled={isBusy || isAdding} onClick={() => setIsAdding(true)}>Add source</Button>
+            </header>
+            <div className="skills-section-body">
+                {formError ? <Alert type="error" title="Source update failed" description={<span className="pre-wrap">{formError}</span>} showIcon /> : null}
+                {workspace.config.skillSources.length === 0 ? (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No GitHub sources registered" />
+                ) : (
+                    <Listy
+                        items={workspace.config.skillSources}
+                        rowKey={(source) => `${source.owner}/${source.name}`}
+                        itemRender={(source) => (
+                            <div className="app-list-row">
+                                <Avatar shape="square" icon={<GithubOutlined />} />
+                                <div className="app-list-copy">
+                                    <Typography.Text strong>{source.owner}/{source.name}</Typography.Text>
+                                    <Typography.Text type="secondary">Branch: {source.branch}</Typography.Text>
+                                </div>
+                                <Space size={4}>
+                                    <Tooltip title="Open repository">
+                                        <Button
+                                            type="text"
+                                            icon={<ExportOutlined />}
+                                            aria-label={`Open ${source.owner}/${source.name}`}
+                                            onClick={() => void window.appApi.app.openExternal(`https://github.com/${source.owner}/${source.name}`).catch(() => undefined)}
+                                        />
+                                    </Tooltip>
+                                    <Tooltip title="Remove source">
+                                        <Button
+                                            type="text"
+                                            danger
+                                            icon={<DeleteOutlined />}
+                                            disabled={isBusy}
+                                            aria-label={`Remove ${source.owner}/${source.name}`}
+                                            onClick={() =>
+                                            {
+                                                setFormError(undefined);
+                                                void runMutation(async () =>
+                                                {
+                                                    await window.appApi.workspace.removeSkillSource(source.owner, source.name);
+                                                    await refreshWorkspace();
+                                                    showSuccess("Skill source removed");
+                                                }).then((result) =>
+                                                {
+                                                    if (!result.ok) setFormError(result.message);
+                                                });
+                                            }}
+                                        />
+                                    </Tooltip>
+                                </Space>
+                            </div>
+                        )}
+                    />
+                )}
+                {isAdding ? (
+                    <div className="skill-source-form">
+                        <NewSkillSourceForm
+                            onCancel={() => setIsAdding(false)}
+                            onError={setFormError}
+                            onAdded={() =>
+                            {
+                                setFormError(undefined);
+                                setIsAdding(false);
+                            }}
+                        />
+                    </div>
+                ) : null}
+            </div>
+        </section>
+    );
+}
+
+/** Render GitHub source registration as its own Skills subpage. */
+export function SkillRegistrationPanel()
+{
+    const workspace = useAppStore((state) => state.workspace);
+    if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
+    return <div className="skills-page"><SkillSourcesSection workspace={workspace} /></div>;
 }
 
 /** Render the complete Ant Design Skills management page. */
@@ -293,9 +438,10 @@ export function SkillsPanel()
     const installedContent = filteredInstalled.length === 0
         ? <Empty description={installed.length === 0 ? "No installed skills yet. Use Discover or Import." : "No matching skills."} />
         : (
-            <List
-                dataSource={filteredInstalled}
-                renderItem={(skill) => (
+            <Listy
+                items={filteredInstalled}
+                rowKey="id"
+                itemRender={(skill) => (
                     <InstalledSkillRow
                         skill={skill}
                         update={updateById.get(skill.id)}
@@ -309,9 +455,10 @@ export function SkillsPanel()
     const discoverContent = filteredDiscovered.length === 0
         ? <Empty description={discovered.length === 0 ? "No skills found in registered sources." : "No matching discovered skills."} />
         : (
-            <List
-                dataSource={filteredDiscovered}
-                renderItem={(skill) => (
+            <Listy
+                items={filteredDiscovered}
+                rowKey="id"
+                itemRender={(skill) => (
                     <SelectableSkillRow
                         id={skill.id}
                         title={skill.id}
@@ -332,70 +479,51 @@ export function SkillsPanel()
             ? [{ key: "discover", label: <Space>Discover<Tag>{discovered.length}</Tag></Space>, children: discoverContent }]
             : []),
     ];
-
     return (
         <div className="skills-page">
-            <Row gutter={[16, 16]}>
-                <Col xs={24} md={8}>
-                    <Card size="small" className="skills-stat-card"><Statistic title="Installed" value={installed.length} prefix={<ThunderboltOutlined />} /></Card>
-                </Col>
-                <Col xs={24} md={8}>
-                    <Card size="small" className="skills-stat-card"><Statistic title="Registered sources" value={workspace.config.skillSources.length} prefix={<SearchOutlined />} /></Card>
-                </Col>
-                <Col xs={24} md={8}>
-                    <Card size="small" className="skills-stat-card"><Statistic title="Updates available" value={outdated.length} prefix={<SyncOutlined />} {...(outdated.length > 0 ? { valueStyle: { color: "#1677ff" } } : {})} /></Card>
-                </Col>
-            </Row>
-            <Card
-                className="skills-catalog-card"
-                title={(
-                    <Space direction="vertical" size={0}>
-                        <Typography.Text strong>Skill library</Typography.Text>
-                        <Typography.Text type="secondary" className="card-subtitle">Manage capabilities available to this project.</Typography.Text>
-                    </Space>
-                )}
-                extra={(
-                    <Space wrap>
-                        <Button icon={<ReloadOutlined />} disabled={isBusy} onClick={handleCheckUpdates}>Check updates</Button>
-                        {outdated.length > 0 ? <Button type="primary" disabled={isBusy} onClick={() => handleApplyUpdates(outdated.map((item) => item.id))}>Apply {outdated.length}</Button> : null}
-                        <Button icon={<FolderAddOutlined />} disabled={isBusy} onClick={handleImport}>Import</Button>
-                        <Button
-                            icon={<SearchOutlined />}
-                            disabled={isBusy || workspace.config.skillSources.length === 0}
-                            title={workspace.config.skillSources.length === 0 ? "Register a GitHub source on the Home page" : undefined}
-                            onClick={handleDiscover}
-                        >
-                            Discover
-                        </Button>
-                        {listView === "discover" ? <Button type="primary" icon={<CloudDownloadOutlined />} disabled={isBusy || selectedRemote.length === 0} onClick={handleDownload}>Install selected</Button> : null}
-                    </Space>
-                )}
-            >
-                <Flex gap={12} wrap className="skills-filter-bar">
-                    <Input
-                        allowClear
-                        prefix={<SearchOutlined />}
-                        value={filter}
-                        onChange={(event) => setFilter(event.target.value)}
-                        placeholder={listView === "installed" ? "Search name, description, or repository..." : "Search discovered skills..."}
-                        disabled={isBusy}
-                    />
-                    {listView === "installed" && buckets.length > 0
-                        ? <Select value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
-                        : null}
-                </Flex>
-                <Tabs activeKey={listView} items={tabItems} onChange={(key) =>
-                {
-                    const next = key as SkillsListView;
-                    setListView(next);
-                    if (next === "installed") setOriginFilter("all");
-                }} />
-            </Card>
+            <section className="skills-section">
+                <div className="skills-section-body skills-library-body">
+                    <Flex align="center" gap={12} wrap className="skills-toolbar">
+                        <Input
+                            className="skills-filter-input"
+                            allowClear
+                            prefix={<SearchOutlined />}
+                            value={filter}
+                            onChange={(event) => setFilter(event.target.value)}
+                            placeholder={listView === "installed" ? "Search name, description, or repository..." : "Search discovered skills..."}
+                            disabled={isBusy}
+                        />
+                        {listView === "installed" && buckets.length > 0
+                            ? <Select value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
+                            : null}
+                        <Space wrap className="skills-toolbar-actions">
+                            <Button icon={<ReloadOutlined />} disabled={isBusy} onClick={handleCheckUpdates}>Check updates</Button>
+                            {outdated.length > 0 ? <Button type="primary" disabled={isBusy} onClick={() => handleApplyUpdates(outdated.map((item) => item.id))}>Apply {outdated.length}</Button> : null}
+                            <Button icon={<FolderAddOutlined />} disabled={isBusy} onClick={handleImport}>Import</Button>
+                            <Button
+                                icon={<SearchOutlined />}
+                                disabled={isBusy || workspace.config.skillSources.length === 0}
+                                title={workspace.config.skillSources.length === 0 ? "Register a GitHub source from Skills > Registration" : undefined}
+                                onClick={handleDiscover}
+                            >
+                                Discover
+                            </Button>
+                            {listView === "discover" ? <Button type="primary" icon={<CloudDownloadOutlined />} disabled={isBusy || selectedRemote.length === 0} onClick={handleDownload}>Install selected</Button> : null}
+                        </Space>
+                    </Flex>
+                    <Tabs activeKey={listView} items={tabItems} onChange={(key) =>
+                    {
+                        const next = key as SkillsListView;
+                        setListView(next);
+                        if (next === "installed") setOriginFilter("all");
+                    }} />
+                </div>
+            </section>
 
             <Drawer
                 open={isImportOpen}
                 title="Import user skills"
-                width={520}
+                size={520}
                 onClose={() => setIsImportOpen(false)}
                 extra={(
                     <Button
@@ -414,9 +542,10 @@ export function SkillsPanel()
             >
                 <Typography.Paragraph type="secondary">Copy skills from ~/.agents/skills into this project.</Typography.Paragraph>
                 {userSkills.length === 0 ? <Empty description="No skills were found in ~/.agents/skills" /> : (
-                    <List
-                        dataSource={userSkills}
-                        renderItem={(skill) => (
+                    <Listy
+                        items={userSkills}
+                        rowKey="id"
+                        itemRender={(skill) => (
                             <SelectableSkillRow
                                 id={skill.id}
                                 title={skill.id}

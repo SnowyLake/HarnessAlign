@@ -3,7 +3,7 @@
  */
 
 import { SearchOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Empty, Form, Input, List, Select, Space, Switch, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, Card, Empty, Form, Input, Listy, Select, Space, Switch, Tabs, Tag, Typography } from "antd";
 import { useState } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 
@@ -39,20 +39,34 @@ export function ShowcasePage()
                         {
                             key: "installed",
                             label: "Installed",
-                            children: <List dataSource={["example-skill"]} renderItem={(item) => <List.Item actions={[<Button key="search" type="text" icon={<SearchOutlined />} />]}><List.Item.Meta title={item} description="A consistent Ant Design list row." /></List.Item>} />,
+                            children: (
+                                <Listy
+                                    items={["example-skill"]}
+                                    rowKey={(item) => item}
+                                    itemRender={(item) => (
+                                        <div className="app-list-row">
+                                            <div className="app-list-copy">
+                                                <Typography.Text strong>{item}</Typography.Text>
+                                                <Typography.Text type="secondary">A consistent Ant Design list row.</Typography.Text>
+                                            </div>
+                                            <Button type="text" icon={<SearchOutlined />} aria-label="Inspect example skill" />
+                                        </div>
+                                    )}
+                                />
+                            ),
                         },
                         { key: "discover", label: "Discover", children: <Empty description="No discovered skills" /> },
                     ]} />
                 </Card>
                 <Card title="Feedback" extra="Alerts and transient messages">
-                    <Space direction="vertical" size="middle" className="full-width">
-                        <Alert message="Neutral alert" description="Inline guidance uses Alert." showIcon />
-                        <Alert type="error" message="Error alert" description="Mutation failures show the full error message." showIcon />
+                    <Space orientation="vertical" size="middle" className="full-width">
+                        <Alert title="Neutral alert" description="Inline guidance uses Alert." showIcon />
+                        <Alert type="error" title="Error alert" description="Mutation failures show the full error message." showIcon />
                         <Button onClick={() => showSuccess("Message sample")}>Show message</Button>
                     </Space>
                 </Card>
                 <Card title="Typography" extra={<Tag>Segoe UI Variable</Tag>}>
-                    <Space direction="vertical" size={4}>
+                    <Space orientation="vertical" size={4}>
                         <Typography.Title level={3}>Page title</Typography.Title>
                         <Typography.Title level={5}>Section title</Typography.Title>
                         <Typography.Text>Body and control text</Typography.Text>

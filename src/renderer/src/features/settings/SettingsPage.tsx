@@ -2,11 +2,12 @@
  * Ant Design desktop preferences and workspace location page.
  */
 
-import { DesktopOutlined, FolderOpenOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { DesktopOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import type { ThemeMode } from "@shared/models/AppSettings";
 import { Button, Card, Col, Form, Input, Row, Segmented, Space, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { showError, showSuccess } from "@/components/common/Feedback";
+import { AgentDocumentTitleForm } from "@/features/workspace/WorkspaceEditor";
 import { useAppStore } from "@/stores/AppStore";
 
 /** Theme choices rendered by the Ant Design select. */
@@ -28,10 +29,10 @@ export function SettingsPage()
 {
     const theme = useAppStore((state) => state.theme);
     const setTheme = useAppStore((state) => state.setTheme);
-    const workspaceRoot = useAppStore((state) => state.workspace?.root);
+    const workspace = useAppStore((state) => state.workspace);
     const [version, setVersion] = useState("");
     const [isOpening, setIsOpening] = useState(false);
-    const configDirectory = workspaceRoot ? `${workspaceRoot}\\.halign` : "%USERPROFILE%\\.halign";
+    const configDirectory = workspace ? `${workspace.root}\\.halign` : "%USERPROFILE%\\.halign";
 
     useEffect(() =>
     {
@@ -44,7 +45,6 @@ export function SettingsPage()
                 <Row gutter={[16, 16]}>
                     <Col xs={24} lg={16}>
                         <Card title="Appearance" extra={<DesktopOutlined />} className="settings-card">
-                            <Typography.Paragraph type="secondary">Choose how Harness Align follows your desktop appearance.</Typography.Paragraph>
                             <Form layout="vertical" requiredMark={false}>
                                 <Form.Item label="Theme" extra="System automatically follows the Windows light or dark setting.">
                                     <Segmented<ThemeMode>
@@ -67,16 +67,20 @@ export function SettingsPage()
                     </Col>
                     <Col xs={24} lg={8}>
                         <Card title="About" extra={<InfoCircleOutlined />} className="settings-card">
-                            <Space direction="vertical" size={4}>
+                            <Space orientation="vertical" size={4}>
                                 <Typography.Text strong>Harness Align Desktop</Typography.Text>
                                 <Typography.Text type="secondary">Version</Typography.Text>
                                 <Typography.Text code>{version || "-"}</Typography.Text>
                             </Space>
                         </Card>
                     </Col>
-                    <Col span={24}>
-                        <Card title="Workspace" extra={<FolderOpenOutlined />}>
-                            <Typography.Paragraph type="secondary">Harness Align reads and writes validated configuration in this local directory.</Typography.Paragraph>
+                    <Col xs={24} lg={12}>
+                        <Card title="Generated instructions" extra={<FileTextOutlined />} className="settings-card">
+                            {workspace ? <AgentDocumentTitleForm workspace={workspace} /> : <Typography.Text type="secondary">The user workspace is not loaded yet.</Typography.Text>}
+                        </Card>
+                    </Col>
+                    <Col xs={24} lg={12}>
+                        <Card title="Workspace" extra={<FolderOpenOutlined />} className="settings-card">
                             <Form layout="vertical" requiredMark={false}>
                                 <Form.Item label="Config directory">
                             <Space.Compact block>

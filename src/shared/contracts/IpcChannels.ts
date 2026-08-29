@@ -27,7 +27,6 @@ export const IPC_CHANNELS = {
     workspaceRenameLayerOption: "workspace:rename-layer-option",
     workspaceAddHarness: "workspace:add-harness",
     workspaceRemoveHarness: "workspace:remove-harness",
-    workspaceRenameHarness: "workspace:rename-harness",
     workspaceUpdateHarness: "workspace:update-harness",
     workspaceAddSkillSource: "workspace:add-skill-source",
     workspaceRemoveSkillSource: "workspace:remove-skill-source",
@@ -42,6 +41,3 @@ export const IPC_CHANNELS = {
     workspaceCheck: "workspace:check",
     workspaceSetup: "workspace:setup",
 } as const;
-
-/** Literal union of IPC channel strings. */
-export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

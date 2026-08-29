@@ -15,34 +15,27 @@ function settingsPath(): string
     return join(app.getPath("userData"), "settings.json");
 }
 
-/** Persist theme in Electron userData. */
-export class SettingsService
+/** Read settings, or return defaults when the file is missing or invalid. */
+export async function getSettings(): Promise<AppSettings>
 {
-    /** Read settings, or return defaults when the file is missing or invalid. */
-    async get(): Promise<AppSettings>
+    try
     {
-        try
-        {
-            const parsed: unknown = JSON.parse(await fs.readFile(settingsPath(), "utf8"));
-            return APP_SETTINGS_SCHEMA.parse(parsed);
-        }
-        catch
-        {
-            return { ...DEFAULT_APP_SETTINGS };
-        }
+        const parsed: unknown = JSON.parse(await fs.readFile(settingsPath(), "utf8"));
+        return APP_SETTINGS_SCHEMA.parse(parsed);
     }
-
-    /** Merge a validated patch into settings.json. */
-    async update(patch: unknown): Promise<AppSettings>
+    catch
     {
-        const current = await this.get();
-        const parsedPatch = SETTINGS_PATCH_SCHEMA.parse(patch);
-        const next: AppSettings = { theme: parsedPatch.theme ?? current.theme };
-        await fs.mkdir(app.getPath("userData"), { recursive: true });
-        await atomicWrite(settingsPath(), Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
-        return next;
+        return { ...DEFAULT_APP_SETTINGS };
     }
 }
 
-/** Shared settings service used by IPC handlers. */
-export const settingsService = new SettingsService();
+/** Merge a validated patch into settings.json. */
+export async function updateSettings(patch: unknown): Promise<AppSettings>
+{
+    const current = await getSettings();
+    const parsedPatch = SETTINGS_PATCH_SCHEMA.parse(patch);
+    const next: AppSettings = { theme: parsedPatch.theme ?? current.theme };
+    await fs.mkdir(app.getPath("userData"), { recursive: true });
+    await atomicWrite(settingsPath(), Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
+    return next;
+}

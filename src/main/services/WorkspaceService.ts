@@ -19,7 +19,6 @@ import {
     removeLayerOption,
     removeSkill,
     removeSkillSource,
-    renameHarness,
     renameLayer,
     renameLayerOption,
     renameSource,
@@ -111,10 +110,10 @@ export class WorkspaceService
         return renameSource(await userRoot(), from, to);
     }
 
-    /** Create a layer directory with its first empty option. */
-    async addLayer(name: string, initialOption: string): Promise<Config>
+    /** Create an empty catalog layer directory. */
+    async addLayer(name: string): Promise<Config>
     {
-        return addLayer(await userRoot(), name, initialOption);
+        return addLayer(await userRoot(), name);
     }
 
     /** Remove a layer directory and drop it from the project selection when present. */
@@ -157,12 +156,6 @@ export class WorkspaceService
     async removeHarness(name: string): Promise<void>
     {
         return removeHarness(await userRoot(), name);
-    }
-
-    /** Rename a harness and cascade rule targets and agent keys. */
-    async renameHarness(from: string, to: string): Promise<void>
-    {
-        return renameHarness(await userRoot(), from, to);
     }
 
     /** Update a harness and cascade its name when necessary. */

@@ -100,7 +100,7 @@ export interface RuleInput
 {
     path: string;
     priority: number;
-    targets?: string[];
+    targets: string[];
     body: string;
 }
 
@@ -110,7 +110,7 @@ export interface LayerOption
     path: string;
     layer: string;
     name: string;
-    targets?: string[];
+    targets: string[];
     body: string;
 }
 
@@ -118,7 +118,7 @@ export interface LayerOption
 export interface LayerOptionInput
 {
     path: string;
-    targets?: string[];
+    targets: string[];
     body: string;
 }
 

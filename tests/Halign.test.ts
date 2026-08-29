@@ -14,7 +14,7 @@ import {
     atomicWrite, addHarness, addLayer, addLayerOption, addSkillSource, assertSafeZipEntry, buildOutputs, check, deleteSource,
     downgradeMarkdownHeadings, ensureUserWorkspace, generate, HalignError, hashSkillDirectory, importUserSkills, installSkillFromDirectory,
     listUserSkills, loadConfig, loadSkills, loadWorkspace, main, parseGitHubSkillSource, removeHarness, removeLayer, removeLayerOption,
-    removeSkill, removeSkillSource, renameHarness, renameLayer, renameLayerOption, renameSource, renderMarkdownToc, reportGenerate, reportSetup,
+    removeSkill, removeSkillSource, renameLayer, renameLayerOption, renameSource, renderMarkdownToc, reportGenerate, reportSetup,
     safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup, updateHarness, validateConfig,
 } from "../src/engine/Halign.js";
 
@@ -28,6 +28,9 @@ const config = {
         { name: "opencode", config_path: ".config/opencode", agent_format: "yaml", agent_extension: "md" },
     ],
 };
+
+/** Harness allowlist shared by fixtures that should render everywhere. */
+const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
 
 /** Create a temporary `.halign` project, run the case, then delete the directory. */
 async function withProject(run: (root: string) => Promise<void>): Promise<void>
@@ -51,17 +54,18 @@ async function withProject(run: (root: string) => Promise<void>): Promise<void>
     }
 }
 
-/** Write one selectable Layer option, with optional target metadata. */
-async function writeLayerOption(root: string, layer: string, option: string, body: string, targets?: string[]): Promise<void>
+/** Write one selectable Layer option with an explicit target allowlist. */
+async function writeLayerOption(root: string, layer: string, option: string, body: string, targets: string[] = ALL_HARNESS_NAMES): Promise<void>
 {
-    const frontmatter = targets ? `---\ntargets:\n${targets.map((target) => `  - ${target}\n`).join("")}---\n\n` : "";
+    const targetLines = targets.length === 0 ? "targets: []\n" : `targets:\n${targets.map((target) => `  - ${target}\n`).join("")}`;
+    const frontmatter = `---\n${targetLines}---\n\n`;
     await writeFile(join(root, ".halign", "layers", layer, `${option}.md`), `${frontmatter}${body}`, "utf8");
 }
 
 /** Write a root rule markdown file under `.halign/rules`. */
-async function writeRule(root: string, name: string, priority: number, body: string, targets?: string[]): Promise<void>
+async function writeRule(root: string, name: string, priority: number, body: string, targets: string[] = ALL_HARNESS_NAMES): Promise<void>
 {
-    const targetLines = targets ? "targets:\n" + targets.map((target) => "  - " + target + "\n").join("") : "";
+    const targetLines = targets.length === 0 ? "targets: []\n" : "targets:\n" + targets.map((target) => "  - " + target + "\n").join("");
     await writeFile(join(root, ".halign", "rules", name), "---\npriority: " + priority + "\n" + targetLines + "---\n\n" + body + "\n", "utf8");
 }
 
@@ -225,17 +229,18 @@ test("config and metadata validation reject unsafe input", async () =>
     });
 });
 
-test("Layer discovery is strict and empty options are valid", async () =>
+test("Layer discovery is strict and empty layers and options are valid", async () =>
 {
     await withProject(async (root) =>
     {
-        await saveLayerOption(root, { path: ".halign/layers/soul/arona.md", body: "" });
+        await saveLayerOption(root, { path: ".halign/layers/soul/arona.md", targets: [], body: "" });
         assert.ok(!output(await buildOutputs(root), "codex/AGENTS.md").includes("arona soul"));
         await mkdir(join(root, ".halign", "layers", "soul", "nested"));
         await assert.rejects(buildOutputs(root), /only contain direct Markdown files/u);
         await rm(join(root, ".halign", "layers", "soul", "nested"), { recursive: true });
         await mkdir(join(root, ".halign", "layers", "orphan"));
-        await writeFile(join(root, ".halign", "layers", "orphan", "x.md"), "x", "utf8");
+        assert.deepEqual((await loadWorkspace(root)).layerOptions.orphan, []);
+        await writeLayerOption(root, "orphan", "x", "x");
         const catalog = await loadWorkspace(root);
         assert.ok(Object.keys(catalog.layerOptions).includes("orphan"));
         assert.ok(!output(await buildOutputs(root), "codex/AGENTS.md").includes("x"));
@@ -260,11 +265,15 @@ test("root rules, ordered Layer selection, targets, Markdown, and renderers are 
         await writeRule(root, "zeta.md", 10, "# Zeta\n\nzeta");
         await writeRule(root, "alpha.md", 10, "# Alpha\n\nalpha");
         await writeRule(root, "cursor.md", 1, "# Cursor\n\ncursor only", ["cursor"]);
+        await writeRule(root, "disabled.md", 0, "# Disabled\n\nempty target rule", []);
+        await writeFile(join(root, ".halign", "rules", "missing-targets.md"), "---\npriority: 0\n---\n\n# Missing Targets\n\nmissing target rule\n", "utf8");
         await mkdir(join(root, ".halign", "layers", "workflow"));
         await writeLayerOption(root, "workflow", "strict", "# Workflow\n\nstrict workflow");
+        await mkdir(join(root, ".halign", "layers", "disabled"));
+        await writeLayerOption(root, "disabled", "off", "# Disabled Layer\n\nempty target layer", []);
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify({
             ...config,
-            layers: [...config.layers, { name: "workflow", selected: "strict" }],
+            layers: [...config.layers, { name: "workflow", selected: "strict" }, { name: "disabled", selected: "off" }],
         }), "utf8");
         const first = await buildOutputs(root);
         const second = await buildOutputs(root);
@@ -275,6 +284,13 @@ test("root rules, ordered Layer selection, targets, Markdown, and renderers are 
         assert.ok(codex.indexOf("base") < codex.indexOf("arona soul"));
         assert.ok(codex.indexOf("arona soul") < codex.indexOf("strict workflow"));
         assert.ok(output(first, "cursor/AGENTS.md").includes("cursor only"));
+        for (const harness of config.harnesses)
+        {
+            const markdown = output(first, `${harness.name}/AGENTS.md`);
+            assert.ok(!markdown.includes("empty target rule"));
+            assert.ok(!markdown.includes("missing target rule"));
+            assert.ok(!markdown.includes("empty target layer"));
+        }
         const overridden = output(await buildOutputs(root, [
             { name: "workflow", option: "strict" },
             { name: "soul", option: "kei" },
@@ -390,6 +406,9 @@ test("setup follows configurable harness names, formats, extensions, and deploym
             harnesses: [{ name: "atlas", config_path: ".tools/atlas", agent_format: "yaml", agent_extension: "agent" }],
         };
         await writeFile(join(root, ".halign", "config.json"), JSON.stringify(customConfig), "utf8");
+        await writeRule(root, "base.md", 100, "# Base\n\nbase", ["atlas"]);
+        await writeLayerOption(root, "soul", "arona", "# Soul\n\narona soul", ["atlas"]);
+        await writeLayerOption(root, "soul", "kei", "# Soul\n\nkei soul", ["atlas"]);
         const agent = [
             "---",
             "name: explorer",
@@ -497,11 +516,14 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
         await saveRule(root, { path: ".halign/rules/cursor.md", priority: 1, targets: ["cursor"], body: "# Cursor\n\ncursor only" });
         await saveLayerOption(root, { path: ".halign/layers/soul/kei.md", targets: ["cursor"], body: "# Soul\n\nkei soul" });
         await saveSharedRule(root, ".halign/rules/shared/shared.md", "shared rule");
-        await addLayer(root, "mode", "strict");
-        assert.equal(await readFile(join(root, ".halign", "layers", "mode", "strict.md"), "utf8"), "");
+        await addLayer(root, "mode");
+        assert.deepEqual(await readdir(join(root, ".halign", "layers", "mode")), []);
+        assert.deepEqual((await loadWorkspace(root)).layerOptions.mode, []);
         assert.deepEqual((await loadConfig(root)).layers.map((layer) => layer.name), ["soul"]);
-        await addLayerOption(root, "mode", "fast");
+        await addLayerOption(root, "mode", "strict");
         await removeLayerOption(root, "mode", "strict");
+        assert.deepEqual(await readdir(join(root, ".halign", "layers", "mode")), []);
+        await addLayerOption(root, "mode", "fast");
         const withMode = await loadConfig(root);
         await saveConfig(root, { ...withMode, layers: [...withMode.layers, { name: "mode", selected: "fast" }] });
         await addLayerOption(root, "mode", "strict");
@@ -566,14 +588,18 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
             },
             body: "Read evidence.",
         });
+        await saveRule(root, { path: ".halign/rules/nova.md", priority: 2, targets: ["nova"], body: "# Nova\n\nnova only" });
+        await saveLayerOption(root, { path: ".halign/layers/soul/kei.md", targets: ["nova"], body: "# Soul\n\nkei soul" });
         await removeHarness(root, "nova");
         const afterRemove = await loadWorkspace(root);
         assert.ok(!afterRemove.config.harnesses.some((harness) => harness.name === "nova"));
         assert.equal(afterRemove.agents[0]?.harnesses.nova, undefined);
+        assert.deepEqual(afterRemove.rootRules.find((rule) => rule.path === ".halign/rules/nova.md")?.targets, []);
+        assert.deepEqual(afterRemove.layerOptions.soul?.find((option) => option.name === "kei")?.targets, []);
 
         await deleteSource(root, ".halign/rules/renamed-cursor.md");
-        await assert.rejects(saveRule(root, { path: ".halign/rules/../escape.md", priority: 1, body: "no" }), /must stay inside \.halign/u);
-        await assert.rejects(saveRule(root, { path: ".halign/generated/x.md", priority: 1, body: "no" }), /managed \.halign sources/u);
+        await assert.rejects(saveRule(root, { path: ".halign/rules/../escape.md", priority: 1, targets: [], body: "no" }), /must stay inside \.halign/u);
+        await assert.rejects(saveRule(root, { path: ".halign/generated/x.md", priority: 1, targets: [], body: "no" }), /managed \.halign sources/u);
         await assert.rejects(saveSharedRule(root, ".halign/rules/base.md", "no"), /must stay under \.halign\/rules\/shared/u);
         await assert.rejects(deleteSource(root, ".halign/config.json"), /cannot be deleted/u);
         assert.equal((await loadConfig(root)).name, "Aligned");
@@ -597,7 +623,9 @@ test("legal prototype property Layer names survive discovery and harness cascade
         assert.equal(Object.values(workspace.layerOptions).length, 1);
         assert.equal(Object.entries(workspace.layerOptions).find(([name]) => name === "constructor")?.[1][0]?.name, "arona");
 
-        await renameHarness(root, "cursor", "atlas");
+        const cursor = workspace.config.harnesses.find((harness) => harness.name === "cursor");
+        assert.ok(cursor);
+        await updateHarness(root, "cursor", { ...cursor, name: "atlas" });
         const renamed = await loadWorkspace(root);
         assert.deepEqual(Object.entries(renamed.layerOptions).find(([name]) => name === "constructor")?.[1][0]?.targets, ["atlas"]);
     });

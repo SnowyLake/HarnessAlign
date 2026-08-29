@@ -1,21 +1,22 @@
 import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
-import { DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
-import { Badge, Button, Dropdown, Empty, Input, Typography, type MenuProps } from "antd";
-import { useState } from "react";
+import { DeleteOutlined, EditOutlined, PlusOutlined, RightOutlined, SaveOutlined } from "@ant-design/icons";
+import { Badge, Button, Collapse, Divider, Dropdown, Empty, Input, Modal, Popover, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
+import { useEffect, useState } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation, saveRenamedSource } from "@/features/workspace/WorkspaceTasks";
 import { catalogLayerNames, fileName, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 
-/** Contextual titles for the master list beside each workspace editor. */
-const TREE_COPY: Record<WorkspaceView, { title: string; description: string }> = {
-    project: { title: "Project structure", description: "Configuration and harness targets" },
-    rules: { title: "Rule library", description: "Repository and shared instructions" },
-    layers: { title: "Layer catalog", description: "Selectable instruction variants" },
-    agents: { title: "Agent profiles", description: "Reusable subagent definitions" },
-    skills: { title: "Project skills", description: "Installed capabilities" },
-    generated: { title: "Output files", description: "Generated harness content" },
+/** New-item actions exposed below workspace trees. */
+const NEW_ACTION_BY_VIEW: Partial<Record<WorkspaceView, { label: string; selection: Selection }>> = {
+    rules: { label: "Add rule", selection: { kind: "rule-new", scope: "root" } },
+    "shared-rules": { label: "Add shared rule", selection: { kind: "rule-new", scope: "shared" } },
+    "layer-editor": { label: "Add layer", selection: { kind: "layer-new" } },
+    agents: { label: "Add agent", selection: { kind: "agent-new" } },
 };
+
+/** Internal Collapse key reserved for the unsaved Layer group draft. */
+const NEW_LAYER_DRAFT_KEY = "__new-layer-draft__";
 
 /** Available insertion gaps around a rule row. */
 type RuleDropPosition = "before" | "after";
@@ -170,12 +171,16 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                     disabled={Boolean(disabled)}
                     onClick={onClick}
                     className="workspace-tree-button"
+                    styles={{
+                        root: { paddingInline: 12, paddingLeft: indent ? 30 : 12, textAlign: "left" },
+                        content: { flex: 1, minWidth: 0, overflow: "hidden", textAlign: "start", textOverflow: "ellipsis" },
+                    }}
                 >
                     {label}
                 </Button>
             )}
             {isDirty ? (
-                <Badge status="processing" title="Unsaved changes" aria-label="Unsaved changes" />
+                <Badge className="workspace-tree-dirty" status="processing" title="Unsaved changes" aria-label="Unsaved changes" />
             ) : null}
         </div>
     );
@@ -253,7 +258,7 @@ async function persistRuleOrder(workspace: Workspace, rules: readonly RuleInput[
 }
 
 /** Rename one layer option through the cascade-aware engine operation. */
-async function renameLayerOptionFromTree(workspace: Workspace, option: LayerOption, name: string): Promise<boolean>
+async function renameLayerOptionFromTree(option: LayerOption, name: string): Promise<boolean>
 {
     const nextName = name.trim().toLowerCase().endsWith(".md") ? name.trim().slice(0, -3) : name.trim();
     const result = await runMutation(async () =>
@@ -262,20 +267,6 @@ async function renameLayerOptionFromTree(workspace: Workspace, option: LayerOpti
         await refreshWorkspace({ kind: "layer-option", path: nextPath });
     });
     if (result.ok) showSuccess(`Renamed to ${nextName}.md`);
-    return result.ok;
-}
-
-/** Rename one catalog layer and keep editor drafts under the new name. */
-async function renameLayerFromTree(workspace: Workspace, from: string, to: string): Promise<boolean>
-{
-    const nextName = to.trim().toLowerCase().endsWith(".md") ? to.trim().slice(0, -3) : to.trim();
-    if (nextName === from) return true;
-    const result = await runMutation(async () =>
-    {
-        await persistLayerRename(from, nextName);
-        await refreshWorkspace({ kind: "layer", name: nextName });
-    });
-    if (result.ok) showSuccess(`Renamed layer to ${nextName}`);
     return result.ok;
 }
 
@@ -308,45 +299,164 @@ async function renameAgentFromTree(workspace: Workspace, path: string, name: str
     return result.ok;
 }
 
-/** Props for a tree section heading. */
-interface SectionProps
-{
-    title: string;
-    disabled?: boolean;
-    active?: boolean;
-    onClick?: () => void;
-    onNew?: () => void;
-}
-
-/** Tree section heading with an optional New action and optional selection. */
-function Section({ title, disabled, active, onClick, onNew }: SectionProps)
-{
-    return (
-        <div className="workspace-tree-section" data-active={active || undefined}>
-            {onClick ? (
-                <Button
-                    type="text"
-                    block
-                    disabled={Boolean(disabled)}
-                    onClick={onClick}
-                    className="workspace-tree-section-button"
-                >
-                    {title}
-                </Button>
-            ) : (
-                <Typography.Text strong>{title}</Typography.Text>
-            )}
-            {onNew ? (
-                <Button size="small" type="text" disabled={Boolean(disabled)} aria-label="New" icon={<PlusOutlined />} onClick={onNew} />
-            ) : null}
-        </div>
-    );
-}
-
 /** Props for the navigation tree of one workspace module. */
 export interface WorkspaceTreeProps
 {
     view: WorkspaceView;
+}
+
+/** Props for the compact Layer group action popover. */
+interface LayerGroupEditorProps
+{
+    name: string;
+    isBusy: boolean;
+    onAddOption: () => void;
+}
+
+/** Edit one Layer group without replacing the option editor. */
+function LayerGroupEditor({ name, isBusy, onAddOption }: LayerGroupEditorProps)
+{
+    const [isOpen, setIsOpen] = useState(false);
+    const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+    const [isRenaming, setIsRenaming] = useState(false);
+    const [nextName, setNextName] = useState(name);
+
+    /** Persist a changed Layer name and keep any selected option active. */
+    const handleRename = async (): Promise<void> =>
+    {
+        const trimmed = nextName.trim();
+        if (!trimmed || trimmed === name)
+        {
+            setNextName(name);
+            setIsOpen(false);
+            return;
+        }
+        setIsRenaming(true);
+        const result = await runMutation(async () =>
+        {
+            await persistLayerRename(name, trimmed);
+            await refreshWorkspace();
+        });
+        setIsRenaming(false);
+        if (result.ok)
+        {
+            setIsOpen(false);
+            showSuccess(`Renamed layer to ${trimmed}`);
+        }
+    };
+
+    /** Permanently remove the Layer and its related editor drafts. */
+    const handleDelete = async (): Promise<void> =>
+    {
+        const result = await runMutation(async () =>
+        {
+            await window.appApi.workspace.removeLayer(name);
+            const state = useAppStore.getState();
+            const optionPrefix = `layer-option:.halign/layers/${name}/`;
+            const newOptionKey = selectionKey({ kind: "layer-option-new", layer: name });
+            const layerKey = selectionKey({ kind: "layer", name });
+            for (const key of Object.keys(state.editorDrafts))
+            {
+                if (key === layerKey || key === newOptionKey || key.startsWith(optionPrefix)) state.clearEditorDraft(key);
+            }
+            state.setLayerSelection(state.layerSelection.filter((item) => item.name !== name));
+            await refreshWorkspace();
+        });
+        if (result.ok)
+        {
+            setIsDeleteOpen(false);
+            showSuccess(`Deleted layer ${name}`);
+        }
+    };
+
+    const content = (
+        <div className="workspace-layer-popover" onClick={(event) => event.stopPropagation()}>
+            <form
+                className="workspace-layer-rename"
+                onSubmit={(event) =>
+                {
+                    event.preventDefault();
+                    void handleRename();
+                }}
+            >
+                <Input className="workspace-layer-rename-input" autoFocus value={nextName} disabled={isBusy || isRenaming} aria-label="Layer name" onChange={(event) => setNextName(event.currentTarget.value)} />
+                <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={isRenaming} disabled={isBusy || !nextName.trim()} aria-label="Save layer name" />
+            </form>
+            <div className="workspace-layer-popover-actions">
+                <Button
+                    type="text"
+                    block
+                    icon={<PlusOutlined />}
+                    disabled={isBusy}
+                    styles={{ root: { justifyContent: "flex-start" } }}
+                    onClick={() =>
+                    {
+                        setIsOpen(false);
+                        onAddOption();
+                    }}
+                >
+                    Add option
+                </Button>
+                <Divider styles={{ root: { margin: "4px 0" } }} />
+                <Button
+                    type="text"
+                    danger
+                    block
+                    icon={<DeleteOutlined />}
+                    disabled={isBusy}
+                    styles={{ root: { justifyContent: "flex-start" } }}
+                    onClick={() =>
+                    {
+                        setIsOpen(false);
+                        setIsDeleteOpen(true);
+                    }}
+                >
+                    Delete layer
+                </Button>
+            </div>
+        </div>
+    );
+
+    return (
+        <>
+            <span onClick={(event) => event.stopPropagation()}>
+                <Popover
+                    arrow={false}
+                    placement="rightTop"
+                    trigger="click"
+                    open={isOpen}
+                    content={content}
+                    destroyOnHidden
+                    styles={{ container: { padding: 10 } }}
+                    onOpenChange={(open) =>
+                    {
+                        setNextName(name);
+                        setIsOpen(open);
+                    }}
+                >
+                    <Button
+                        type="text"
+                        size="small"
+                        icon={<EditOutlined />}
+                        disabled={isBusy}
+                        title="Edit layer"
+                        aria-label={`Edit ${name}`}
+                    />
+                </Popover>
+            </span>
+            <Modal
+                open={isDeleteOpen}
+                title={`Delete layer ${name}?`}
+                okText="Delete"
+                okType="danger"
+                confirmLoading={isBusy}
+                onCancel={() => setIsDeleteOpen(false)}
+                onOk={() => void handleDelete()}
+            >
+                <Typography.Text>This permanently removes .halign/layers/{name}/ and every option inside it.</Typography.Text>
+            </Modal>
+        </>
+    );
 }
 
 /** Contextual tree for Project, Rules, Layers, Agents, or Generated. */
@@ -359,70 +469,143 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
     const editorDrafts = useAppStore((state) => state.editorDrafts);
     const [draggedRulePath, setDraggedRulePath] = useState<string>();
     const [ruleDropTarget, setRuleDropTarget] = useState<RuleDropTarget>();
+    const selectedLayerName = selection.kind === "layer" ? selection.name
+        : selection.kind === "layer-option-new" ? selection.layer
+            : selection.kind === "layer-option" ? Object.values(workspace?.layerOptions ?? {}).flat().find((option) => option.path === selection.path)?.layer
+                : undefined;
+    const [openLayerNames, setOpenLayerNames] = useState<string[]>(selectedLayerName ? [selectedLayerName] : []);
+
+    useEffect(() =>
+    {
+        if (!selectedLayerName) return;
+        setOpenLayerNames((current) => current.includes(selectedLayerName) ? current : [...current, selectedLayerName]);
+    }, [selectedLayerName]);
 
     if (!workspace) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No project open" />;
     const rootRuleTabs = sortRuleTabs(workspace.rootRules);
-    const copy = TREE_COPY[view];
+    const newAction = NEW_ACTION_BY_VIEW[view];
+    const layerItems: NonNullable<CollapseProps["items"]> = catalogLayerNames(workspace).map((layerName) =>
+    {
+        const options = workspace.layerOptions[layerName] ?? [];
+        const selectedOption = workspace.config.layers.find((layer) => layer.name === layerName)?.selected;
+        const layerSelection: Selection = { kind: "layer", name: layerName };
+        const isLayerActive = selection.kind === "layer" && selection.name === layerName;
+        const newOptionSelection: Selection = { kind: "layer-option-new", layer: layerName };
+        const hasNewOptionDraft = Boolean(editorDrafts[selectionKey(newOptionSelection)]);
+        return {
+            key: layerName,
+            label: (
+                <span className="workspace-layer-group-title" data-active={isLayerActive || undefined}>
+                    <span>{layerName}</span>
+                    <Typography.Text type="secondary" className="workspace-layer-group-count">{options.length}</Typography.Text>
+                    {editorDrafts[selectionKey(layerSelection)] ? <Badge status="processing" title="Unsaved changes" aria-label="Unsaved changes" /> : null}
+                </span>
+            ),
+            extra: (
+                <span className="workspace-layer-group-actions">
+                    <Tooltip title="Add option">
+                        <Button
+                            type="text"
+                            size="small"
+                            icon={<PlusOutlined />}
+                            disabled={isBusy}
+                            aria-label={`Add option to ${layerName}`}
+                            onClick={(event) =>
+                            {
+                                event.stopPropagation();
+                                setOpenLayerNames((current) => current.includes(layerName) ? current : [...current, layerName]);
+                                setSelection(newOptionSelection);
+                            }}
+                        />
+                    </Tooltip>
+                    <LayerGroupEditor
+                        name={layerName}
+                        isBusy={isBusy}
+                        onAddOption={() =>
+                        {
+                            setOpenLayerNames((current) => current.includes(layerName) ? current : [...current, layerName]);
+                            setSelection(newOptionSelection);
+                        }}
+                    />
+                </span>
+            ),
+            classNames: { header: "workspace-layer-group-header", body: "workspace-layer-group-body" },
+            styles: {
+                header: { minHeight: 38, marginBlock: 4, padding: "4px 4px 4px 8px", borderRadius: 8, background: "var(--ant-color-fill-quaternary)" },
+                body: { padding: "0 0 6px 12px" },
+            },
+            children: (
+                <div className="workspace-layer-options">
+                    {options.length === 0 && !hasNewOptionDraft ? (
+                        <Typography.Text type="secondary" className="workspace-layer-empty">No options yet</Typography.Text>
+                    ) : null}
+                    {options.map((option) => (
+                        <TreeButton
+                            key={option.path}
+                            label={option.name}
+                            active={selection.kind === "layer-option" && selection.path === option.path}
+                            disabled={isBusy}
+                            selection={{ kind: "layer-option", path: option.path }}
+                            canSave
+                            canDelete={option.name !== selectedOption}
+                            onRename={(name) => renameLayerOptionFromTree(option, name)}
+                            onClick={() => setSelection({ kind: "layer-option", path: option.path })}
+                        />
+                    ))}
+                    {(selection.kind === "layer-option-new" && selection.layer === layerName) || hasNewOptionDraft ? (
+                        <TreeButton
+                            label="new-option"
+                            active={selection.kind === "layer-option-new" && selection.layer === layerName}
+                            disabled={isBusy}
+                            selection={newOptionSelection}
+                            canSave
+                            onClick={() => setSelection(newOptionSelection)}
+                        />
+                    ) : null}
+                </div>
+            ),
+        };
+    });
+    const newLayerSelection: Selection = { kind: "layer-new" };
+    if (selection.kind === "layer-new" || Boolean(editorDrafts[selectionKey(newLayerSelection)]))
+    {
+        layerItems.push({
+            key: NEW_LAYER_DRAFT_KEY,
+            showArrow: false,
+            label: (
+                <Button
+                    type="text"
+                    block
+                    icon={<RightOutlined />}
+                    disabled={isBusy}
+                    onClick={(event) =>
+                    {
+                        event.stopPropagation();
+                        setSelection(newLayerSelection);
+                    }}
+                    className="workspace-layer-draft-button"
+                    styles={{ root: { minHeight: 38, paddingInline: 8, textAlign: "left" }, content: { flex: 1, minWidth: 0 } }}
+                >
+                    <span className="workspace-layer-group-title" data-active={selection.kind === "layer-new" || undefined}>
+                        <span>new-layer</span>
+                        <Typography.Text type="secondary" className="workspace-layer-group-count">0</Typography.Text>
+                        {editorDrafts[selectionKey(newLayerSelection)] ? <Badge status="processing" title="Unsaved changes" aria-label="Unsaved changes" /> : null}
+                    </span>
+                </Button>
+            ),
+            classNames: { header: "workspace-layer-group-header", body: "workspace-layer-group-body" },
+            styles: {
+                header: { minHeight: 38, marginBlock: 4, padding: 0, borderRadius: 8, background: "var(--ant-control-item-bg-active)" },
+                body: { padding: 0 },
+            },
+        });
+    }
 
     return (
         <div className="workspace-tree">
             <div className="workspace-tree-content">
-                <div className="workspace-tree-header">
-                    <Typography.Text className="section-eyebrow">Browse</Typography.Text>
-                    <Typography.Title level={5}>{copy.title}</Typography.Title>
-                    <Typography.Text type="secondary">{copy.description}</Typography.Text>
-                </div>
-                {view === "project" ? (
-                    <>
-                        <Section title="Config" />
-                        <TreeButton
-                            label="config.json"
-                            active={selection.kind === "config"}
-                            disabled={isBusy}
-                            selection={{ kind: "config" }}
-                            canSave
-                            onClick={() => setSelection({ kind: "config" })}
-                        />
-                        <Section title="Harnesses" disabled={isBusy} onNew={() => setSelection({ kind: "harness-new" })} />
-                        {workspace.config.harnesses.map((harness) => (
-                            <TreeButton
-                                key={harness.name}
-                                label={harness.name}
-                                active={selection.kind === "harness" && selection.name === harness.name}
-                                disabled={isBusy}
-                                selection={{ kind: "harness", name: harness.name }}
-                                canSave
-                                canDelete
-                                onClick={() => setSelection({ kind: "harness", name: harness.name })}
-                            />
-                        ))}
-                        {(selection.kind === "harness-new" || Boolean(editorDrafts[selectionKey({ kind: "harness-new" })])) ? (
-                            <TreeButton
-                                label="New harness"
-                                active={selection.kind === "harness-new"}
-                                disabled={isBusy}
-                                selection={{ kind: "harness-new" }}
-                                canSave
-                                onClick={() => setSelection({ kind: "harness-new" })}
-                            />
-                        ) : null}
-                        <Section title="Layers" />
-                        {workspace.config.layers.map((item) => (
-                            <TreeButton
-                                key={item.name}
-                                label={item.name}
-                                active={selection.kind === "layer" && selection.name === item.name}
-                                disabled={isBusy}
-                                selection={{ kind: "layer", name: item.name }}
-                                onClick={() => setSelection({ kind: "layer", name: item.name })}
-                            />
-                        ))}
-                    </>
-                ) : null}
-
                 {view === "rules" ? (
                     <>
-                        <Section title="Rules" disabled={isBusy} onNew={() => setSelection({ kind: "rule-new", scope: "root" })} />
                         {rootRuleTabs.map((rule) => (
                             <TreeButton
                                 key={rule.path}
@@ -477,7 +660,11 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                 onClick={() => setSelection({ kind: "rule-new", scope: "root" })}
                             />
                         ) : null}
-                        <Section title="Shared rules" disabled={isBusy} onNew={() => setSelection({ kind: "rule-new", scope: "shared" })} />
+                    </>
+                ) : null}
+
+                {view === "shared-rules" ? (
+                    <>
                         {workspace.sharedRules.map((rule) => (
                             <TreeButton
                                 key={rule.path}
@@ -504,76 +691,21 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                     </>
                 ) : null}
 
-                {view === "layers" ? (
+                {view === "layer-editor" ? (
                     <>
-                        <Section title="Layers" disabled={isBusy} onNew={() => setSelection({ kind: "layer-new" })} />
-                        {(selection.kind === "layer-new" || Boolean(editorDrafts[selectionKey({ kind: "layer-new" })])) ? (
-                            <TreeButton
-                                label="new-layer"
-                                active={selection.kind === "layer-new"}
-                                disabled={isBusy}
-                                selection={{ kind: "layer-new" }}
-                                canSave
-                                onClick={() => setSelection({ kind: "layer-new" })}
-                            />
-                        ) : null}
-                        {catalogLayerNames(workspace).map((layerName) =>
-                        {
-                            const selected = workspace.config.layers.find((layer) => layer.name === layerName)?.selected;
-                            return (
-                                <div key={layerName}>
-                                    <div className="workspace-tree-layer-row">
-                                        <div className="workspace-tree-layer-main">
-                                            <TreeButton
-                                                label={layerName}
-                                                active={selection.kind === "layer" && selection.name === layerName}
-                                                disabled={isBusy}
-                                                selection={{ kind: "layer", name: layerName }}
-                                                canSave
-                                                canDelete
-                                                onRename={(name) => renameLayerFromTree(workspace, layerName, name)}
-                                                onClick={() => setSelection({ kind: "layer", name: layerName })}
-                                            />
-                                        </div>
-                                        {selection.kind === "layer" && selection.name === layerName ? (
-                                            <Button size="small" type="text" disabled={isBusy} aria-label="New option" icon={<PlusOutlined />} onClick={() => setSelection({ kind: "layer-option-new", layer: layerName })} />
-                                        ) : null}
-                                    </div>
-                                    {(workspace.layerOptions[layerName] ?? []).map((option) => (
-                                        <TreeButton
-                                            key={option.path}
-                                            label={option.name}
-                                            indent
-                                            active={selection.kind === "layer-option" && selection.path === option.path}
-                                            disabled={isBusy}
-                                            selection={{ kind: "layer-option", path: option.path }}
-                                            canSave
-                                            canDelete={option.name !== selected && (workspace.layerOptions[layerName]?.length ?? 0) > 1}
-                                            onRename={(name) => renameLayerOptionFromTree(workspace, option, name)}
-                                            onClick={() => setSelection({ kind: "layer-option", path: option.path })}
-                                        />
-                                    ))}
-                                    {(selection.kind === "layer-option-new" && selection.layer === layerName)
-                                        || Boolean(editorDrafts[selectionKey({ kind: "layer-option-new", layer: layerName })]) ? (
-                                            <TreeButton
-                                                label="new-option"
-                                                indent
-                                                active={selection.kind === "layer-option-new" && selection.layer === layerName}
-                                                disabled={isBusy}
-                                                selection={{ kind: "layer-option-new", layer: layerName }}
-                                                canSave
-                                                onClick={() => setSelection({ kind: "layer-option-new", layer: layerName })}
-                                            />
-                                        ) : null}
-                                </div>
-                            );
-                        })}
+                        <Collapse
+                            ghost
+                            size="small"
+                            items={layerItems}
+                            activeKey={openLayerNames}
+                            onChange={(keys) => setOpenLayerNames(Array.isArray(keys) ? keys.map(String) : [String(keys)])}
+                            className="workspace-layer-groups"
+                        />
                     </>
                 ) : null}
 
                 {view === "agents" ? (
                     <>
-                        <Section title="Agents" disabled={isBusy} onNew={() => setSelection({ kind: "agent-new" })} />
                         {workspace.agents.map((agent) => (
                             <TreeButton
                                 key={agent.path}
@@ -602,7 +734,6 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
                 {view === "generated" ? (
                     <>
-                        <Section title="Files" />
                         {workspace.generatedFiles.length === 0 ? (
                             <Typography.Text type="secondary" className="workspace-tree-empty">No generated files.</Typography.Text>
                         ) : workspace.generatedFiles.map((file) => (
@@ -615,6 +746,19 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                             />
                         ))}
                     </>
+                ) : null}
+                {newAction ? (
+                    <div className="workspace-tree-create">
+                        <Button
+                            block
+                            type="dashed"
+                            disabled={isBusy}
+                            icon={<PlusOutlined />}
+                            onClick={() => setSelection(newAction.selection)}
+                        >
+                            {newAction.label}
+                        </Button>
+                    </div>
                 ) : null}
             </div>
         </div>

@@ -63,7 +63,7 @@ export interface RuleInput
 {
     path: string;
     priority: number;
-    targets?: string[];
+    targets: string[];
     body: string;
 }
 
@@ -71,7 +71,7 @@ export interface RuleInput
 export interface LayerOptionInput
 {
     path: string;
-    targets?: string[];
+    targets: string[];
     body: string;
 }
 
@@ -163,11 +163,10 @@ function serializeFrontmatter(metadata: Record<string, unknown>, body: string, p
     return Buffer.from(`---\n${yamlText}\n---\n\n${markdown}`, "utf8");
 }
 
-/** Serialize optional layer targets plus a possibly empty Markdown body. */
-function serializeLayerOption(targets: string[] | undefined, body: string): Buffer
+/** Serialize layer targets plus a possibly empty Markdown body. */
+function serializeLayerOption(targets: string[], body: string): Buffer
 {
     const markdown = body.trim() ? normalizedBody(body) : "";
-    if (targets === undefined) return Buffer.from(markdown, "utf8");
     const yamlText = stringifyYaml({ targets }, { lineWidth: 0, sortMapEntries: false }).trimEnd();
     return Buffer.from(`---\n${yamlText}\n---\n\n${markdown}`, "utf8");
 }
@@ -241,13 +240,16 @@ function configuredNames(harnesses: HarnessConfig[]): Set<string>
     return new Set(harnesses.map((harness) => harness.name));
 }
 
-/** Validate optional rule targets against configured harness names. */
-function assertTargets(path: string, targets: string[] | undefined, harnesses: HarnessConfig[]): string[] | undefined
+/** Validate a target allowlist against configured harness names. */
+function assertTargets(path: string, targets: string[], harnesses: HarnessConfig[]): string[]
 {
-    if (targets === undefined) return undefined;
-    if (targets.length === 0 || new Set(targets).size !== targets.length)
+    if (!Array.isArray(targets) || targets.some((target) => typeof target !== "string"))
     {
-        throw new HalignError(`${path}: targets must be a non-empty unique array, got ${valueText(targets)}`);
+        throw new HalignError(`${path}: targets must be an array of configured harness names, got ${valueText(targets)}`);
+    }
+    if (new Set(targets).size !== targets.length)
+    {
+        throw new HalignError(`${path}: targets must be a unique array, got ${valueText(targets)}`);
     }
     const configured = configuredNames(harnesses);
     const invalid = targets.find((target) => !configured.has(target));
@@ -359,9 +361,7 @@ export async function saveRule(rootPath: string, input: RuleInput): Promise<void
         throw new HalignError(`${path}: priority must be a non-negative integer, got ${valueText(input.priority)}`);
     }
     const targets = assertTargets(path, input.targets, config.harnesses);
-    const metadata: Record<string, unknown> = { priority: input.priority };
-    if (targets !== undefined) metadata.targets = targets;
-    await writeManaged(root, path, serializeFrontmatter(metadata, input.body, path));
+    await writeManaged(root, path, serializeFrontmatter({ priority: input.priority, targets }, input.body, path));
 }
 
 /** Validate and atomically write a layer option Markdown file. */
@@ -454,16 +454,14 @@ export async function renameSource(rootPath: string, from: string, to: string): 
     await fs.rename(source, destination);
 }
 
-/** Create a layer with its first empty option without adding it to the project selection. */
-export async function addLayer(rootPath: string, name: string, initialOption: string): Promise<Config>
+/** Create an empty catalog layer without adding it to the project selection. */
+export async function addLayer(rootPath: string, name: string): Promise<Config>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
     if (!LAYER_NAME.test(name)) throw new HalignError(`.halign/layers/${name}: layer name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
-    if (!LAYER_NAME.test(initialOption)) throw new HalignError(`.halign/layers/${name}: option name must match ${LAYER_NAME.source}, got ${valueText(initialOption)}`);
     assertWindowsSafeName(name, `.halign/layers/${name}`);
-    assertWindowsSafeName(initialOption, `.halign/layers/${name}`);
     if (catalogHasFoldedName(options, name))
     {
         throw new HalignError(`.halign/layers/${name}: layer already exists, got ${valueText(name)}`);
@@ -474,16 +472,7 @@ export async function addLayer(rootPath: string, name: string, initialOption: st
     if (await lstatIfExists(directory)) throw new HalignError(`${display(root, directory)}: path already exists`);
     await fs.mkdir(layersRoot, { recursive: true });
     await fs.mkdir(directory);
-    try
-    {
-        await atomicWrite(join(directory, `${initialOption}.md`), Buffer.alloc(0));
-        return config;
-    }
-    catch (error)
-    {
-        await fs.rm(directory, { recursive: true, force: true });
-        throw error;
-    }
+    return config;
 }
 
 /** Remove a layer directory and drop it from the project selection when present. */
@@ -569,7 +558,7 @@ export async function addLayerOption(rootPath: string, layer: string, option: st
     await writeManaged(root, `.halign/layers/${layer}/${option}.md`, Buffer.alloc(0));
 }
 
-/** Delete a non-selected layer option while preserving the layer invariant. */
+/** Delete a non-selected layer option, allowing an unconfigured layer to become empty. */
 export async function removeLayerOption(rootPath: string, layer: string, option: string): Promise<void>
 {
     const root = resolve(rootPath);
@@ -579,7 +568,6 @@ export async function removeLayerOption(rootPath: string, layer: string, option:
     const layerConfig = config.layers.find((candidate) => candidate.name === layer);
     const layerOptions = options[layer]!;
     if (!layerOptions.some((candidate) => candidate.name === option)) throw new HalignError(`.halign/layers/${layer}: option does not exist, got ${valueText(option)}`);
-    if (layerOptions.length === 1) throw new HalignError(`.halign/layers/${layer}: the final layer option cannot be removed`);
     if (layerConfig?.selected === option) throw new HalignError(`.halign/config.json: selected layer option cannot be removed, got ${valueText(option)}`);
     const relative = `.halign/layers/${layer}/${option}.md`;
     const path = await resolveManaged(root, relative, relative);
@@ -725,20 +713,7 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
     }
 }
 
-/** Rename a harness and cascade rule targets plus agent metadata keys. */
-export async function renameHarness(rootPath: string, from: string, to: string): Promise<void>
-{
-    const root = resolve(rootPath);
-    const config = await loadConfig(root);
-    const harness = config.harnesses.find((candidate) => candidate.name === from);
-    if (!harness)
-    {
-        throw new HalignError(`.halign/config.json: harness is not configured, got ${valueText(from)}`);
-    }
-    await updateHarness(root, from, { ...harness, name: to });
-}
-
-/** Remove a harness after it is unused by rules and agents. */
+/** Remove a harness and cascade target allowlists plus agent metadata. */
 export async function removeHarness(rootPath: string, name: string): Promise<void>
 {
     const root = resolve(rootPath);
@@ -762,20 +737,12 @@ export async function removeHarness(rootPath: string, name: string): Promise<voi
     for (const rule of rules)
     {
         const targets = rule.targets.filter((target) => target !== name);
-        if (targets.length === 0)
-        {
-            throw new HalignError(`${rule.path}: targets would be empty after removing ${valueText(name)}`);
-        }
         nextRules.push({ ...rule, targets });
     }
     const nextLayerOptions: LayerOptionInput[] = [];
     for (const option of Object.values(layerOptions).flat())
     {
         const targets = option.targets.filter((target) => target !== name);
-        if (targets.length === 0)
-        {
-            throw new HalignError(`${option.path}: targets would be empty after removing ${valueText(name)}`);
-        }
         nextLayerOptions.push({ ...option, targets });
     }
     const nextAgents: Agent[] = [];

@@ -60,10 +60,10 @@ export function registerWorkspaceHandlers(): void
         await workspaceService.renameSource(from, to);
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceAddLayer, (event, name: string, initialOption: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceAddLayer, (event, name: string) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.addLayer(name, initialOption);
+        return workspaceService.addLayer(name);
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceRemoveLayer, (event, name: string) => runIpc(async () =>
@@ -106,12 +106,6 @@ export function registerWorkspaceHandlers(): void
     {
         assertTrusted(event);
         await workspaceService.removeHarness(name);
-    }));
-
-    ipcMain.handle(IPC_CHANNELS.workspaceRenameHarness, (event, from: string, to: string) => runIpc(async () =>
-    {
-        assertTrusted(event);
-        await workspaceService.renameHarness(from, to);
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceUpdateHarness, (event, from: string, harness: HarnessConfig) => runIpc(async () =>

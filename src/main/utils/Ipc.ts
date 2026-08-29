@@ -4,23 +4,13 @@
 
 import type { IpcMainInvokeEvent } from "electron";
 import { HalignError } from "../../engine/Model.js";
-import type { AppError } from "../../shared/models/AppError.js";
 import { isTrustedSender } from "../windows/MainWindow.js";
-
-/** Convert an unknown thrown value into the IPC error DTO. */
-export function toAppError(error: unknown): AppError
-{
-    if (error instanceof HalignError) return { code: "HALIGN", message: error.message };
-    if (error instanceof Error) return { code: "INTERNAL", message: error.message };
-    return { code: "INTERNAL", message: String(error) };
-}
 
 /** Throw an Error that the IPC wrapper can serialize for the renderer. */
 export function fail(error: unknown): never
 {
-    const appError = toAppError(error);
-    const thrown = new Error(appError.message);
-    thrown.name = appError.code;
+    const thrown = new Error(error instanceof Error ? error.message : String(error));
+    thrown.name = error instanceof HalignError ? "HALIGN" : "INTERNAL";
     throw thrown;
 }
 

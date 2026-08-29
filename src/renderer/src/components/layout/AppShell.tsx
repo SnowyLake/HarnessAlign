@@ -1,5 +1,5 @@
 /**
- * Ant Design desktop chrome with horizontal navigation and workspace commands.
+ * Ant Design desktop chrome with sidebar navigation and workspace commands.
  */
 
 import {
@@ -7,10 +7,10 @@ import {
     BuildOutlined,
     CheckCircleOutlined,
     CloudServerOutlined,
+    DeploymentUnitOutlined,
     ExperimentOutlined,
     FileDoneOutlined,
     FileTextOutlined,
-    HomeOutlined,
     RobotOutlined,
     RocketOutlined,
     SaveOutlined,
@@ -19,28 +19,29 @@ import {
 } from "@ant-design/icons";
 import { Badge, Button, Flex, Layout, Menu, Modal, Space, Spin, Tooltip, Typography, type MenuProps } from "antd";
 import { useEffect, useState, type ReactNode } from "react";
-import { useAppStore, visibleView, type AppView } from "@/stores/AppStore";
+import { useAppStore, type AppView, type WorkspaceView } from "@/stores/AppStore";
 
-const { Header, Content } = Layout;
+const { Header, Sider, Content } = Layout;
 
 /** Navigation item shown in the app chrome sidebar. */
 interface NavItem
 {
-    view: AppView;
     label: string;
-    description: string;
     icon: ReactNode;
 }
 
 /** Primary workspace modules shown in the desktop sidebar. */
-const WORKSPACE_NAV_ITEMS: readonly NavItem[] = [
-    { view: "project", label: "Home", description: "Configure harnesses, layers, and skill sources.", icon: <HomeOutlined /> },
-    { view: "rules", label: "Rules", description: "Edit repository and shared instructions.", icon: <FileTextOutlined /> },
-    { view: "layers", label: "Layers", description: "Manage selectable instruction layers.", icon: <AppstoreOutlined /> },
-    { view: "agents", label: "Agents", description: "Define reusable subagent profiles.", icon: <RobotOutlined /> },
-    { view: "skills", label: "Skills", description: "Discover and manage project skills.", icon: <ThunderboltOutlined /> },
-    { view: "generated", label: "Generated", description: "Inspect generated harness output.", icon: <FileDoneOutlined /> },
-];
+const WORKSPACE_NAV_ITEMS: Readonly<Record<WorkspaceView, NavItem>> = {
+    project: { label: "Harnesses", icon: <DeploymentUnitOutlined /> },
+    rules: { label: "Rules", icon: <FileTextOutlined /> },
+    "shared-rules": { label: "Shared rules", icon: <FileTextOutlined /> },
+    "layer-registration": { label: "Layer setup", icon: <AppstoreOutlined /> },
+    "layer-editor": { label: "Layer editor", icon: <AppstoreOutlined /> },
+    agents: { label: "Agents", icon: <RobotOutlined /> },
+    skills: { label: "Skills", icon: <ThunderboltOutlined /> },
+    "skill-registration": { label: "Skill registration", icon: <ThunderboltOutlined /> },
+    generated: { label: "Generated", icon: <FileDoneOutlined /> },
+};
 
 /** Props for the desktop chrome that wraps feature pages and owns header commands. */
 export interface AppShellProps
@@ -59,25 +60,59 @@ export function AppShell({ children, onSave, onGenerate, onCheck, onSetup }: App
     const setView = useAppStore((state) => state.setView);
     const workspace = useAppStore((state) => state.workspace);
     const isBusy = useAppStore((state) => state.isBusy);
-    const dirtyCount = useAppStore((state) => Object.keys(state.editorDrafts).length);
+    const dirtyCount = useAppStore((state) =>
+    {
+        const savedLayers = state.workspace?.config.layers ?? [];
+        const hasLayerChanges = savedLayers.length !== state.layerSelection.length
+            || savedLayers.some((item, index) => item.name !== state.layerSelection[index]?.name || item.selected !== state.layerSelection[index]?.option);
+        return Object.keys(state.editorDrafts).length + (hasLayerChanges ? 1 : 0);
+    });
     const [version, setVersion] = useState("");
     const [isSetupOpen, setIsSetupOpen] = useState(false);
-    const effectiveView = visibleView(view);
-    const currentNav = WORKSPACE_NAV_ITEMS.find((item) => item.view === effectiveView);
-    const pageTitle = currentNav?.label ?? (effectiveView === "settings" ? "Settings" : "Ant Design");
-    const pageDescription = currentNav?.description ?? (effectiveView === "settings" ? "Desktop preferences and local paths." : "Official component showcase.");
-    const pageIcon = currentNav?.icon ?? (effectiveView === "settings" ? <SettingOutlined /> : <ExperimentOutlined />);
-    const primaryItems: MenuProps["items"] = WORKSPACE_NAV_ITEMS.map((item) => ({ key: item.view, icon: item.icon, label: item.label }));
+    const currentNav = view === "settings" || view === "showcase" ? undefined : WORKSPACE_NAV_ITEMS[view];
+    const pageLabel = currentNav?.label ?? (view === "settings" ? "Settings" : "Ant Design");
+    const primaryItems: MenuProps["items"] = [
+        { key: "project", icon: WORKSPACE_NAV_ITEMS.project.icon, label: WORKSPACE_NAV_ITEMS.project.label },
+        {
+            key: "rules-group",
+            icon: WORKSPACE_NAV_ITEMS.rules.icon,
+            label: "Rules",
+            children: [
+                { key: "rules", label: "Inline" },
+                { key: "shared-rules", label: "Shared" },
+            ],
+        },
+        {
+            key: "layers",
+            icon: <AppstoreOutlined />,
+            label: "Layers",
+            children: [
+                { key: "layer-editor", label: "Editor" },
+                { key: "layer-registration", label: "Setup" },
+            ],
+        },
+        { key: "agents", icon: WORKSPACE_NAV_ITEMS.agents.icon, label: WORKSPACE_NAV_ITEMS.agents.label },
+        {
+            key: "skills-group",
+            icon: WORKSPACE_NAV_ITEMS.skills.icon,
+            label: "Skills",
+            children: [
+                { key: "skills", label: "Library" },
+                { key: "skill-registration", label: "Registration" },
+            ],
+        },
+        { key: "generated", icon: WORKSPACE_NAV_ITEMS.generated.icon, label: WORKSPACE_NAV_ITEMS.generated.label },
+    ];
+    const utilityItems: MenuProps["items"] = [
+        ...(import.meta.env.DEV ? [{ key: "showcase", icon: <ExperimentOutlined />, label: "UI Kit" }] : []),
+        { key: "settings", icon: <SettingOutlined />, label: "Settings" },
+    ];
+    const topbarButtonClassNames = { content: "app-topbar-button-label" };
 
     useEffect(() =>
     {
         void window.appApi.app.getVersion().then(setVersion).catch(() => setVersion(""));
     }, []);
-
-    useEffect(() =>
-    {
-        if (visibleView(view) !== view) setView(visibleView(view));
-    }, [view, setView]);
 
     /** Select one known application view from an Ant Design menu. */
     const handleMenuClick: MenuProps["onClick"] = ({ key }) => setView(key as AppView);
@@ -97,40 +132,39 @@ export function AppShell({ children, onSave, onGenerate, onCheck, onSetup }: App
                     <div className="app-workspace-identity">
                         <CloudServerOutlined />
                         <span className="app-workspace-copy">
-                            <Typography.Text strong ellipsis>{workspace?.config.name ?? "Loading workspace"}</Typography.Text>
-                            <Typography.Text type="secondary" ellipsis title={workspace?.root ?? ""}>{workspace ? `${workspace.root}\\.halign` : "Reading local configuration"}</Typography.Text>
+                            <Typography.Text ellipsis title={workspace?.root ?? ""}>{workspace ? `${workspace.root}\\.halign` : "Loading workspace..."}</Typography.Text>
                         </span>
                     </div>
                 </Flex>
                 <Flex align="center" gap={12} wrap={false}>
                     {isBusy ? <Space size={6}><Spin size="small" /><Typography.Text type="secondary">Working...</Typography.Text></Space> : dirtyCount > 0 ? <Badge status="processing" text={`${dirtyCount} unsaved`} /> : null}
                     <Tooltip title="Save all changes (Ctrl+S)">
-                        <Button icon={<SaveOutlined />} disabled={!workspace || isBusy} aria-keyshortcuts="Control+S" onClick={onSave}>Save</Button>
+                        <Button classNames={topbarButtonClassNames} icon={<SaveOutlined />} disabled={!workspace || isBusy} aria-keyshortcuts="Control+S" onClick={onSave}>Save</Button>
                     </Tooltip>
                     <Space.Compact>
-                        <Button icon={<CheckCircleOutlined />} disabled={!workspace || isBusy} onClick={onCheck}>Check</Button>
-                        <Button type="primary" icon={<BuildOutlined />} disabled={!workspace || isBusy} onClick={onGenerate}>Generate</Button>
-                        <Button icon={<RocketOutlined />} disabled={!workspace || isBusy} onClick={() => setIsSetupOpen(true)}>Setup</Button>
+                        <Button classNames={topbarButtonClassNames} icon={<CheckCircleOutlined />} disabled={!workspace || isBusy} onClick={onCheck}>Check</Button>
+                        <Button classNames={topbarButtonClassNames} type="primary" icon={<BuildOutlined />} disabled={!workspace || isBusy} onClick={onGenerate}>Generate</Button>
+                        <Button classNames={topbarButtonClassNames} icon={<RocketOutlined />} disabled={!workspace || isBusy} onClick={() => setIsSetupOpen(true)}>Setup</Button>
                     </Space.Compact>
                 </Flex>
             </Header>
-            <div className="app-navigation">
-                <Menu mode="horizontal" selectedKeys={[effectiveView]} items={primaryItems} onClick={handleMenuClick} />
-                <Space size={4}>
-                    {import.meta.env.DEV ? (
-                        <Button type={effectiveView === "showcase" ? "primary" : "text"} ghost={effectiveView === "showcase"} icon={<ExperimentOutlined />} onClick={() => setView("showcase")}>UI Kit</Button>
-                    ) : null}
-                    <Button type={effectiveView === "settings" ? "primary" : "text"} ghost={effectiveView === "settings"} icon={<SettingOutlined />} onClick={() => setView("settings")}>Settings</Button>
-                </Space>
-            </div>
-            <section className="app-page-header">
-                <span className="app-page-icon">{pageIcon}</span>
-                <div className="app-page-heading">
-                    <Typography.Title level={3}>{pageTitle}</Typography.Title>
-                    <Typography.Text type="secondary">{pageDescription}</Typography.Text>
-                </div>
-            </section>
-            <Content className="app-content" inert={isBusy} aria-busy={isBusy}>{children}</Content>
+            <Layout className="app-workbench" hasSider>
+                <Sider
+                    className="app-sider"
+                    width={200}
+                    theme="light"
+                >
+                    <nav className="app-sider-navigation" aria-label="Application navigation">
+                        <Menu className="app-sider-primary" mode="inline" selectedKeys={[view]} items={primaryItems} onClick={handleMenuClick} />
+                        <div className="app-sider-footer">
+                            <Menu mode="inline" selectedKeys={[view]} items={utilityItems} onClick={handleMenuClick} />
+                        </div>
+                    </nav>
+                </Sider>
+                <Layout className="app-main">
+                    <Content className="app-content" inert={isBusy} aria-busy={isBusy} aria-label={pageLabel}>{children}</Content>
+                </Layout>
+            </Layout>
             <Modal
                 open={isSetupOpen}
                 title="Run Setup?"

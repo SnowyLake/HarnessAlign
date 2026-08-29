@@ -81,7 +81,7 @@
   - `Setup.ts` — 部署到已存在的用户 Harness 根目录, shared-rules 与 skills
   - `Edit.ts` — 校验后写回 `.halign` 源文件; CLI 只调用 `ensureUserWorkspace`, 其他写回 API 供桌面壳与测试使用
   - `Halign.ts` — ESM CLI 入口, 并对测试 re-export 公开 API
-- `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, `SettingsService`, `WorkspaceService`, `SkillRemoteService`.
+- `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, `SettingsService.ts` 模块函数, `WorkspaceService`, `SkillRemoteService`.
 - `src/preload/` 只把 typed `window.appApi` 暴露给 Renderer.
 - `src/renderer/` 是 React UI. 标准界面控件直接使用 Ant Design 官方组件, `components/common/` 只保存 Ant Design 没有对应物的共享领域控件与反馈桥接, `features/` 保存业务界面, `stores/AppStore.ts` 只保存 UI 状态. `showcase` 视图仅开发模式可见.
 - `.agents/skills/antd/SKILL.md` 是本仓库的 Ant Design 开发辅助规则, 面向在仓库工作的 Agent. 它不属于 `.halign/skills/`, 不参与产品的 Skills 发现, 安装或 `setup` 部署.
@@ -118,8 +118,9 @@ CLI:
 
 - `.halign/config.json` 使用版本 `1`, 定义输出标题, 有序 Layer 选择, 非空 Harness 对象列表和可选 `skill_sources`. 每个 Harness 声明 `name`, `config_path`, `agent_format`, `agent_extension`; TOML Harness 还必须声明 `instructions_field`. `config_path` 不能占用 `.agents/shared-rules`, `.agents/skills` 或 `.halign`.
 - `skill_sources` 省略或 `[]` 表示无远端源; 校验后内存中的 `skillSources` 始终是数组; `configDocument` 仅在长度大于 `0` 时写出该键.
-- `.halign/rules/` 中的根 Rule 按 `(priority, repository_relative_path)` 排序, 再按 Harness targets 独立过滤.
-- `.halign/layers/<layer>/<option>.md` 提供可选 Layer 内容; 生成时按 `config.json` 或 `--layer` 覆盖选择一个选项. Layer 允许空文件作为显式 no-op.
+- `.halign/rules/` 中的根 Rule 按 `(priority, repository_relative_path)` 排序, 再按 Harness `targets` 严格白名单过滤; `targets` 省略或为 `[]` 时不对任何 Harness 生效.
+- `.halign/layers/<layer>/<option>.md` 提供可选 Layer 内容; Layer Option 的 `targets` 使用相同的严格白名单语义. Layer 目录可以为空, 但加入 `config.json` 前必须至少存在一个选项. 生成时按 `config.json` 或 `--layer` 覆盖选择一个选项. Layer 允许空文件作为显式 no-op.
+- `Load.ts` 为兼容既有手写源文件, 将缺失的 Rule 或 Layer Option `targets` 规范化为 `[]`; `Edit.ts` 和 Shared DTO 的写入 payload 必须携带显式 `targets` 数组, 写回时保留空数组.
 - `.halign/rules/shared/` 是独立部署的共享规则, 不参与 `AGENTS.md` 渲染, 不出现在生成 manifest 中.
 - `.halign/skills/` 保存项目 Skills 与 `index.json` provenance; 不参与 `AGENTS.md` 渲染, 不出现在生成 manifest 中.
 - `.halign/agents/` 中的 Subagent 共享 Markdown body. 各 Harness 块中的 metadata 没有字段白名单, 由对应格式的序列化器输出. Harness metadata 在公共 `name` 和 `description` 之后合并, 同名字段可以覆盖该 Harness 输出中的公共值.
@@ -129,7 +130,7 @@ CLI:
 - 只删除旧 manifest 记录且本次不再生成的文件. 不删除 manifest 未管理的文件.
 - 所有新文件写入与 stale 删除成功后, 才写入新的 manifest. 若 stale 删除失败, 保留旧 manifest.
 - 写回 `.halign` 源文件必须经 `src/engine/Edit.ts` 先校验再原子写入. 多文件更新不是单一磁盘事务.
-- 重命名 Harness 时级联更新 Rule `targets` 和 Agent `harnesses` 键.
+- Harness 编辑统一走 `updateHarness`; 名称变化时级联更新 Rule 与 Layer Option `targets` 以及 Agent `harnesses` 键, 不保留独立 rename IPC.
 
 ## 部署安全
 

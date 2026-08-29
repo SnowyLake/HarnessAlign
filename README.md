@@ -97,21 +97,21 @@ halign setup --layer soul=kei
 
 ## 桌面应用
 
-桌面应用采用简洁一致的现代界面, 使用顶部工作区命令栏, 横向模块导航, Home 数据概览和业务页主从编辑布局. 蓝色仅用于关键动作, 选中状态和反馈; Markdown 与 JSON 编辑器适合处理长文本和结构化内容.
+桌面应用采用简洁一致的现代界面, 使用顶部工作区命令栏, 固定侧栏导航和业务页主从编辑布局. 蓝色仅用于关键动作, 选中状态和反馈; Markdown 与 JSON 编辑器适合处理长文本和结构化内容.
 
 窗口可以:
 
 - 打开 `%USERPROFILE%\.halign` 这份用户配置.
-- 在 Home 页编辑输出标题, Harness 列表, 以及当前项目选用的 Layer 顺序与选项.
-- 在 Layers 页新建, 修改, 重命名或删除 Layer 及其选项.
-- 在 Rules 页编辑参与 `AGENTS.md` 的根规则, 以及独立部署的 shared-rules.
+- 在 Harnesses 页编辑 Harness 列表, 输出位置和 Subagent 文件格式.
+- 在 Layers 的 Editor 子页面新建, 修改, 重命名或删除 Layer 及其选项. Add Layer 只创建空 Group, Option 通过 Group 操作单独添加; Setup 子页面管理生成顺序与选项.
+- 在 Rules 的 Inline 子页面编辑参与 `AGENTS.md` 的根规则, 在 Shared 子页面编辑独立部署的 shared-rules. Rule 和 Layer Option 的 Targets 都是严格白名单, 未选择任何 Harness 时不会对任何 Harness 生效.
 - 在 Agents 页编辑共享正文, 并在单一 metadata 编辑器中按 Harness 切换各自的原生 metadata.
-- 在 Skills 页从已注册的 GitHub 仓库发现, 下载, 检查或应用更新, 从 `%USERPROFILE%\.agents\skills` 导入, 或移除已安装的项目 Skills.
+- 在 Skills 的 Registration 子页面注册 GitHub 仓库, 在 Library 子页面发现, 下载, 检查或应用更新, 从 `%USERPROFILE%\.agents\skills` 导入, 或移除已安装的项目 Skills.
 - 在 Generated 页查看最近一次生成结果. 不要手工改这些文件.
 - 使用当前未保存的 Layer 选择执行 Generate, Check 和 Setup.
-- 在 Settings 页切换主题, 或打开 `%USERPROFILE%\.halign`.
+- 在 Settings 页设置生成 `AGENTS.md` 的一级标题, 切换主题, 或打开 `%USERPROFILE%\.halign`.
 
-Home 页 Layers 下方可以注册或移除 GitHub skill 仓库地址. 点击顶部 Save 或按 Ctrl+S 后, 所有页面的草稿以及当前 Layer 顺序与选择会统一写回. 编辑树标签的右键 Save 仍只保存该标签, 不绑定 Ctrl+S.
+Settings 页的 `AGENTS.md title` 只控制生成文档的一级标题. 点击顶部 Save 或按 Ctrl+S 后, 所有页面的草稿以及当前 Layer 顺序与选择会统一写回. 编辑树标签的右键 Save 仍只保存该标签, 不绑定 Ctrl+S.
 
 桌面应用不创建 `%USERPROFILE%` 下缺失的 Harness 根目录. Setup 的部署规则与 CLI 相同. Skills 的 GitHub 下载只发生在桌面应用里; CLI 的 `setup` 只复制已经存在于 `.halign/skills/` 的内容.
 
@@ -192,7 +192,7 @@ Layer 字段:
 | `name` | 匹配 `[a-z0-9][a-z0-9_-]*`, 忽略大小写后唯一 | `.halign/layers/<layer>/` 目录名 |
 | `selected` | 匹配 `[a-z0-9][a-z0-9_-]*`, 且必须存在对应 `.md` 文件 | 未传 `--layer` 时使用的项目选择 |
 
-`layers` 可以为空, 表示当前项目未选择任何 Layer. `.halign/layers/<layer>/` 目录构成 Layer 目录, 每个目录必须至少包含一个直接 `.md` 文件. 未写入 `config.json` 的 Layer 目录仍然有效, 只是不参与生成.
+`layers` 可以为空, 表示当前项目未选择任何 Layer. `.halign/layers/<layer>/` 目录构成 Layer 目录, 并允许暂时不包含 Option. 空 Layer 不能加入 Setup; 未写入 `config.json` 的 Layer 目录仍然有效, 只是不参与生成.
 
 Harness 字段:
 
@@ -208,9 +208,9 @@ Harness 字段:
 
 ## 规则, Layer 与 Subagent
 
-公共 Rule 先按 `priority` 排序, 再按每个 Harness 的 `targets` 过滤. 之后每个已选 Layer 按 `config.json` 中的顺序贡献一个选项文件.
+公共 Rule 先按 `priority` 排序, 再按每个 Harness 的 `targets` 严格白名单过滤. 手工源文件省略 `targets` 与写成 `targets: []` 含义相同, 都不对任何 Harness 生效; 要应用到全部 Harness, 必须显式列出所有 Harness 名称. 桌面应用保存时始终写入显式 `targets` 数组. 之后每个已选 Layer 按 `config.json` 中的顺序贡献一个选项文件.
 
-Layer 选项是纯 Markdown, 也可以带只包含可选 `targets` 的 YAML frontmatter. Layer 文件不使用 `priority`, 允许空文件作为显式关闭:
+Layer 选项是纯 Markdown, 也可以带只包含可选 `targets` 的 YAML frontmatter, 并遵循相同的严格白名单语义. Layer 文件不使用 `priority`, 允许空文件作为显式关闭:
 
 ```markdown
 ---
@@ -232,7 +232,7 @@ Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正�
 
 项目 Skills 放在 `.halign/skills/` 下, 每个 skill 一个目录, 并带 `SKILL.md`. `index.json` 记录来源, 不要手工编辑.
 
-桌面应用可以从 Home 页登记的 GitHub 仓库发现并安装 skill, 也可以从 `%USERPROFILE%\.agents\skills` 导入已有目录. CLI 不会联网下载 skill; `halign setup` 只把已经安装到项目里的 skill 覆盖部署到用户目录.
+桌面应用可以从 Skills 的 Registration 子页面登记 GitHub 仓库, 再从 Library 子页面发现并安装 skill, 也可以从 `%USERPROFILE%\.agents\skills` 导入已有目录. CLI 不会联网下载 skill; `halign setup` 只把已经安装到项目里的 skill 覆盖部署到用户目录.
 
 没有项目 Skills, 或 `.halign/skills/` 里只有 `index.json` 时, skills 部署会跳过并视为成功. shared-rules 仍然必需.
 

@@ -7,19 +7,13 @@ import type { ThemeMode } from "@shared/models/AppSettings";
 import type { LayerSelection, Workspace } from "@shared/models/Workspace";
 
 /** Workspace modules available from the primary navigation. */
-export type WorkspaceView = "project" | "rules" | "layers" | "skills" | "agents" | "generated";
+export type WorkspaceView = "project" | "rules" | "shared-rules" | "layer-registration" | "layer-editor" | "skills" | "skill-registration" | "agents" | "generated";
 
 /** Top-level desktop shell view. */
 export type AppView = WorkspaceView | "settings" | "showcase";
 
-/** Map a stored view to the view the chrome may actually show. */
-export function visibleView(view: AppView): AppView
-{
-    return view === "showcase" && !import.meta.env.DEV ? "project" : view;
-}
-
 /** Tone applied to output notifications and the full output dialog. */
-export type OutputTone = "neutral" | "success" | "error";
+export type OutputTone = "success" | "error";
 
 /** Currently selected workspace editor target. */
 export type Selection =
@@ -99,19 +93,24 @@ function selectionMatchesView(view: WorkspaceView, selection: Selection, workspa
     switch (view)
     {
         case "project":
-            return selection.kind === "config"
-                || selection.kind === "harness-new"
+            return selection.kind === "harness-new"
                 || (selection.kind === "harness" && workspace.config.harnesses.some((item) => item.name === selection.name));
         case "rules":
-            return selection.kind === "rule-new"
-                || (selection.kind === "rule" && [...workspace.rootRules, ...workspace.sharedRules].some((item) => item.path === selection.path));
-        case "layers":
+            return (selection.kind === "rule-new" && selection.scope === "root")
+                || (selection.kind === "rule" && workspace.rootRules.some((item) => item.path === selection.path));
+        case "shared-rules":
+            return (selection.kind === "rule-new" && selection.scope === "shared")
+                || (selection.kind === "rule" && workspace.sharedRules.some((item) => item.path === selection.path));
+        case "layer-registration":
+            return true;
+        case "layer-editor":
             return selection.kind === "layer-new"
                 || (selection.kind === "layer" && Object.hasOwn(workspace.layerOptions, selection.name))
                 || (selection.kind === "layer-option-new" && Object.hasOwn(workspace.layerOptions, selection.layer))
                 || (selection.kind === "layer-option" && Object.values(workspace.layerOptions).flat().some((item) => item.path === selection.path));
         case "skills":
-            return selection.kind === "config";
+        case "skill-registration":
+            return true;
         case "agents":
             return selection.kind === "agent-new"
                 || (selection.kind === "agent" && workspace.agents.some((item) => item.path === selection.path));
@@ -129,21 +128,32 @@ function selectionForView(view: WorkspaceView, selection: Selection, workspace: 
     switch (view)
     {
         case "project":
-            return { kind: "config" };
+        {
+            const harness = workspace.config.harnesses[0];
+            return harness ? { kind: "harness", name: harness.name } : { kind: "harness-new" };
+        }
         case "rules":
         {
-            const rule = workspace.rootRules[0] ?? workspace.sharedRules[0];
+            const rule = workspace.rootRules[0];
             return rule ? { kind: "rule", path: rule.path } : { kind: "rule-new", scope: "root" };
         }
-        case "layers":
+        case "shared-rules":
+        {
+            const rule = workspace.sharedRules[0];
+            return rule ? { kind: "rule", path: rule.path } : { kind: "rule-new", scope: "shared" };
+        }
+        case "layer-registration":
+            return selection;
+        case "layer-editor":
         {
             const layer = Object.keys(workspace.layerOptions)[0];
             if (!layer) return { kind: "layer-new" };
             const option = workspace.layerOptions[layer]?.[0];
-            return option ? { kind: "layer-option", path: option.path } : { kind: "layer-option-new", layer };
+            return option ? { kind: "layer-option", path: option.path } : { kind: "layer", name: layer };
         }
         case "skills":
-            return { kind: "config" };
+        case "skill-registration":
+            return selection;
         case "agents":
         {
             const agent = workspace.agents[0];
@@ -204,7 +214,7 @@ interface AppState
     setWorkspace: (workspace: Workspace | undefined) => void;
     setSelection: (selection: Selection) => void;
     setLayerSelection: (selection: LayerSelection[]) => void;
-    setOutput: (output: string, tone?: OutputTone, title?: string) => void;
+    setOutput: (output: string, tone: OutputTone, title: string) => void;
     dismissOutputNotice: () => void;
     setOutputDialogOpen: (isOpen: boolean) => void;
     setIsBusy: (isBusy: boolean) => void;
@@ -213,8 +223,6 @@ interface AppState
     clearEditorDraft: (key: string) => void;
     requestEditorAction: (selection: Selection, action: EditorAction) => void;
     consumeEditorAction: (id: number) => void;
-    beginBusy: () => void;
-    endBusy: () => void;
 }
 
 /** Renderer UI state for workspace modules, settings, and command progress. */
@@ -224,7 +232,7 @@ export const useAppStore = create<AppState>((set) => ({
     selection: { kind: "config" },
     layerSelection: [],
     output: "Loading the user workspace.",
-    outputTone: "neutral",
+    outputTone: "success",
     outputTitle: "Output",
     outputNoticeId: 0,
     isOutputNoticeVisible: false,
@@ -259,7 +267,7 @@ export const useAppStore = create<AppState>((set) => ({
     }),
     setSelection: (selection) => set({ selection }),
     setLayerSelection: (layerSelection) => set({ layerSelection }),
-    setOutput: (output, tone = "neutral", title = "Output") => set((state) => ({
+    setOutput: (output, tone, title) => set((state) => ({
         output,
         outputTone: tone,
         outputTitle: title,
@@ -296,6 +304,4 @@ export const useAppStore = create<AppState>((set) => ({
     consumeEditorAction: (id) => set((state) => ({
         pendingEditorAction: state.pendingEditorAction?.id === id ? undefined : state.pendingEditorAction,
     })),
-    beginBusy: () => set({ isBusy: true }),
-    endBusy: () => set({ isBusy: false }),
 }));

@@ -3,8 +3,8 @@
  */
 
 import { Splitter } from "antd";
-import { ProjectEditor, WorkspaceEditor } from "@/features/workspace/WorkspaceEditor";
-import { SkillsPanel } from "@/features/workspace/SkillsPanel";
+import { HarnessesPanel, LayerRegistrationPanel, WorkspaceEditor } from "@/features/workspace/WorkspaceEditor";
+import { SkillRegistrationPanel, SkillsPanel } from "@/features/workspace/SkillsPanel";
 import { WorkspaceTree } from "@/features/workspace/WorkspaceTree";
 import { selectionKey, useAppStore, type WorkspaceView } from "@/stores/AppStore";
 
@@ -20,11 +20,22 @@ export function WorkspacePage({ view }: WorkspacePageProps)
     const selection = useAppStore((state) => state.selection);
     const workspaceRoot = useAppStore((state) => state.workspace?.root);
 
-    if (view === "project" || view === "skills")
+    if (view === "project" || view === "skills" || view === "skill-registration")
     {
         return (
             <div className="workspace-scroll" key={`${workspaceRoot ?? ""}:${view}`}>
-                <div className="workspace-wide-page">{view === "project" ? <ProjectEditor /> : <SkillsPanel />}</div>
+                <div className="workspace-wide-page">{view === "project" ? <HarnessesPanel /> : view === "skills" ? <SkillsPanel /> : <SkillRegistrationPanel />}</div>
+            </div>
+        );
+    }
+
+    if (view === "layer-registration")
+    {
+        return (
+            <div className="workspace-module-page">
+                <div className="workspace-module-surface">
+                    <LayerRegistrationPanel />
+                </div>
             </div>
         );
     }

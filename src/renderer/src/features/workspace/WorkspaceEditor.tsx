@@ -2,14 +2,14 @@
  * Ant Design workspace editors that preserve native FormData drafts and Main-process path validation.
  */
 
-import { ApiOutlined, AppstoreOutlined, CloseOutlined, DeleteOutlined, FileTextOutlined, HolderOutlined, PlusOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, CloseOutlined, DeleteOutlined, HolderOutlined, PlusOutlined } from "@ant-design/icons";
 import type { HarnessConfig, LayerSelection, Workspace } from "@shared/models/Workspace";
-import { Alert, Button, Card, Checkbox, Col, Empty, Flex, Form, Input, List, Modal, Row, Select, Space, Statistic, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Empty, Flex, Form, Input, Modal, Select, Space, Tabs, Tag, Typography } from "antd";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
 import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { catalogLayerNames, defaultLayerOption, ruleDisplayName } from "@/lib/Utils";
+import { catalogLayerNames, defaultLayerOption, ruleDisplayName, selectableLayerNames } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
 /** Form bindings that preserve drafts and respond to tree commands. */
@@ -129,19 +129,17 @@ async function persistEditorForm(workspace: Workspace, selection: Selection, sna
     showSuccess(result.message);
 }
 
-/** Render a checkbox set for optional harness targets. */
+/** Render the harness allowlist for a rule or layer option. */
 function TargetBoxes({ selected }: { selected: string[] | undefined })
 {
     const workspace = useAppStore((state) => state.workspace);
     return (
-        <Form.Item label={<span>Targets <Typography.Text type="secondary">(none means all)</Typography.Text></span>}>
-            <Flex vertical gap={8}>
-                {(workspace?.config.harnesses ?? []).map((harness) => (
-                    <Checkbox key={harness.name} name="targets" value={harness.name} defaultChecked={selected?.includes(harness.name) ?? false}>
-                        {harness.name}
-                    </Checkbox>
-                ))}
-            </Flex>
+        <Form.Item label="Targets">
+            <Checkbox.Group
+                name="targets"
+                options={(workspace?.config.harnesses ?? []).map((harness) => harness.name)}
+                {...(selected ? { defaultValue: selected } : {})}
+            />
         </Form.Item>
     );
 }
@@ -150,7 +148,7 @@ function TargetBoxes({ selected }: { selected: string[] | undefined })
 function FormError({ message }: { message: string | undefined })
 {
     if (!message) return null;
-    return <Alert type="error" message="Error" description={<span className="pre-wrap">{message}</span>} showIcon />;
+    return <Alert className="editor-alert" type="error" title="Error" description={<span className="pre-wrap">{message}</span>} showIcon />;
 }
 
 /** Render the standard editor name field and optional create button. */
@@ -190,9 +188,10 @@ function DeleteModal({ open, title, description, isBusy, onCancel, onConfirm }: 
     );
 }
 
-/** Render the project title editor backed by config.json. */
-function ConfigForm({ workspace, showTitle = true }: { workspace: Workspace; showTitle?: boolean })
+/** Render the generated AGENTS.md title setting backed by config.json. */
+export function AgentDocumentTitleForm({ workspace }: { workspace: Workspace })
 {
+    const isBusy = useAppStore((state) => state.isBusy);
     const setSelection = useAppStore((state) => state.setSelection);
     const [formError, setFormError] = useState<string>();
     const selection: Selection = { kind: "config" };
@@ -216,17 +215,26 @@ function ConfigForm({ workspace, showTitle = true }: { workspace: Workspace; sho
             }}
         >
             <Form component={false} layout="vertical" requiredMark={false}>
-                {showTitle ? <Typography.Title level={4}>config.json</Typography.Title> : null}
                 <FormError message={formError} />
-                <EditorNameField
-                    value={configName}
-                    isBusy={false}
-                    onChange={(value) =>
-                    {
-                        setConfigName(value);
-                        editor.handleValueChange("name", value);
-                    }}
-                />
+                <Form.Item
+                    label="AGENTS.md title"
+                    extra="Used only as the level-one heading in every generated AGENTS.md file."
+                >
+                    <Space.Compact block>
+                        <Input
+                            name="name"
+                            value={configName}
+                            disabled={isBusy}
+                            onChange={(event) =>
+                            {
+                                const value = event.currentTarget.value;
+                                setConfigName(value);
+                                editor.handleValueChange("name", value);
+                            }}
+                        />
+                        <Button type="primary" htmlType="submit" loading={isBusy}>Save title</Button>
+                    </Space.Compact>
+                </Form.Item>
             </Form>
         </form>
     );
@@ -267,7 +275,7 @@ function HarnessCard({ workspace, harness }: { workspace: Workspace; harness?: H
             >
                 <Card
                     size="small"
-                    title={<Space><Typography.Text strong>{original ? `Harness: ${original}` : "New harness"}</Typography.Text><Tag>{agentFileFormat}</Tag></Space>}
+                    title={<Space><Typography.Text strong>{original ?? "New harness"}</Typography.Text><Tag>{agentFileFormat}</Tag></Space>}
                     extra={original ? <Button type="text" danger icon={<DeleteOutlined />} disabled={isBusy} onClick={() => setIsDeleteOpen(true)}>Delete</Button> : null}
                 >
                     <Form component={false} layout="vertical" requiredMark={false}>
@@ -334,7 +342,7 @@ function HarnessCard({ workspace, harness }: { workspace: Workspace; harness?: H
     );
 }
 
-/** Render the form for creating a layer and its first option. */
+/** Render the form for creating an empty catalog layer. */
 function LayerNewForm({ workspace }: { workspace: Workspace })
 {
     const isBusy = useAppStore((state) => state.isBusy);
@@ -361,7 +369,6 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
             }}
         >
             <Form component={false} layout="vertical" requiredMark={false}>
-                <Typography.Title level={4}>New layer</Typography.Title>
                 <FormError message={formError} />
                 <EditorNameField
                     value={layerName}
@@ -373,94 +380,21 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
                         editor.handleValueChange("name", value);
                     }}
                 />
-                <Form.Item label="Initial option">
-                    <Input name="initialOption" defaultValue={draftText(editor.draft, "initialOption", "")} />
-                </Form.Item>
             </Form>
         </form>
     );
 }
 
-/** Render the form for renaming or deleting one catalog layer. */
-function LayerForm({ workspace, name }: { workspace: Workspace; name: string })
-{
-    const isBusy = useAppStore((state) => state.isBusy);
-    const [formError, setFormError] = useState<string>();
-    const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-    const options = Object.hasOwn(workspace.layerOptions, name) ? workspace.layerOptions[name] ?? [] : [];
-    const selection: Selection = { kind: "layer", name };
-    const editorKey = selectionKey(selection);
-    const editor = useEditorForm(selection, () => setIsDeleteOpen(true));
-    const [layerName, setLayerName] = useState(draftText(editor.draft, "name", name));
-
-    if (options.length === 0) return <MissingEditorEmpty title="No options" description="This layer has no option files." />;
-
-    return (
-        <>
-            <form
-                ref={editor.formRef}
-                className="editor-form"
-                onChange={editor.handleChange}
-                onSubmit={(event) =>
-                {
-                    event.preventDefault();
-                    setFormError(undefined);
-                    void runMutation(() => persistEditorForm(workspace, selection, formSnapshot(event.currentTarget))).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
-                    });
-                }}
-            >
-                <Form component={false} layout="vertical" requiredMark={false}>
-                    <Typography.Title level={4}>Layer</Typography.Title>
-                    <FormError message={formError} />
-                    <EditorNameField
-                        value={layerName}
-                        isBusy={isBusy}
-                        onChange={(value) =>
-                        {
-                            setLayerName(value);
-                            editor.handleValueChange("name", value);
-                        }}
-                    />
-                    <Typography.Text type="secondary">
-                        {options.length === 1 ? "1 option" : `${options.length} options`}. Add this layer to the project from the Home page.
-                    </Typography.Text>
-                </Form>
-            </form>
-            <DeleteModal
-                open={isDeleteOpen}
-                title={`Delete layer ${name}?`}
-                description={`This permanently removes .halign/layers/${name}/ and every option inside it.`}
-                isBusy={isBusy}
-                onCancel={() => setIsDeleteOpen(false)}
-                onConfirm={() =>
-                {
-                    setFormError(undefined);
-                    void runMutation(async () =>
-                    {
-                        await window.appApi.workspace.removeLayer(name);
-                        const state = useAppStore.getState();
-                        state.clearEditorDraft(editorKey);
-                        state.setLayerSelection(state.layerSelection.filter((item) => item.name !== name));
-                        await refreshWorkspace();
-                        showSuccess(`Deleted layer ${name}`);
-                    }).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
-                    });
-                }}
-            />
-        </>
-    );
-}
-
-/** Props for one ordered layer card on the Home page. */
+/** Props for one ordered layer card in the Layers generation panel. */
 interface LayerCardProps
 {
     workspace: Workspace;
     selection: LayerSelection;
+    order: number;
+    canMoveUp: boolean;
+    canMoveDown: boolean;
     isDragging: boolean;
+    onMove: (offset: -1 | 1) => void;
     onDragStart: () => void;
     onDragEnd: () => void;
     onDrop: () => void;
@@ -471,7 +405,7 @@ function NewLayerCard({ workspace, onAdd, onCancel }: { workspace: Workspace; on
 {
     const isBusy = useAppStore((state) => state.isBusy);
     const layerSelection = useAppStore((state) => state.layerSelection);
-    const available = catalogLayerNames(workspace).filter((name) => !layerSelection.some((item) => item.name === name));
+    const available = selectableLayerNames(workspace).filter((name) => !layerSelection.some((item) => item.name === name));
 
     return (
         <Card size="small" title="Add layer" extra={<Button type="text" icon={<CloseOutlined />} aria-label="Cancel new layer" onClick={onCancel} />}>
@@ -490,10 +424,9 @@ function NewLayerCard({ workspace, onAdd, onCancel }: { workspace: Workspace; on
 }
 
 /** Render one draggable project layer card with its selected option. */
-function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, onDrop }: LayerCardProps)
+function LayerCard({ workspace, selection, order, canMoveUp, canMoveDown, isDragging, onMove, onDragStart, onDragEnd, onDrop }: LayerCardProps)
 {
     const isBusy = useAppStore((state) => state.isBusy);
-    const setSelection = useAppStore((state) => state.setSelection);
     const setLayerSelection = useAppStore((state) => state.setLayerSelection);
     const [isRemoveOpen, setIsRemoveOpen] = useState(false);
     const options = Object.hasOwn(workspace.layerOptions, selection.name) ? workspace.layerOptions[selection.name] ?? [] : [];
@@ -505,8 +438,14 @@ function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, o
                 className="draggable-card"
                 data-dragging={isDragging || undefined}
                 draggable={!isBusy}
-                title={<Space><HolderOutlined /><span>{selection.name}</span></Space>}
-                extra={<Button type="text" danger icon={<CloseOutlined />} aria-label={`Remove ${selection.name}`} onClick={() => setIsRemoveOpen(true)} />}
+                title={<Space><HolderOutlined title="Drag to reorder" /><Tag color="blue">{order}</Tag><span>{selection.name}</span></Space>}
+                extra={(
+                    <Space.Compact>
+                        <Button type="text" icon={<ArrowUpOutlined />} disabled={isBusy || !canMoveUp} aria-label={`Move ${selection.name} earlier`} onClick={() => onMove(-1)} />
+                        <Button type="text" icon={<ArrowDownOutlined />} disabled={isBusy || !canMoveDown} aria-label={`Move ${selection.name} later`} onClick={() => onMove(1)} />
+                        <Button type="text" danger icon={<CloseOutlined />} disabled={isBusy} aria-label={`Remove ${selection.name}`} onClick={() => setIsRemoveOpen(true)} />
+                    </Space.Compact>
+                )}
                 onDragStart={(event) =>
                 {
                     event.dataTransfer.effectAllowed = "move";
@@ -519,7 +458,6 @@ function LayerCard({ workspace, selection, isDragging, onDragStart, onDragEnd, o
                     event.preventDefault();
                     onDrop();
                 }}
-                onFocusCapture={() => setSelection({ kind: "config" })}
             >
                 <Form layout="vertical" requiredMark={false}>
                     <Form.Item label="Selected option">
@@ -590,7 +528,6 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                 }}
             >
                 <Form component={false} layout="vertical" requiredMark={false}>
-                    <Typography.Title level={4}>{isShared ? "Shared rule" : "Rule"}</Typography.Title>
                     <FormError message={formError} />
                     <EditorNameField
                         value={ruleName}
@@ -606,7 +543,6 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     <Form.Item label="Body">
                         <SourceEditor
                             aria-label={isShared ? "Shared rule body" : "Rule body"}
-                            className="source-editor-large"
                             name="body"
                             language="markdown"
                             defaultValue={draftText(editor.draft, "body", (sharedExisting ?? existing)?.body ?? "# Title\n\nbody\n")}
@@ -652,7 +588,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
         : undefined;
     const layer = selection.kind === "layer-option-new" ? selection.layer : existing?.layer;
     const layerConfig = workspace.config.layers.find((candidate) => candidate.name === layer);
-    const canDelete = Boolean(existing && layerConfig?.selected !== existing.name && (workspace.layerOptions[existing.layer]?.length ?? 0) > 1);
+    const canDelete = Boolean(existing && layerConfig?.selected !== existing.name);
     const editorKey = selectionKey(selection);
     const editor = useEditorForm(selection, canDelete ? () => setIsDeleteOpen(true) : undefined);
     const [optionName, setOptionName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-option"));
@@ -677,7 +613,6 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                 }}
             >
                 <Form component={false} layout="vertical" requiredMark={false}>
-                    <Typography.Title level={4}>Layer option</Typography.Title>
                     <FormError message={formError} />
                     <EditorNameField
                         value={optionName}
@@ -693,7 +628,6 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                     <Form.Item label="Body">
                         <SourceEditor
                             aria-label="Layer option body"
-                            className="source-editor-large"
                             name="body"
                             language="markdown"
                             defaultValue={draftText(editor.draft, "body", existing?.body ?? "")}
@@ -715,7 +649,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                         {
                             await window.appApi.workspace.removeLayerOption(existing.layer, existing.name);
                             useAppStore.getState().clearEditorDraft(editorKey);
-                            await refreshWorkspace();
+                            await refreshWorkspace({ kind: "layer", name: existing.layer });
                             showSuccess(`Deleted ${existing.name}`);
                         }).then((result) =>
                         {
@@ -760,7 +694,6 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                 }}
             >
                 <Form component={false} layout="vertical" requiredMark={false}>
-                    <Typography.Title level={4}>Agent</Typography.Title>
                     <FormError message={formError} />
                     <EditorNameField
                         value={agentName}
@@ -788,7 +721,6 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                                         name={`meta-${harness.name}`}
                                         language="json"
                                         aria-label={`${harness.name} metadata JSON`}
-                                        autoHeight
                                         resizeKey={selectedMetadataName}
                                         defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))}
                                     />
@@ -801,7 +733,6 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                             name="body"
                             language="markdown"
                             aria-label="Agent instructions"
-                            className="source-editor-large"
                             defaultValue={draftText(editor.draft, "body", existing?.body ?? "Instructions.\n")}
                         />
                     </Form.Item>
@@ -840,14 +771,10 @@ function GeneratedFileView({ workspace, path }: { workspace: Workspace; path: st
     const file = workspace.generatedFiles.find((item) => item.path === path);
     if (!file) return <MissingEditorEmpty title="Generated file not found" description="Generate or reload the project to refresh output files." />;
     return (
-        <Space direction="vertical" size="middle" className="full-width">
-            <div>
-                <Typography.Title level={4}>{file.path}</Typography.Title>
-                <Typography.Text type="secondary">.halign/generated/{file.path}</Typography.Text>
-            </div>
+        <Space orientation="vertical" size="middle" className="full-width">
+            <Typography.Text type="secondary">.halign/generated/{file.path}</Typography.Text>
             <SourceEditor
                 aria-label={file.path}
-                className="source-editor-generated"
                 language={file.path.toLowerCase().endsWith(".md") ? "markdown" : "plain"}
                 defaultValue={file.content}
                 readOnly
@@ -865,7 +792,7 @@ function GeneratedEmpty()
 /** Render an empty editor state for a selection that no longer exists. */
 function MissingEditorEmpty({ title, description }: { title: string; description: string })
 {
-    return <Empty description={<Space direction="vertical" size={2}><Typography.Text strong>{title}</Typography.Text><Typography.Text type="secondary">{description}</Typography.Text></Space>} />;
+    return <Empty description={<Space orientation="vertical" size={2}><Typography.Text strong>{title}</Typography.Text><Typography.Text type="secondary">{description}</Typography.Text></Space>} />;
 }
 
 /** Move one layer around the ordered generation selection. */
@@ -882,12 +809,31 @@ function moveLayerSelection(selection: readonly LayerSelection[], sourceName: st
     return next;
 }
 
-/** Render the unified Home page for project identity, harnesses, layers, and skill sources. */
-export function ProjectEditor()
+/** Render the Harnesses page without unrelated project configuration. */
+export function HarnessesPanel()
 {
     const workspace = useAppStore((state) => state.workspace);
     const selection = useAppStore((state) => state.selection);
     const setSelection = useAppStore((state) => state.setSelection);
+    const isBusy = useAppStore((state) => state.isBusy);
+
+    if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
+
+    return (
+        <div className="project-page">
+            <div className="project-harness-grid">
+                {workspace.config.harnesses.map((harness) => <HarnessCard key={harness.name} workspace={workspace} harness={harness} />)}
+                {selection.kind === "harness-new" ? <HarnessCard workspace={workspace} /> : null}
+                <Button block type="dashed" className="project-harness-create" icon={<PlusOutlined />} disabled={isBusy} onClick={() => setSelection({ kind: "harness-new" })}>Add harness</Button>
+            </div>
+        </div>
+    );
+}
+
+/** Render the ordered generation selection on the dedicated registration page. */
+export function LayerRegistrationPanel()
+{
+    const workspace = useAppStore((state) => state.workspace);
     const isBusy = useAppStore((state) => state.isBusy);
     const layerSelection = useAppStore((state) => state.layerSelection);
     const setLayerSelection = useAppStore((state) => state.setLayerSelection);
@@ -895,210 +841,76 @@ export function ProjectEditor()
     const [isAddingLayer, setIsAddingLayer] = useState(false);
 
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
+    const selectableLayers = selectableLayerNames(workspace);
 
     return (
-        <div className="project-page">
-            <Card className="project-overview-card">
-                <Flex justify="space-between" align="center" gap={32} wrap>
-                    <div className="project-overview-copy">
-                        <Typography.Text className="section-eyebrow">Active workspace</Typography.Text>
-                        <Typography.Title level={2}>{workspace.config.name}</Typography.Title>
-                        <Typography.Text type="secondary" ellipsis title={`${workspace.root}\\.halign`}>{`${workspace.root}\\.halign`}</Typography.Text>
-                    </div>
-                    <div className="project-overview-metrics">
-                        <Statistic title="Harnesses" value={workspace.config.harnesses.length} prefix={<ApiOutlined />} />
-                        <Statistic title="Active layers" value={layerSelection.length} prefix={<AppstoreOutlined />} />
-                        <Statistic title="Rules" value={workspace.rootRules.length + workspace.sharedRules.length} prefix={<FileTextOutlined />} />
-                        <Statistic title="Skills" value={workspace.skills.length} prefix={<ThunderboltOutlined />} />
-                    </div>
-                </Flex>
-            </Card>
-            <Row gutter={[16, 16]} align="stretch">
-                <Col xs={24} xl={8}>
-                    <Card title="Project identity" extra={<Typography.Text type="secondary">config.json</Typography.Text>} className="project-section-card">
-                        <Typography.Paragraph type="secondary">The name used in generated instruction headers.</Typography.Paragraph>
-                        <ConfigForm workspace={workspace} showTitle={false} />
-                    </Card>
-                </Col>
-                <Col xs={24} xl={16}>
-                    <Card
-                        title="Generation layers"
-                        className="project-section-card"
-                        extra={(
-                            <Button
-                                type="link"
-                                icon={<PlusOutlined />}
-                                disabled={isBusy || isAddingLayer || catalogLayerNames(workspace).every((name) => layerSelection.some((item) => item.name === name))}
-                                onClick={() => setIsAddingLayer(true)}
-                            >
-                                Add layer
-                            </Button>
-                        )}
-                    >
-                        <Typography.Paragraph type="secondary">Choose one option per layer. Drag cards to control generation order.</Typography.Paragraph>
-                        <div className="project-layer-grid">
-                            {layerSelection.map((layer) => (
-                                <LayerCard
-                                    key={layer.name}
-                                    workspace={workspace}
-                                    selection={layer}
-                                    isDragging={draggedLayer === layer.name}
-                                    onDragStart={() =>
-                                    {
-                                        setSelection({ kind: "config" });
-                                        setDraggedLayer(layer.name);
-                                    }}
-                                    onDragEnd={() => setDraggedLayer(undefined)}
-                                    onDrop={() =>
-                                    {
-                                        if (!draggedLayer || draggedLayer === layer.name) return;
-                                        setLayerSelection(moveLayerSelection(useAppStore.getState().layerSelection, draggedLayer, layer.name));
-                                        setDraggedLayer(undefined);
-                                    }}
-                                />
-                            ))}
-                            {isAddingLayer ? (
-                                <NewLayerCard
-                                    workspace={workspace}
-                                    onCancel={() => setIsAddingLayer(false)}
-                                    onAdd={(name) =>
-                                    {
-                                        const option = defaultLayerOption(workspace, name);
-                                        if (!option) return;
-                                        setLayerSelection([...useAppStore.getState().layerSelection, { name, option }]);
-                                        setIsAddingLayer(false);
-                                    }}
-                                />
-                            ) : null}
-                            {catalogLayerNames(workspace).length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Create a layer on the Layers page, then add it here" /> : null}
-                        </div>
-                    </Card>
-                </Col>
-            </Row>
-            <Card
-                title="Harness targets"
-                extra={<Button type="link" icon={<PlusOutlined />} disabled={isBusy} onClick={() => setSelection({ kind: "harness-new" })}>Add harness</Button>}
-            >
-                <Typography.Paragraph type="secondary">Each harness defines its output location and agent metadata format.</Typography.Paragraph>
-                <div className="project-harness-grid">
-                    {workspace.config.harnesses.map((harness) => <HarnessCard key={harness.name} workspace={workspace} harness={harness} />)}
-                    {selection.kind === "harness-new" ? <HarnessCard workspace={workspace} /> : null}
+        <section className="layer-selection-panel">
+            <div className="layer-selection-header">
+                <div>
+                    <Typography.Title level={5}>Layer sequence</Typography.Title>
+                    <Typography.Text type="secondary">Applied from top to bottom.</Typography.Text>
                 </div>
-            </Card>
-            <SkillsSourcesSection workspace={workspace} />
-        </div>
-    );
-}
-
-/** Render GitHub skill source registration on the Home page. */
-function SkillsSourcesSection({ workspace }: { workspace: Workspace })
-{
-    const isBusy = useAppStore((state) => state.isBusy);
-    const [isAdding, setIsAdding] = useState(false);
-    const [formError, setFormError] = useState<string>();
-
-    return (
-        <Card
-            title="Skill sources"
-            extra={<Button type="text" icon={<PlusOutlined />} disabled={isBusy || isAdding} onClick={() => setIsAdding(true)}>Add source</Button>}
-        >
-            <Typography.Paragraph type="secondary">Register GitHub repositories used by the Skills page for discovery and download.</Typography.Paragraph>
-            <FormError message={formError} />
-            <List
-                locale={{ emptyText: "No skill sources registered" }}
-                dataSource={workspace.config.skillSources}
-                renderItem={(source) => (
-                    <List.Item
-                        actions={[
-                            <Button
-                                key="remove"
-                                type="text"
-                                danger
-                                icon={<DeleteOutlined />}
-                                disabled={isBusy}
-                                onClick={() =>
-                                {
-                                    setFormError(undefined);
-                                    void runMutation(async () =>
-                                    {
-                                        await window.appApi.workspace.removeSkillSource(source.owner, source.name);
-                                        await refreshWorkspace({ kind: "config" });
-                                        showSuccess("Skill source removed");
-                                    }).then((result) =>
-                                    {
-                                        if (!result.ok) setFormError(result.message);
-                                    });
-                                }}
-                            >
-                                Remove
-                            </Button>,
-                        ]}
-                    >
-                        <List.Item.Meta title={`https://github.com/${source.owner}/${source.name}`} description={`Branch: ${source.branch}`} />
-                    </List.Item>
-                )}
-            />
-            {isAdding ? (
-                <NewSkillSourceForm
-                    onCancel={() => setIsAdding(false)}
-                    onError={setFormError}
-                    onAdded={() =>
-                    {
-                        setFormError(undefined);
-                        setIsAdding(false);
-                    }}
-                />
-            ) : null}
-        </Card>
-    );
-}
-
-/** Render the compact form for registering one GitHub skill source. */
-function NewSkillSourceForm({ onAdded, onCancel, onError }: {
-    onAdded: () => void;
-    onCancel: () => void;
-    onError: (message: string | undefined) => void;
-})
-{
-    const isBusy = useAppStore((state) => state.isBusy);
-    const [url, setUrl] = useState("");
-    const [branch, setBranch] = useState("");
-
-    return (
-        <form
-            onSubmit={(event) =>
-            {
-                event.preventDefault();
-                onError(undefined);
-                void runMutation(async () =>
-                {
-                    const input = branch.trim() ? { url: url.trim(), branch: branch.trim() } : { url: url.trim() };
-                    await window.appApi.workspace.addSkillSource(input);
-                    await refreshWorkspace({ kind: "config" });
-                    showSuccess("Skill source added");
-                    onAdded();
-                }).then((result) =>
-                {
-                    if (!result.ok) onError(result.message);
-                });
-            }}
-        >
-            <Card
-                size="small"
-                title="New skill source"
-                extra={<Button type="text" icon={<CloseOutlined />} disabled={isBusy} aria-label="Cancel new skill source" onClick={onCancel} />}
-            >
-                <Form component={false} layout="vertical" requiredMark={false}>
-                    <Form.Item label="Repository URL">
-                        <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repo" disabled={isBusy} />
-                    </Form.Item>
-                    <Form.Item label="Branch (optional)">
-                        <Input value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" disabled={isBusy} />
-                    </Form.Item>
-                    <Button type="primary" htmlType="submit" disabled={isBusy || !url.trim()}>Add source</Button>
-                </Form>
-            </Card>
-        </form>
+                <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    disabled={isBusy || isAddingLayer || selectableLayers.every((name) => layerSelection.some((item) => item.name === name))}
+                    onClick={() => setIsAddingLayer(true)}
+                >
+                    Add
+                </Button>
+            </div>
+            <div className="layer-selection-content">
+                <div className="project-layer-grid">
+                    {layerSelection.map((layer, index) => (
+                        <LayerCard
+                            key={layer.name}
+                            workspace={workspace}
+                            selection={layer}
+                            order={index + 1}
+                            canMoveUp={index > 0}
+                            canMoveDown={index < layerSelection.length - 1}
+                            isDragging={draggedLayer === layer.name}
+                            onMove={(offset) =>
+                            {
+                                const current = useAppStore.getState().layerSelection;
+                                const currentIndex = current.findIndex((item) => item.name === layer.name);
+                                const target = current[currentIndex + offset];
+                                if (target) setLayerSelection(moveLayerSelection(current, layer.name, target.name));
+                            }}
+                            onDragStart={() => setDraggedLayer(layer.name)}
+                            onDragEnd={() => setDraggedLayer(undefined)}
+                            onDrop={() =>
+                            {
+                                if (!draggedLayer || draggedLayer === layer.name) return;
+                                setLayerSelection(moveLayerSelection(useAppStore.getState().layerSelection, draggedLayer, layer.name));
+                                setDraggedLayer(undefined);
+                            }}
+                        />
+                    ))}
+                    {isAddingLayer ? (
+                        <NewLayerCard
+                            workspace={workspace}
+                            onCancel={() => setIsAddingLayer(false)}
+                            onAdd={(name) =>
+                            {
+                                const option = defaultLayerOption(workspace, name);
+                                if (!option) return;
+                                setLayerSelection([...useAppStore.getState().layerSelection, { name, option }]);
+                                setIsAddingLayer(false);
+                            }}
+                        />
+                    ) : null}
+                    {!isAddingLayer && layerSelection.length === 0 ? (
+                        <Empty
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            description={catalogLayerNames(workspace).length === 0
+                                ? "Create a catalog layer first"
+                                : selectableLayers.length === 0 ? "Add an option before using a layer" : "No layers selected"}
+                        />
+                    ) : null}
+                </div>
+            </div>
+        </section>
     );
 }
 
@@ -1109,15 +921,8 @@ export function WorkspaceEditor()
     const selection = useAppStore((state) => state.selection);
 
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
-    if (selection.kind === "config") return <ConfigForm workspace={workspace} />;
-    if (selection.kind === "harness")
-    {
-        const harness = workspace.config.harnesses.find((item) => item.name === selection.name);
-        return harness ? <HarnessCard workspace={workspace} harness={harness} /> : <MissingEditorEmpty title="Harness not found" description="This harness is no longer in the workspace." />;
-    }
-    if (selection.kind === "harness-new") return <HarnessCard workspace={workspace} />;
     if (selection.kind === "layer-new") return <LayerNewForm workspace={workspace} />;
-    if (selection.kind === "layer") return <LayerForm workspace={workspace} name={selection.name} />;
+    if (selection.kind === "layer") return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Choose an option to edit, or use the Layer edit menu." />;
     if (selection.kind === "layer-option" || selection.kind === "layer-option-new") return <LayerOptionForm workspace={workspace} selection={selection} />;
     if (selection.kind === "rule" || selection.kind === "rule-new") return <RuleForm workspace={workspace} selection={selection} />;
     if (selection.kind === "agent" || selection.kind === "agent-new") return <AgentForm workspace={workspace} selection={selection} />;

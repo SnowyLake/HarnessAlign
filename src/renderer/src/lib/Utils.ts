@@ -47,6 +47,12 @@ export function catalogLayerNames(workspace: Workspace): string[]
     return Object.keys(workspace.layerOptions);
 }
 
+/** Return discovered Layers that currently have at least one selectable option. */
+export function selectableLayerNames(workspace: Workspace): string[]
+{
+    return catalogLayerNames(workspace).filter((name) => (workspace.layerOptions[name]?.length ?? 0) > 0);
+}
+
 /** Return the option a Project card should use when adding an existing Layer. */
 export function defaultLayerOption(workspace: Workspace, name: string): string | undefined
 {

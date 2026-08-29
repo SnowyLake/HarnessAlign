@@ -39,7 +39,7 @@ export interface AppApi
         saveAgent(agent: Agent): Promise<void>;
         deleteSource(path: string): Promise<void>;
         renameSource(from: string, to: string): Promise<void>;
-        addLayer(name: string, initialOption: string): Promise<Config>;
+        addLayer(name: string): Promise<Config>;
         removeLayer(name: string): Promise<Config>;
         renameLayer(from: string, to: string): Promise<Config>;
         addLayerOption(layer: string, option: string): Promise<void>;
@@ -47,7 +47,6 @@ export interface AppApi
         renameLayerOption(layer: string, from: string, to: string): Promise<Config>;
         addHarness(harness: HarnessConfig): Promise<Config>;
         removeHarness(name: string): Promise<void>;
-        renameHarness(from: string, to: string): Promise<void>;
         updateHarness(from: string, harness: HarnessConfig): Promise<Config>;
         addSkillSource(input: { url: string; branch?: string }): Promise<Config>;
         removeSkillSource(owner: string, name: string): Promise<Config>;
