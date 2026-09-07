@@ -307,25 +307,27 @@ select {
     padding: 16px;
 }
 
-.project-layer-grid,
-.project-harness-grid {
+.project-layer-grid {
     display: grid;
     gap: 12px;
-}
-
-.project-layer-grid {
     grid-template-columns: minmax(0, 1fr);
 }
 
-.project-harness-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+.harnesses-title {
+    margin: 0 0 4px;
 }
 
-.project-harness-create {
-    height: 48px;
+.harnesses-table {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--ant-color-border-secondary);
+    border-radius: var(--ant-border-radius-lg);
 }
 
-.project-harness-grid > .editor-form,
+.break-anywhere {
+    overflow-wrap: anywhere;
+}
+
 .project-layer-grid > * {
     min-width: 0;
 }
@@ -612,8 +614,7 @@ select {
 }
 
 @media (max-width: 900px) {
-    .showcase-page,
-    .project-harness-grid {
+    .showcase-page {
         grid-template-columns: 1fr;
     }
 

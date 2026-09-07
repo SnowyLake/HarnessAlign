@@ -2,9 +2,9 @@
  * Ant Design workspace editors that preserve native FormData drafts and Main-process path validation.
  */
 
-import { ArrowDownOutlined, ArrowUpOutlined, CloseOutlined, DeleteOutlined, HolderOutlined, PlusOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, CloseOutlined, DeleteOutlined, EditOutlined, HolderOutlined, PlusOutlined } from "@ant-design/icons";
 import type { HarnessConfig, LayerSelection, Workspace } from "@shared/models/Workspace";
-import { Alert, Button, Card, Checkbox, Empty, Flex, Form, Input, Modal, Select, Space, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Typography } from "antd";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
@@ -240,8 +240,8 @@ export function AgentDocumentTitleForm({ workspace }: { workspace: Workspace })
     );
 }
 
-/** Render one harness editor as an official Ant Design Card. */
-function HarnessCard({ workspace, harness }: { workspace: Workspace; harness?: HarnessConfig })
+/** Edit one harness while retaining unsaved values when its drawer closes. */
+function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; harness?: HarnessConfig | undefined; onDone: () => void })
 {
     const isBusy = useAppStore((state) => state.isBusy);
     const setSelection = useAppStore((state) => state.setSelection);
@@ -261,60 +261,73 @@ function HarnessCard({ workspace, harness }: { workspace: Workspace; harness?: H
             <form
                 ref={editor.formRef}
                 className="editor-form"
+                inert={isBusy}
+                aria-busy={isBusy}
                 onFocusCapture={() => setSelection(selection)}
                 onChange={editor.handleChange}
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
+                    if (isBusy) return;
                     setFormError(undefined);
                     void runMutation(() => persistEditorForm(workspace, selection, formSnapshot(event.currentTarget))).then((result) =>
                     {
                         if (!result.ok) setFormError(result.message);
+                        else onDone();
                     });
                 }}
             >
-                <Card
-                    size="small"
-                    title={<Space><Typography.Text strong>{original ?? "New harness"}</Typography.Text><Tag>{agentFileFormat}</Tag></Space>}
-                    extra={original ? <Button type="text" danger icon={<DeleteOutlined />} disabled={isBusy} onClick={() => setIsDeleteOpen(true)}>Delete</Button> : null}
-                >
-                    <Form component={false} layout="vertical" requiredMark={false}>
-                        <FormError message={formError} />
-                        <Form.Item label="Name">
-                            <Input
-                                name="name"
-                                value={harnessName}
-                                onChange={(event) =>
-                                {
-                                    const value = event.currentTarget.value;
-                                    setHarnessName(value);
-                                    editor.handleValueChange("name", value);
-                                }}
-                            />
+                <Form component={false} layout="vertical" requiredMark={false}>
+                    <FormError message={formError} />
+                    <Form.Item label="Name" htmlFor="harness-name">
+                        <Input
+                            id="harness-name"
+                            name="name"
+                            value={harnessName}
+                            onChange={(event) =>
+                            {
+                                const value = event.currentTarget.value;
+                                setHarnessName(value);
+                                editor.handleValueChange("name", value);
+                            }}
+                        />
+                    </Form.Item>
+                    <Form.Item label="Config path" htmlFor="harness-config-path" extra={<>Relative to <span className="break-anywhere">{workspace.root}</span>. Use / between folders.</>}>
+                        <Input id="harness-config-path" name="configPath" placeholder=".config/opencode" defaultValue={draftText(editor.draft, "configPath", harness?.configPath ?? "")} />
+                    </Form.Item>
+                    <Form.Item label="Agent file format" htmlFor="harness-agent-format">
+                        <input type="hidden" name="agentFileFormat" value={agentFileFormat} />
+                        <Select
+                            id="harness-agent-format"
+                            value={agentFileFormat}
+                            options={[{ label: "Markdown (.md) with YAML metadata", value: "md" }, { label: "TOML (.toml)", value: "toml" }]}
+                            onChange={(value: "toml" | "md") =>
+                            {
+                                setAgentFileFormat(value);
+                                editor.handleValueChange("agentFileFormat", value);
+                            }}
+                        />
+                    </Form.Item>
+                    {agentFileFormat === "toml" ? (
+                        <Form.Item label="Instructions field" htmlFor="harness-instructions" extra="TOML key that stores the shared agent instructions.">
+                            <Input id="harness-instructions" name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", harness?.instructionsField ?? "")} />
                         </Form.Item>
-                        <Form.Item label="Config path">
-                            <Input name="configPath" defaultValue={draftText(editor.draft, "configPath", harness?.configPath ?? "")} />
-                        </Form.Item>
-                        <Form.Item label="Agent file format">
-                            <input type="hidden" name="agentFileFormat" value={agentFileFormat} />
-                            <Select
-                                value={agentFileFormat}
-                                options={[{ label: "md (YAML metadata)", value: "md" }, { label: "toml", value: "toml" }]}
-                                onChange={(value: "toml" | "md") =>
-                                {
-                                    setAgentFileFormat(value);
-                                    editor.handleValueChange("agentFileFormat", value);
-                                }}
-                            />
-                        </Form.Item>
-                        {agentFileFormat === "toml" ? (
-                            <Form.Item label="Instructions field">
-                                <Input name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", harness?.instructionsField ?? "")} />
-                            </Form.Item>
-                        ) : null}
-                        {!original ? <Button type="primary" htmlType="submit" loading={isBusy}>Create harness</Button> : null}
-                    </Form>
-                </Card>
+                    ) : null}
+                    <Typography.Paragraph type="secondary">
+                        {editor.draft ? "Unsaved changes. Closing keeps this draft until you save or discard it." : "Save this harness before running Generate or Setup."}
+                    </Typography.Paragraph>
+                    <Flex justify="space-between" gap={12} wrap>
+                        <Space>
+                            {original ? <Button type="text" danger icon={<DeleteOutlined />} onClick={() => setIsDeleteOpen(true)}>Delete</Button> : null}
+                            {editor.draft ? <Button type="text" onClick={() =>
+                            {
+                                useAppStore.getState().clearEditorDraft(editorKey);
+                                onDone();
+                            }}>Discard changes</Button> : null}
+                        </Space>
+                        <Button type="primary" htmlType="submit" loading={isBusy} disabled={Boolean(original) && !editor.draft}>{original ? "Save harness" : "Create harness"}</Button>
+                    </Flex>
+                </Form>
             </form>
             <DeleteModal
                 open={isDeleteOpen}
@@ -332,6 +345,7 @@ function HarnessCard({ workspace, harness }: { workspace: Workspace; harness?: H
                         useAppStore.getState().clearEditorDraft(editorKey);
                         await refreshWorkspace();
                         showSuccess(`Deleted harness ${original}`);
+                        onDone();
                     }).then((result) =>
                     {
                         if (!result.ok) setFormError(result.message);
@@ -816,16 +830,95 @@ export function HarnessesPanel()
     const selection = useAppStore((state) => state.selection);
     const setSelection = useAppStore((state) => state.setSelection);
     const isBusy = useAppStore((state) => state.isBusy);
+    const drafts = useAppStore((state) => state.editorDrafts);
+    const [isEditorOpen, setIsEditorOpen] = useState(false);
 
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
+    const selectedHarness = selection.kind === "harness" ? workspace.config.harnesses.find((harness) => harness.name === selection.name) : undefined;
+
+    /** Open a single editor without discarding drafts belonging to other harnesses. */
+    const openEditor = (next: Selection): void =>
+    {
+        setSelection(next);
+        setIsEditorOpen(true);
+    };
 
     return (
         <div className="project-page">
-            <div className="project-harness-grid">
-                {workspace.config.harnesses.map((harness) => <HarnessCard key={harness.name} workspace={workspace} harness={harness} />)}
-                {selection.kind === "harness-new" ? <HarnessCard workspace={workspace} /> : null}
-                <Button block type="dashed" className="project-harness-create" icon={<PlusOutlined />} disabled={isBusy} onClick={() => setSelection({ kind: "harness-new" })}>Add harness</Button>
+            <Flex align="center" justify="space-between" gap={16} wrap>
+                <div>
+                    <Typography.Title level={3} className="harnesses-title">Harnesses <Typography.Text type="secondary">({workspace.config.harnesses.length})</Typography.Text></Typography.Title>
+                    <Typography.Text type="secondary">Manage where each coding assistant receives its rules and agents.</Typography.Text>
+                </div>
+                <Button type="primary" icon={<PlusOutlined />} disabled={isBusy} onClick={() => openEditor({ kind: "harness-new" })}>
+                    {drafts["harness-new"] ? "Continue new harness" : "Add harness"}
+                </Button>
+            </Flex>
+            <div className="harnesses-table">
+                <Table<HarnessConfig>
+                    rowKey="name"
+                    size="middle"
+                    pagination={false}
+                    dataSource={workspace.config.harnesses}
+                    scroll={{ x: 640 }}
+                    columns={[
+                        {
+                            title: "Harness",
+                            key: "name",
+                            width: "24%",
+                            render: (_, harness) => (
+                                <Space wrap>
+                                    <Typography.Text strong className="break-anywhere">{harness.name}</Typography.Text>
+                                    {drafts[selectionKey({ kind: "harness", name: harness.name })] ? <Tag color="gold">Unsaved</Tag> : null}
+                                </Space>
+                            ),
+                        },
+                        {
+                            title: "Config path",
+                            key: "path",
+                            render: (_, harness) => <Typography.Text className="break-anywhere">{harness.configPath}</Typography.Text>,
+                        },
+                        {
+                            title: "Agent files",
+                            key: "format",
+                            width: 230,
+                            render: (_, harness) => (
+                                <Space><Tag>.{harness.agentExtension}</Tag><Typography.Text type="secondary">{harness.agentFormat === "toml" ? "TOML" : "YAML metadata"}</Typography.Text></Space>
+                            ),
+                        },
+                        {
+                            title: "Action",
+                            key: "edit",
+                            width: 100,
+                            fixed: "right",
+                            render: (_, harness) => (
+                                <Button
+                                    type="text"
+                                    icon={<EditOutlined />}
+                                    disabled={isBusy}
+                                    aria-label={`Edit ${harness.name}`}
+                                    onClick={() => openEditor({ kind: "harness", name: harness.name })}
+                                >Edit</Button>
+                            ),
+                        },
+                    ]}
+                />
             </div>
+            <Typography.Paragraph type="secondary" className="break-anywhere">
+                Paths are relative to {workspace.root}. Setup updates existing directories and skips missing ones.
+            </Typography.Paragraph>
+            <Drawer
+                title={selectedHarness ? `Edit ${selectedHarness.name}` : "New harness"}
+                open={isEditorOpen}
+                size={480}
+                destroyOnHidden
+                closable={{ disabled: isBusy }}
+                mask={{ closable: !isBusy }}
+                keyboard={!isBusy}
+                onClose={() => setIsEditorOpen(false)}
+            >
+                <HarnessForm key={`${selectionKey(selection)}:${JSON.stringify(selectedHarness)}`} workspace={workspace} harness={selectedHarness} onDone={() => setIsEditorOpen(false)} />
+            </Drawer>
         </div>
     );
 }

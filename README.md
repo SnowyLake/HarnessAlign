@@ -102,7 +102,7 @@ halign setup --layer soul=kei
 窗口可以:
 
 - 打开 `%USERPROFILE%\.halign` 这份用户配置.
-- 在 Harnesses 页编辑 Harness 列表, 输出位置和 Subagent 文件格式.
+- 在 Harnesses 页通过紧凑列表查看名称, 配置路径和 Subagent 文件格式, 点击 Edit 在侧边面板中编辑单个 Harness, 或使用 Add harness 新建. 路径相对当前用户目录, Setup 跳过尚不存在的目标目录.
 - 在 Layers 的 Editor 子页面新建, 修改, 重命名或删除 Layer 及其选项. Add Layer 只创建空 Group, Option 通过 Group 操作单独添加; Setup 子页面管理生成顺序与选项.
 - 在 Rules 的 Inline 子页面编辑参与 `AGENTS.md` 的根规则, 在 Shared 子页面编辑独立部署的 shared-rules. Rule 和 Layer Option 的 Targets 都是严格白名单, 未选择任何 Harness 时不会对任何 Harness 生效.
 - 在 Agents 页编辑共享正文, 并在单一 metadata 编辑器中按 Harness 切换各自的原生 metadata.
@@ -112,6 +112,8 @@ halign setup --layer soul=kei
 - 在 Settings 页设置生成 `AGENTS.md` 的一级标题, 切换主题, 或打开 `%USERPROFILE%\.halign`.
 
 Settings 页的 `AGENTS.md title` 只控制生成文档的一级标题. 点击顶部 Save 或按 Ctrl+S 后, 所有页面的草稿以及当前 Layer 顺序与选择会统一写回. 编辑树标签的右键 Save 仍只保存该标签, 不绑定 Ctrl+S.
+
+Harness 编辑面板的 Save harness 只保存当前项. 关闭面板会保留草稿, 列表用 Unsaved 标记未保存项; Discard changes 放弃当前草稿. 新建草稿关闭后可通过 Continue new harness 继续编辑. 删除操作位于编辑面板内, 并需要再次确认. 保存 Harness 后再运行 Generate 或 Setup.
 
 桌面应用不创建 `%USERPROFILE%` 下缺失的 Harness 根目录. Setup 的部署规则与 CLI 相同. Skills 的 GitHub 下载只发生在桌面应用里; CLI 的 `setup` 只复制已经存在于 `.halign/skills/` 的内容.
 
