@@ -12,6 +12,7 @@ import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { workspaceService } from "../src/main/services/WorkspaceService.js";
+import { uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
 import { discoverSkills, installSkills } from "../src/main/services/SkillRemoteService.js";
 import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
@@ -149,6 +150,86 @@ async function snapshot(root: string): Promise<Map<string, Buffer>>
     await visit(root, "");
     return files;
 }
+
+test("mixed-case names survive editing and generation while folded duplicates remain invalid", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await addLayer(root, "CustomLayer");
+        await addLayerOption(root, "CustomLayer", "DefaultOption");
+        await saveLayerOption(root, { path: ".harness-align/layers/CustomLayer/DefaultOption.md", targets: ["codex"], body: "Mixed case layer." });
+        await saveAgent(root, { path: ".harness-align/agents/MixedAgent.md", name: "MixedAgent", description: "Mixed case agent.", body: "Read evidence.", harnesses: { codex: {} } });
+        const current = await loadConfig(root);
+        await updateHarness(root, "codex", { ...current.harnesses[0]!, name: "Codex" });
+        const outputs = await generate(root, [{ name: "CustomLayer", option: "DefaultOption" }]);
+        assert.match(output(outputs, "Codex/AGENTS.md"), /Mixed case layer\./u);
+        assert.equal(parseToml(output(outputs, "Codex/agents/MixedAgent.toml")).name, "MixedAgent");
+        await assert.rejects(addLayer(root, "customlayer"), /already exists/u);
+        await assert.rejects(addLayerOption(root, "CustomLayer", "defaultoption"), /already exists/u);
+        const updated = await loadConfig(root);
+        await assert.rejects(addHarness(root, { ...updated.harnesses[0]!, name: "codex", configPath: ".other" }), /harness names must be unique/u);
+        await updateHarness(root, "Codex", { ...updated.harnesses[0]!, agentExtension: "TOML", instructionsField: "Instructions" });
+        const uppercaseOutputs = await generate(root);
+        assert.equal(parseToml(output(uppercaseOutputs, "Codex/agents/MixedAgent.TOML")).Instructions, "Read evidence.\n");
+        assert.equal((await loadConfig(root)).harnesses[0]!.agentExtension, "TOML");
+        await assert.rejects(updateHarness(root, "Codex", { ...updated.harnesses[0]!, agentExtension: "../TOML" }), /agent_extension must match/u);
+        await assert.rejects(updateHarness(root, "Codex", { ...updated.harnesses[0]!, instructionsField: "name" }), /instructions_field must match/u);
+        await writeFile(join(root, ".harness-align", "agents", "duplicate.md"), "---\nname: mixedagent\ndescription: Duplicate.\nharnesses:\n  Codex: {}\n---\n\nRead evidence.\n", "utf8");
+        await assert.rejects(buildOutputs(root), /name must be unique without case sensitivity/u);
+    });
+});
+
+test("case-only Layer and option renames preserve disk spelling, selections, and collision protection", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const original = await readFile(join(root, ".harness-align", "layers", "soul", "arona.md"), "utf8");
+        await renameLayer(root, "soul", "Soul");
+        await renameLayerOption(root, "Soul", "arona", "Arona");
+        assert.deepEqual((await loadConfig(root)).layers, [{ name: "Soul", selected: "Arona" }]);
+        assert.deepEqual(await readdir(join(root, ".harness-align", "layers")), ["Soul"]);
+        assert.ok((await readdir(join(root, ".harness-align", "layers", "Soul"))).includes("Arona.md"));
+        assert.equal(await readFile(join(root, ".harness-align", "layers", "Soul", "Arona.md"), "utf8"), original);
+        assert.match(output(await buildOutputs(root), "codex/AGENTS.md"), /arona soul/u);
+        await addLayer(root, "Other");
+        await assert.rejects(renameLayer(root, "Soul", "OTHER"), /unique without case sensitivity/u);
+        await assert.rejects(renameLayerOption(root, "Soul", "Arona", "KEI"), /unique without case sensitivity/u);
+        await renameLayerOption(root, "Soul", "Arona", "arona");
+        await renameLayer(root, "Soul", "soul");
+        assert.deepEqual((await loadConfig(root)).layers, config.layers);
+        assert.ok((await readdir(join(root, ".harness-align", "layers"))).includes("soul"));
+        assert.ok((await readdir(join(root, ".harness-align", "layers", "soul"))).includes("arona.md"));
+    });
+});
+
+test("Agent and Rule case-only renames exclude themselves while protecting other sources", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await saveSharedRule(root, ".harness-align/rules/shared/common.md", "Shared content.");
+        for (const [from, name, agent] of [
+            [".harness-align/rules/base.md", "Base", false],
+            [".harness-align/rules/shared/common.md", "Common", false],
+            [".harness-align/agents/explorer.md", "Explorer", true],
+        ] as const)
+        {
+            const next = agent ? uniqueAgentPath(from, name, [from]) : uniqueRulePath(from, name, [from]);
+            const before = await readFile(join(root, from), "utf8");
+            await renameSource(root, from, next);
+            assert.equal(await readFile(join(root, next), "utf8"), before);
+            const parent = next.slice(0, next.lastIndexOf("/"));
+            assert.ok((await readdir(join(root, parent))).includes(`${name}.md`));
+            const other = `${parent}/other.md`;
+            await writeFile(join(root, other), "Keep me.\n", "utf8");
+            assert.throws(() => agent ? uniqueAgentPath(next, "Other", [next, other]) : uniqueRulePath(next, "Other", [next, other]), /already exists/u);
+            await assert.rejects(renameSource(root, next, other), /destination already exists/u);
+            assert.equal(await readFile(join(root, other), "utf8"), "Keep me.\n");
+            await renameSource(root, next, from);
+            assert.equal(await readFile(join(root, from), "utf8"), before);
+        }
+        assert.throws(() => uniqueAgentPath(undefined, "Explorer", [".harness-align/agents/explorer.md"]), /already exists/u);
+    });
+});
 
 test("config and metadata validation reject unsafe input", async () =>
 {

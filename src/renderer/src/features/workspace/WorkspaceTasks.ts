@@ -137,14 +137,14 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
                     name: snapshotText(snapshot, "name", existing?.name).trim(),
                     configPath: snapshotText(snapshot, "configPath", existing?.configPath).trim(),
                     agentFormat,
-                    agentExtension: agentFileFormat,
+                    agentExtension: existing?.agentFormat === agentFormat ? existing.agentExtension : agentFileFormat,
                     instructionsField: snapshotText(snapshot, "instructionsField", existing?.instructionsField).trim(),
                 }
                 : {
                     name: snapshotText(snapshot, "name", existing?.name).trim(),
                     configPath: snapshotText(snapshot, "configPath", existing?.configPath).trim(),
                     agentFormat,
-                    agentExtension: agentFileFormat,
+                    agentExtension: existing?.agentFormat === agentFormat ? existing.agentExtension : agentFileFormat,
                 };
             if (!existing) await window.appApi.workspace.addHarness(harness);
             else

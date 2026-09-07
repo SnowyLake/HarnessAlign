@@ -6,10 +6,10 @@
 import { promises as fs } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
-import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError, resolveUserHome } from "./FsSafe.js";
+import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, pathKey, reparseError, resolveUserHome } from "./FsSafe.js";
 import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, type SharedRule, validateConfig } from "./Load.js";
 import {
-    AGENT_NAME,
+    IDENTIFIER_NAME,
     type Agent,
     assertWindowsSafeName,
     codePointCompare,
@@ -20,7 +20,6 @@ import {
     HalignError,
     hasOwn,
     isRecord,
-    LAYER_NAME,
     type LayerOption,
     type Metadata,
     normalizedBody,
@@ -144,6 +143,12 @@ async function resolveManaged(root: string, relativePath: string, label: string)
     return path;
 }
 
+/** Reject another existing rename target while allowing the source's own filesystem alias. */
+async function assertRenameDestination(source: string, destination: string, label: string): Promise<void>
+{
+    if (pathKey(source) !== pathKey(destination) && await lstatIfExists(destination)) throw new HalignError(`${label}: destination already exists`);
+}
+
 /** Atomically write a managed source file after reparse checks. */
 async function writeManaged(root: string, relativePath: string, content: Buffer): Promise<void>
 {
@@ -255,7 +260,7 @@ function catalogHasFoldedName(options: Record<string, LayerOption[]>, name: stri
 function layerOptionParts(path: string): { layer: string; option: string }
 {
     const match = /^\.harness-align\/layers\/([^/]+)\/([^/]+)\.md$/u.exec(path);
-    if (!match || !LAYER_NAME.test(match[1]!) || !LAYER_NAME.test(match[2]!))
+    if (!match || !IDENTIFIER_NAME.test(match[1]!) || !IDENTIFIER_NAME.test(match[2]!))
     {
         throw new HalignError(`${path}: layer option path must match .harness-align/layers/<layer>/<option>.md`);
     }
@@ -301,9 +306,9 @@ function assertTargets(path: string, targets: string[], harnesses: HarnessConfig
 function assertAgentInput(agent: Agent, harnesses: HarnessConfig[]): void
 {
     assertAgentPath(agent.path);
-    if (!agent.name.trim() || !AGENT_NAME.test(agent.name))
+    if (!agent.name.trim() || !IDENTIFIER_NAME.test(agent.name))
     {
-        throw new HalignError(`${agent.path}: name must match ${AGENT_NAME.source}, got ${valueText(agent.name)}`);
+        throw new HalignError(`${agent.path}: name must match ${IDENTIFIER_NAME.source}, got ${valueText(agent.name)}`);
     }
     assertWindowsSafeName(agent.name, agent.path);
     if (!agent.description.trim())
@@ -500,7 +505,7 @@ export async function renameSource(rootPath: string, from: string, to: string): 
     if (!sourceStats) throw new HalignError(`${sourceRelative}: file does not exist`);
     if (sourceStats.isSymbolicLink()) throw reparseError(root, source, false);
     if (!sourceStats.isFile()) throw new HalignError(`${sourceRelative}: managed source must be a file`);
-    if (await lstatIfExists(destination)) throw new HalignError(`${destinationRelative}: destination already exists`);
+    await assertRenameDestination(source, destination, destinationRelative);
     await fs.rename(source, destination);
 }
 
@@ -510,7 +515,7 @@ export async function addLayer(rootPath: string, name: string): Promise<Config>
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
-    if (!LAYER_NAME.test(name)) throw new HalignError(`.harness-align/layers/${name}: layer name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
+    if (!IDENTIFIER_NAME.test(name)) throw new HalignError(`.harness-align/layers/${name}: layer name must match ${IDENTIFIER_NAME.source}, got ${valueText(name)}`);
     assertWindowsSafeName(name, `.harness-align/layers/${name}`);
     if (catalogHasFoldedName(options, name))
     {
@@ -564,7 +569,7 @@ export async function renameLayer(rootPath: string, from: string, to: string): P
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
     if (!hasCatalogLayer(options, from)) throw new HalignError(`.harness-align/layers/${from}: layer does not exist, got ${valueText(from)}`);
-    if (!LAYER_NAME.test(to)) throw new HalignError(`.harness-align/layers/${to}: layer name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
+    if (!IDENTIFIER_NAME.test(to)) throw new HalignError(`.harness-align/layers/${to}: layer name must match ${IDENTIFIER_NAME.source}, got ${valueText(to)}`);
     assertWindowsSafeName(to, `.harness-align/layers/${to}`);
     if (from.toLowerCase() !== to.toLowerCase() && catalogHasFoldedName(options, to))
     {
@@ -574,7 +579,7 @@ export async function renameLayer(rootPath: string, from: string, to: string): P
     const destination = join(root, ".harness-align", "layers", to);
     await ensureRegularSource(root, source);
     await ensureRegularSource(root, destination);
-    if (from !== to && await lstatIfExists(destination)) throw new HalignError(`${display(root, destination)}: path already exists`);
+    await assertRenameDestination(source, destination, display(root, destination));
     const nextLayers = config.layers.map((layer) => (layer.name === from ? { ...layer, name: to } : layer));
     const next = nextLayers.some((layer, index) => layer !== config.layers[index])
         ? validateConfig(configDocument({ ...config, layers: nextLayers }))
@@ -599,7 +604,7 @@ export async function addLayerOption(rootPath: string, layer: string, option: st
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
     if (!hasCatalogLayer(options, layer)) throw new HalignError(`.harness-align/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
-    if (!LAYER_NAME.test(option)) throw new HalignError(`layer option name must match ${LAYER_NAME.source}, got ${valueText(option)}`);
+    if (!IDENTIFIER_NAME.test(option)) throw new HalignError(`layer option name must match ${IDENTIFIER_NAME.source}, got ${valueText(option)}`);
     assertWindowsSafeName(option, `layer option ${option}`);
     if (options[layer]!.some((candidate) => candidate.name.toLowerCase() === option.toLowerCase()))
     {
@@ -637,7 +642,7 @@ export async function renameLayerOption(rootPath: string, layer: string, from: s
     if (!hasCatalogLayer(options, layer)) throw new HalignError(`.harness-align/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
     const layerConfig = config.layers.find((candidate) => candidate.name === layer);
     if (!options[layer]!.some((candidate) => candidate.name === from)) throw new HalignError(`.harness-align/layers/${layer}: option does not exist, got ${valueText(from)}`);
-    if (!LAYER_NAME.test(to)) throw new HalignError(`layer option name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
+    if (!IDENTIFIER_NAME.test(to)) throw new HalignError(`layer option name must match ${IDENTIFIER_NAME.source}, got ${valueText(to)}`);
     assertWindowsSafeName(to, `layer option ${to}`);
     if (from.toLowerCase() !== to.toLowerCase() && options[layer]!.some((candidate) => candidate.name.toLowerCase() === to.toLowerCase()))
     {
@@ -647,7 +652,7 @@ export async function renameLayerOption(rootPath: string, layer: string, from: s
     const destination = join(root, ".harness-align", "layers", layer, `${to}.md`);
     await ensureRegularSource(root, source);
     await ensureRegularSource(root, destination);
-    if (source !== destination && await lstatIfExists(destination)) throw new HalignError(`${display(root, destination)}: path already exists`);
+    await assertRenameDestination(source, destination, display(root, destination));
     const next = validateConfig(configDocument({
         ...config,
         layers: config.layers.map((candidate) => candidate.name === layer && candidate.selected === from ? { ...candidate, selected: to } : candidate),

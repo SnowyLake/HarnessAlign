@@ -1,6 +1,6 @@
 /** Workspace labels and source paths with Windows-safe collision checks. */
 
-import type { LayerSelection, Workspace } from "@shared/models/Workspace";
+import type { LayerSelection, Workspace } from "../../../shared/models/Workspace.js";
 
 /** Return the final path segment of a `/`-separated workspace-relative path. */
 export function fileName(path: string): string
@@ -28,7 +28,7 @@ function renamedRulePath(path: string, name: string): string
 export function uniqueRulePath(currentPath: string, name: string, existingPaths: readonly string[]): string
 {
     const nextPath = renamedRulePath(currentPath, name);
-    if (nextPath !== currentPath && existingPaths.some((path) => path.toLowerCase() === nextPath.toLowerCase())) throw new Error(`${nextPath}: rule already exists`);
+    if (existingPaths.some((path) => path !== currentPath && path.toLowerCase() === nextPath.toLowerCase())) throw new Error(`${nextPath}: rule already exists`);
     return nextPath;
 }
 
@@ -39,7 +39,7 @@ export function uniqueAgentPath(currentPath: string | undefined, name: string, e
     if (!trimmed || trimmed.includes("/") || trimmed.includes("\\")) throw new Error(`Agent name must not contain path separators, got ${name}`);
     const stem = trimmed.toLowerCase().endsWith(".md") ? trimmed.slice(0, -3) : trimmed;
     const nextPath = `.harness-align/agents/${stem}.md`;
-    if (nextPath !== currentPath && existingPaths.some((path) => path.toLowerCase() === nextPath.toLowerCase())) throw new Error(`${nextPath}: agent already exists`);
+    if (existingPaths.some((path) => path !== currentPath && path.toLowerCase() === nextPath.toLowerCase())) throw new Error(`${nextPath}: agent already exists`);
     return nextPath;
 }
 

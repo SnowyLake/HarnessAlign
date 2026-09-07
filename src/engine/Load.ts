@@ -8,9 +8,8 @@ import { join, posix } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { display, ensureRegularSource, lstatIfExists, pathKey, readUtf8, reparseError } from "./FsSafe.js";
 import {
-    AGENT_EXTENSION,
     AGENT_FIELDS,
-    AGENT_NAME,
+    IDENTIFIER_NAME,
     type Agent,
     assertWindowsSafeName,
     type Config,
@@ -18,10 +17,8 @@ import {
     type Harness,
     type HarnessConfig,
     HARNESS_FIELDS,
-    HARNESS_NAME,
     type LayerConfig,
     LAYER_FIELDS,
-    LAYER_NAME,
     type LayerOption,
     type Metadata,
     RULE_FIELDS,
@@ -157,7 +154,7 @@ function validateHarnessConfig(value: unknown, path: string, index: number): Har
     }
 
     const name = validateString(context, "name", value.name);
-    if (!HARNESS_NAME.test(name)) throw new HalignError(`${context}: name must match ${HARNESS_NAME.source}, got ${valueText(name)}`);
+    if (!IDENTIFIER_NAME.test(name)) throw new HalignError(`${context}: name must match ${IDENTIFIER_NAME.source}, got ${valueText(name)}`);
     assertWindowsSafeName(name, `${context}: name`);
     const configPath = relativeConfigPath(value.config_path, context, "config_path");
     const agentFormat = validateString(context, "agent_format", value.agent_format);
@@ -166,16 +163,16 @@ function validateHarnessConfig(value: unknown, path: string, index: number): Har
         throw new HalignError(`${context}: agent_format must be toml or yaml, got ${valueText(agentFormat)}`);
     }
     const agentExtension = validateString(context, "agent_extension", value.agent_extension);
-    if (!AGENT_EXTENSION.test(agentExtension))
+    if (!IDENTIFIER_NAME.test(agentExtension))
     {
-        throw new HalignError(`${context}: agent_extension must match ${AGENT_EXTENSION.source}, got ${valueText(agentExtension)}`);
+        throw new HalignError(`${context}: agent_extension must match ${IDENTIFIER_NAME.source}, got ${valueText(agentExtension)}`);
     }
 
     let instructionsField: string | undefined;
     if (hasOwn(value, "instructions_field")) instructionsField = validateString(context, "instructions_field", value.instructions_field);
-    if (instructionsField !== undefined && (!HARNESS_NAME.test(instructionsField) || instructionsField === "name" || instructionsField === "description"))
+    if (instructionsField !== undefined && (!IDENTIFIER_NAME.test(instructionsField) || instructionsField === "name" || instructionsField === "description"))
     {
-        throw new HalignError(`${context}: instructions_field must match ${HARNESS_NAME.source} and be other than name or description, got ${valueText(instructionsField)}`);
+        throw new HalignError(`${context}: instructions_field must match ${IDENTIFIER_NAME.source} and be other than name or description, got ${valueText(instructionsField)}`);
     }
     if (agentFormat === "toml" && instructionsField === undefined)
     {
@@ -251,8 +248,8 @@ export function validateConfig(value: unknown): Config
         if (!hasOwn(layer, "selected")) throw new HalignError(`${context}: selected is required`);
         const layerName = validateString(context, "name", layer.name);
         const selected = validateString(context, "selected", layer.selected);
-        if (!LAYER_NAME.test(layerName)) throw new HalignError(`${context}: name must match ${LAYER_NAME.source}, got ${valueText(layerName)}`);
-        if (!LAYER_NAME.test(selected)) throw new HalignError(`${context}: selected must match ${LAYER_NAME.source}, got ${valueText(selected)}`);
+        if (!IDENTIFIER_NAME.test(layerName)) throw new HalignError(`${context}: name must match ${IDENTIFIER_NAME.source}, got ${valueText(layerName)}`);
+        if (!IDENTIFIER_NAME.test(selected)) throw new HalignError(`${context}: selected must match ${IDENTIFIER_NAME.source}, got ${valueText(selected)}`);
         assertWindowsSafeName(layerName, `${context}: name`);
         assertWindowsSafeName(selected, `${context}: selected`);
         return { name: layerName, selected };
@@ -463,9 +460,9 @@ async function loadLayerDirectory(root: string, directory: string, layer: string
             throw new HalignError(`${display(root, sourcePath)}: layer directories may only contain direct Markdown files`);
         }
         const name = entry.name.slice(0, -3);
-        if (!LAYER_NAME.test(name))
+        if (!IDENTIFIER_NAME.test(name))
         {
-            throw new HalignError(`${display(root, sourcePath)}: layer option name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
+            throw new HalignError(`${display(root, sourcePath)}: layer option name must match ${IDENTIFIER_NAME.source}, got ${valueText(name)}`);
         }
         assertWindowsSafeName(name, display(root, sourcePath));
         const folded = name.toLowerCase();
@@ -522,9 +519,9 @@ export async function loadLayerOptions(root: string, config: Config): Promise<Re
         if (!entryStats) continue;
         if (entryStats.isSymbolicLink()) throw reparseError(root, directory, false);
         if (!entryStats.isDirectory()) throw new HalignError(`${display(root, directory)}: expected a layer directory`);
-        if (!LAYER_NAME.test(entry.name))
+        if (!IDENTIFIER_NAME.test(entry.name))
         {
-            throw new HalignError(`${display(root, directory)}: layer name must match ${LAYER_NAME.source}, got ${valueText(entry.name)}`);
+            throw new HalignError(`${display(root, directory)}: layer name must match ${IDENTIFIER_NAME.source}, got ${valueText(entry.name)}`);
         }
         assertWindowsSafeName(entry.name, display(root, directory));
         discovered.add(entry.name);
@@ -563,7 +560,7 @@ export async function loadAgents(root: string, configuredHarnesses: HarnessConfi
             if (!hasOwn(metadata, field)) throw new HalignError(`${path}: ${field} is required`);
         }
         const name = validateString(path, "name", metadata.name);
-        if (!AGENT_NAME.test(name)) throw new HalignError(`${path}: name must match ${AGENT_NAME.source}, got ${valueText(name)}`);
+        if (!IDENTIFIER_NAME.test(name)) throw new HalignError(`${path}: name must match ${IDENTIFIER_NAME.source}, got ${valueText(name)}`);
         assertWindowsSafeName(name, path);
         const foldedName = name.toLowerCase();
         if (names.has(foldedName))

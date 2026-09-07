@@ -154,16 +154,16 @@ Layer 字段:
 
 | 字段 | 约束 | 用途 |
 | --- | --- | --- |
-| `name` | 匹配 `[a-z0-9][a-z0-9_-]*`, 忽略大小写后唯一 | `.harness-align/layers/<layer>/` 目录名 |
-| `selected` | 匹配 `[a-z0-9][a-z0-9_-]*`, 且必须存在对应 `.md` 文件 | 保存的默认选项 |
+| `name` | 匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`, 忽略大小写后唯一 | `.harness-align/layers/<layer>/` 目录名 |
+| `selected` | 匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`, 且必须存在对应 `.md` 文件 | 保存的默认选项 |
 
-`layers` 可以为空, 表示当前项目未选择任何 Layer. `.harness-align/layers/<layer>/` 目录构成 Layer 目录, 并允许暂时不包含 Option. 空 Layer 不能启用生成; 未写入 `config.json` 的 Layer 目录仍然有效, 只是不参与生成.
+`layers` 可以为空, 表示当前项目未选择任何 Layer. `.harness-align/layers/<layer>/` 目录构成 Layer 目录, 并允许暂时不包含 Option. Layer 和 Layer Option 支持仅修改大小写的重命名, 并同步更新已保存的选择. 空 Layer 不能启用生成; 未写入 `config.json` 的 Layer 目录仍然有效, 只是不参与生成.
 
 Harness 字段:
 
 | 字段 | 约束 | 用途 |
 | --- | --- | --- |
-| `name` | 匹配 `[a-z0-9][a-z0-9_-]*`, 忽略大小写后唯一 | Rule `targets`, Agent `harnesses` 键和生成目录名 |
+| `name` | 匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`, 忽略大小写后唯一 | Rule `targets`, Agent `harnesses` 键和生成目录名 |
 | `config_path` | 使用 `/` 的相对路径, 不允许绝对路径或 `..` | 相对于 `%USERPROFILE%` 的部署根目录 |
 | `agent_format` | `toml` 或 `yaml` | Subagent metadata 序列化格式 |
 | `agent_extension` | 不含点或路径分隔符 | 生成的 Subagent 文件扩展名 |
@@ -190,6 +190,8 @@ Arona soul content.
 ```
 
 生成的 `AGENTS.md` 只有配置里的 `name` 这一个一级标题. 规则正文里, fenced code 之外的一至五级标题会降一级, 六级标题保持不变.
+
+Agent 和 Rule (包括 shared-rules) 支持仅修改文件名大小写, 重名检查会排除当前文件, 仍拒绝与其他文件忽略大小写后重名. Agent, Layer, Layer Option 和 Harness 名称允许英文字母大小写, 保留原始拼写, 忽略大小写后必须唯一. `targets`, `harnesses` 键和 Layer 选择中的引用必须与名称大小写一致. `agent_extension` 和 `instructions_field` 使用同一标识符规则, 允许英文大小写, 数字, 下划线和连字符, 且以字母或数字开头; 输出保留原始拼写. Harness 编辑时未切换格式会保留配置中的扩展名. `agent_format` 仍为固定的 `toml` / `yaml` 值, `instructions_field` 仍不能占用 `name` 或 `description`. Rule 文件名和 Skill id 保留各自已有的字符范围.
 
 Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正文. 每个 Harness 块里的 metadata 没有字段白名单, 会按该 Harness 的格式原样写出. 同名字段可以覆盖该 Harness 输出中的公共 `name` 或 `description`. TOML Harness 的正文占用 `instructions_field`, 不要在 metadata 里重复声明这个字段.
 
