@@ -83,10 +83,10 @@ export async function buildOutputs(rootPath: string, selection?: readonly LayerS
 /** Return the generated directory after ensuring it is not a reparse point. */
 async function outputRoot(root: string): Promise<string>
 {
-    const path = join(root, ".halign", "generated");
+    const path = join(root, ".harness-align", "generated");
     const stats = await lstatIfExists(path);
-    if (stats?.isSymbolicLink()) throw new HalignError(".halign/generated: symbolic link output directories are not allowed");
-    if (stats && !stats.isDirectory()) throw new HalignError(".halign/generated: expected a directory");
+    if (stats?.isSymbolicLink()) throw new HalignError(".harness-align/generated: symbolic link output directories are not allowed");
+    if (stats && !stats.isDirectory()) throw new HalignError(".harness-align/generated: expected a directory");
     return path;
 }
 
@@ -95,12 +95,12 @@ export function safeOutputRelative(value: unknown): string
 {
     if (typeof value !== "string" || !value || value.includes("\\") || posix.isAbsolute(value) || /^[A-Za-z]:/u.test(value))
     {
-        throw new HalignError(`.halign/generated/.manifest.json: invalid managed path ${valueText(value)}`);
+        throw new HalignError(`.harness-align/generated/.manifest.json: invalid managed path ${valueText(value)}`);
     }
     const parts = value.split("/");
     if (parts.includes(".") || parts.includes(".."))
     {
-        throw new HalignError(`.halign/generated/.manifest.json: invalid managed path ${valueText(value)}`);
+        throw new HalignError(`.harness-align/generated/.manifest.json: invalid managed path ${valueText(value)}`);
     }
     return value;
 }
@@ -112,7 +112,7 @@ async function destination(root: string, outputRelative: string): Promise<string
     const generated = await outputRoot(root);
     const parts = outputRelative.split("/");
     const path = resolve(generated, ...parts);
-    assertContained(generated, path, ".halign/generated");
+    assertContained(generated, path, ".harness-align/generated");
     let current = generated;
     for (const part of parts.slice(0, -1))
     {
@@ -134,33 +134,33 @@ async function loadManifest(root: string): Promise<string[]>
     const path = join(generated, ".manifest.json");
     const stats = await lstatIfExists(path);
     if (!stats) return [];
-    if (stats.isSymbolicLink()) throw new HalignError(".halign/generated/.manifest.json: symbolic link outputs are not allowed");
-    if (!stats.isFile()) throw new HalignError(".halign/generated/.manifest.json: managed output must be a file");
+    if (stats.isSymbolicLink()) throw new HalignError(".harness-align/generated/.manifest.json: symbolic link outputs are not allowed");
+    if (!stats.isFile()) throw new HalignError(".harness-align/generated/.manifest.json: managed output must be a file");
     let manifest: unknown;
     try
     {
-        manifest = JSON.parse(await readUtf8(root, path, ".halign/generated/.manifest.json")) as unknown;
+        manifest = JSON.parse(await readUtf8(root, path, ".harness-align/generated/.manifest.json")) as unknown;
     }
     catch (error)
     {
         if (error instanceof HalignError) throw error;
-        throw new HalignError(`.halign/generated/.manifest.json: invalid manifest: ${errorText(error)}`);
+        throw new HalignError(`.harness-align/generated/.manifest.json: invalid manifest: ${errorText(error)}`);
     }
     if (!isRecord(manifest) || typeof manifest.version !== "number" || !Number.isInteger(manifest.version) || manifest.version !== 1)
     {
-        throw new HalignError(".halign/generated/.manifest.json: version must be integer 1");
+        throw new HalignError(".harness-align/generated/.manifest.json: version must be integer 1");
     }
     if (!Array.isArray(manifest.files) || !manifest.files.every((file) => typeof file === "string"))
     {
-        throw new HalignError(".halign/generated/.manifest.json: files must be a string array");
+        throw new HalignError(".harness-align/generated/.manifest.json: files must be a string array");
     }
     if (new Set(manifest.files).size !== manifest.files.length)
     {
-        throw new HalignError(".halign/generated/.manifest.json: files must not contain duplicates");
+        throw new HalignError(".harness-align/generated/.manifest.json: files must not contain duplicates");
     }
     if (manifest.files.includes(".manifest.json"))
     {
-        throw new HalignError(".halign/generated/.manifest.json: files must not manage the manifest itself");
+        throw new HalignError(".harness-align/generated/.manifest.json: files must not manage the manifest itself");
     }
     return manifest.files.map((file) => safeOutputRelative(file));
 }
@@ -199,11 +199,11 @@ export async function generate(rootPath: string, selection?: readonly LayerSelec
     return expected;
 }
 
-/** Format the generate success report for CLI and the desktop log. */
-export function reportGenerate(generatedRoot: string, outputs: OutputMap): string
+/** Format the generate success report for the desktop log. */
+export function reportGenerate(outputs: OutputMap): string
 {
     const files = [...outputs.keys()];
-    return `Generation complete.\nWrote ${files.length} files to ${generatedRoot}\n${files.map((path) => `  ${path}`).join("\n")}\n`;
+    return `Generation complete.\nWrote ${files.length} files\n${files.map((path) => `  ${path}`).join("\n")}\n`;
 }
 
 /** Read every file currently under the generated directory. */
@@ -231,25 +231,4 @@ export async function readGeneratedFiles(rootPath: string): Promise<Map<string, 
     };
     await visit(generated);
     return files;
-}
-
-/** Compare expected output with `.halign/generated` and return difference lines. */
-export async function check(rootPath: string, selection?: readonly LayerSelection[]): Promise<string[]>
-{
-    const [expected, actual] = await Promise.all([
-        buildOutputs(rootPath, selection),
-        readGeneratedFiles(rootPath),
-    ]);
-    const differences: string[] = [];
-    for (const [path, content] of expected)
-    {
-        const actualContent = actual.get(path);
-        if (!actualContent) differences.push(`missing: ${path}`);
-        else if (!actualContent.equals(content)) differences.push(`modified: ${path}`);
-    }
-    for (const path of [...actual.keys()].filter((path) => !expected.has(path)).sort(codePointCompare))
-    {
-        differences.push(`extra: ${path}`);
-    }
-    return differences;
 }

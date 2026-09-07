@@ -116,7 +116,7 @@ export async function atomicWrite(
     if (existing?.isFile() && (await fs.readFile(path)).equals(content)) return;
     const parent = dirname(path);
     await fs.mkdir(parent, { recursive: true });
-    const temporary = join(parent, `.halign-${randomUUID()}.tmp`);
+    const temporary = join(parent, `.harness-align-${randomUUID()}.tmp`);
     try
     {
         const handle = await fs.open(temporary, "wx", 0o600);

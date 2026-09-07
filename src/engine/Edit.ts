@@ -1,6 +1,6 @@
 /**
- * Validated write-back for `.halign` sources used by the desktop shell and tests.
- * CLI `main` only calls `ensureUserWorkspace`. Encode and validate before `atomicWrite`. Multi-file updates are not a single disk transaction.
+ * Validated write-back for `.harness-align` sources used by the desktop shell and tests.
+ * Encode and validate before `atomicWrite`. Multi-file updates are not a single disk transaction.
  */
 
 import { promises as fs } from "node:fs";
@@ -34,7 +34,7 @@ import { importUserSkills as importUserSkillsEngine, listUserSkills as listUserS
 export type { SharedRule };
 export { listUserSkillsEngine as listUserSkills, importUserSkillsEngine as importUserSkills, removeSkillEngine as removeSkill };
 
-/** Default `.halign/config.json` written when the user workspace does not exist yet. */
+/** Default `.harness-align/config.json` written when the user workspace does not exist yet. */
 const DEFAULT_USER_CONFIG = {
     version: 1,
     name: "AGENTS",
@@ -46,10 +46,9 @@ const DEFAULT_USER_CONFIG = {
     ],
 };
 
-/** Loaded `.halign` workspace for the desktop editor and tests. */
+/** Loaded `.harness-align` workspace for the desktop editor and tests. */
 export interface Workspace
 {
-    root: string;
     config: Config;
     rootRules: Rule[];
     layerOptions: Record<string, LayerOption[]>;
@@ -111,25 +110,25 @@ function configDocument(config: Config): Record<string, unknown>
     return document;
 }
 
-/** Normalize and contain a managed `.halign` relative path. */
+/** Normalize and contain a managed `.harness-align` relative path. */
 function managedRelative(value: string, label: string): string
 {
     if (!value || value.includes("\\") || posix.isAbsolute(value) || /^[A-Za-z]:/u.test(value))
     {
-        throw new HalignError(`${label}: path must stay inside .halign, got ${valueText(value)}`);
+        throw new HalignError(`${label}: path must stay inside .harness-align, got ${valueText(value)}`);
     }
     const parts = value.split("/");
     if (parts.some((part) => !part || part === "." || part === ".."))
     {
-        throw new HalignError(`${label}: path must stay inside .halign, got ${valueText(value)}`);
+        throw new HalignError(`${label}: path must stay inside .harness-align, got ${valueText(value)}`);
     }
-    if (value === ".halign/generated" || value.startsWith(".halign/generated/"))
+    if (value === ".harness-align/generated" || value.startsWith(".harness-align/generated/"))
     {
-        throw new HalignError(`${label}: path must stay inside managed .halign sources, got ${valueText(value)}`);
+        throw new HalignError(`${label}: path must stay inside managed .harness-align sources, got ${valueText(value)}`);
     }
-    if (value !== ".halign/config.json" && !value.startsWith(".halign/rules/") && !value.startsWith(".halign/layers/") && !value.startsWith(".halign/agents/") && !value.startsWith(".halign/skills/"))
+    if (value !== ".harness-align/config.json" && !value.startsWith(".harness-align/rules/") && !value.startsWith(".harness-align/layers/") && !value.startsWith(".harness-align/agents/") && !value.startsWith(".harness-align/skills/"))
     {
-        throw new HalignError(`${label}: path must stay inside managed .halign sources, got ${valueText(value)}`);
+        throw new HalignError(`${label}: path must stay inside managed .harness-align sources, got ${valueText(value)}`);
     }
     return value;
 }
@@ -171,33 +170,33 @@ function serializeLayerOption(targets: string[], body: string): Buffer
     return Buffer.from(`---\n${yamlText}\n---\n\n${markdown}`, "utf8");
 }
 
-/** Require a rule path under the expected `.halign` subtree. */
+/** Require a rule path under the expected `.harness-align` subtree. */
 function assertRulePath(path: string, kind: "root" | "shared"): void
 {
     if (!path.endsWith(".md")) throw new HalignError(`${path}: rule path must end with .md`);
-    if (kind === "root" && (path.startsWith(".halign/rules/shared/") || !path.startsWith(".halign/rules/")))
+    if (kind === "root" && (path.startsWith(".harness-align/rules/shared/") || !path.startsWith(".harness-align/rules/")))
     {
-        throw new HalignError(`${path}: root rule path must stay under .halign/rules and outside shared`);
+        throw new HalignError(`${path}: root rule path must stay under .harness-align/rules and outside shared`);
     }
-    if (kind === "shared" && !path.startsWith(".halign/rules/shared/"))
+    if (kind === "shared" && !path.startsWith(".harness-align/rules/shared/"))
     {
-        throw new HalignError(`${path}: shared rule path must stay under .halign/rules/shared`);
+        throw new HalignError(`${path}: shared rule path must stay under .harness-align/rules/shared`);
     }
 }
 
 /** Classify a root or shared rule path. */
 function ruleKind(path: string): "root" | "shared"
 {
-    if (path.startsWith(".halign/rules/shared/")) return "shared";
+    if (path.startsWith(".harness-align/rules/shared/")) return "shared";
     return "root";
 }
 
 /** Classify editable rule and agent source paths. */
 function editableSourceKind(path: string): "root-rule" | "shared-rule" | "agent" | undefined
 {
-    if (path.startsWith(".halign/agents/")) return "agent";
-    if (path.startsWith(".halign/rules/shared/")) return "shared-rule";
-    if (path.startsWith(".halign/rules/")) return "root-rule";
+    if (path.startsWith(".harness-align/agents/")) return "agent";
+    if (path.startsWith(".harness-align/rules/shared/")) return "shared-rule";
+    if (path.startsWith(".harness-align/rules/")) return "root-rule";
     return undefined;
 }
 
@@ -217,20 +216,20 @@ function catalogHasFoldedName(options: Record<string, LayerOption[]>, name: stri
 /** Require a direct option path under one layer directory. */
 function layerOptionParts(path: string): { layer: string; option: string }
 {
-    const match = /^\.halign\/layers\/([^/]+)\/([^/]+)\.md$/u.exec(path);
+    const match = /^\.harness-align\/layers\/([^/]+)\/([^/]+)\.md$/u.exec(path);
     if (!match || !LAYER_NAME.test(match[1]!) || !LAYER_NAME.test(match[2]!))
     {
-        throw new HalignError(`${path}: layer option path must match .halign/layers/<layer>/<option>.md`);
+        throw new HalignError(`${path}: layer option path must match .harness-align/layers/<layer>/<option>.md`);
     }
     return { layer: match[1]!, option: match[2]! };
 }
 
-/** Require a subagent path under `.halign/agents`. */
+/** Require a subagent path under `.harness-align/agents`. */
 function assertAgentPath(path: string): void
 {
-    if (!/^\.halign\/agents\/[^/]+\.md$/u.test(path))
+    if (!/^\.harness-align\/agents\/[^/]+\.md$/u.test(path))
     {
-        throw new HalignError(`${path}: agent path must be a Markdown file directly under .halign/agents`);
+        throw new HalignError(`${path}: agent path must be a Markdown file directly under .harness-align/agents`);
     }
 }
 
@@ -307,10 +306,10 @@ export async function loadWorkspace(rootPath: string): Promise<Workspace>
         loadSharedRules(root),
         loadSkills(root),
     ]);
-    return { root, config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents, skills };
+    return { config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents, skills };
 }
 
-/** Resolve `%USERPROFILE%` and create `%USERPROFILE%\.halign` with a default config when missing. */
+/** Initialize the fixed user workspace, moving a safe legacy directory only when the destination is absent. */
 export async function ensureUserWorkspace(userProfile = process.env.USERPROFILE): Promise<string>
 {
     const root = resolveUserHome(userProfile);
@@ -318,10 +317,23 @@ export async function ensureUserWorkspace(userProfile = process.env.USERPROFILE)
     if (!homeStats) throw new HalignError(`USERPROFILE must be an existing directory, got ${valueText(root)}`);
     if (homeStats.isSymbolicLink()) throw reparseError(root, root, false);
     if (!homeStats.isDirectory()) throw new HalignError(`USERPROFILE must be a directory, got ${valueText(root)}`);
-    const halign = join(root, ".halign");
+    const halign = join(root, ".harness-align");
     const stats = await lstatIfExists(halign);
     if (stats?.isSymbolicLink()) throw reparseError(root, halign, false);
-    if (stats && !stats.isDirectory()) throw new HalignError(".halign: expected a directory");
+    if (stats && !stats.isDirectory()) throw new HalignError(".harness-align: expected a directory");
+    if (!stats)
+    {
+        const legacy = join(root, ".halign");
+        const legacyStats = await lstatIfExists(legacy);
+        if (legacyStats)
+        {
+            assertContained(root, legacy, "legacy workspace");
+            assertContained(root, halign, "workspace migration destination");
+            await assertNoReparseTree(root, legacy);
+            if (!legacyStats.isDirectory()) throw new HalignError(`${legacy}: expected a directory for migration`);
+            await fs.rename(legacy, halign);
+        }
+    }
     const configPath = join(halign, "config.json");
     if (!(await lstatIfExists(configPath)))
     {
@@ -334,7 +346,7 @@ export async function ensureUserWorkspace(userProfile = process.env.USERPROFILE)
 /** Atomically write an already validated config document. */
 async function writeConfig(root: string, config: Config): Promise<void>
 {
-    await writeManaged(root, ".halign/config.json", Buffer.from(`${JSON.stringify(configDocument(config), null, 2)}\n`, "utf8"));
+    await writeManaged(root, ".harness-align/config.json", Buffer.from(`${JSON.stringify(configDocument(config), null, 2)}\n`, "utf8"));
 }
 
 /** Validate sources and atomically write `config.json`. */
@@ -371,7 +383,7 @@ export async function saveLayerOption(rootPath: string, input: LayerOptionInput)
     const config = await loadConfig(root);
     const path = managedRelative(input.path, input.path);
     const { layer } = layerOptionParts(path);
-    const directory = join(root, ".halign", "layers", layer);
+    const directory = join(root, ".harness-align", "layers", layer);
     await ensureRegularSource(root, directory);
     const stats = await lstatIfExists(directory);
     if (!stats?.isDirectory())
@@ -406,14 +418,14 @@ export async function saveAgent(rootPath: string, agent: Agent): Promise<void>
     }, next.body, path));
 }
 
-/** Delete a `.halign` source file after containment and reparse checks. */
+/** Delete a `.harness-align` source file after containment and reparse checks. */
 export async function deleteSource(rootPath: string, relativePath: string): Promise<void>
 {
     const root = resolve(rootPath);
     const relative = managedRelative(relativePath, relativePath);
-    if (relative === ".halign/config.json") throw new HalignError(`${relative}: config.json cannot be deleted`);
-    if (relative.startsWith(".halign/layers/")) throw new HalignError(`${relative}: layer options are deleted with removeLayerOption`);
-    if (relative.startsWith(".halign/skills/")) throw new HalignError(`${relative}: skills are deleted with removeSkill`);
+    if (relative === ".harness-align/config.json") throw new HalignError(`${relative}: config.json cannot be deleted`);
+    if (relative.startsWith(".harness-align/layers/")) throw new HalignError(`${relative}: layer options are deleted with removeLayerOption`);
+    if (relative.startsWith(".harness-align/skills/")) throw new HalignError(`${relative}: skills are deleted with removeSkill`);
     const path = await resolveManaged(root, relative, relative);
     const stats = await lstatIfExists(path);
     if (!stats) throw new HalignError(`${relative}: file does not exist`);
@@ -460,13 +472,13 @@ export async function addLayer(rootPath: string, name: string): Promise<Config>
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
-    if (!LAYER_NAME.test(name)) throw new HalignError(`.halign/layers/${name}: layer name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
-    assertWindowsSafeName(name, `.halign/layers/${name}`);
+    if (!LAYER_NAME.test(name)) throw new HalignError(`.harness-align/layers/${name}: layer name must match ${LAYER_NAME.source}, got ${valueText(name)}`);
+    assertWindowsSafeName(name, `.harness-align/layers/${name}`);
     if (catalogHasFoldedName(options, name))
     {
-        throw new HalignError(`.halign/layers/${name}: layer already exists, got ${valueText(name)}`);
+        throw new HalignError(`.harness-align/layers/${name}: layer already exists, got ${valueText(name)}`);
     }
-    const layersRoot = join(root, ".halign", "layers");
+    const layersRoot = join(root, ".harness-align", "layers");
     const directory = join(layersRoot, name);
     await ensureRegularSource(root, directory);
     if (await lstatIfExists(directory)) throw new HalignError(`${display(root, directory)}: path already exists`);
@@ -483,11 +495,11 @@ export async function removeLayer(rootPath: string, name: string): Promise<Confi
     const options = await loadLayerOptions(root, config);
     if (!hasCatalogLayer(options, name))
     {
-        throw new HalignError(`.halign/layers/${name}: layer does not exist, got ${valueText(name)}`);
+        throw new HalignError(`.harness-align/layers/${name}: layer does not exist, got ${valueText(name)}`);
     }
-    const directory = join(root, ".halign", "layers", name);
+    const directory = join(root, ".harness-align", "layers", name);
     await assertNoReparseTree(root, directory);
-    const temporary = join(root, ".halign", `.remove-layer-${name}-${process.pid}`);
+    const temporary = join(root, ".harness-align", `.remove-layer-${name}-${process.pid}`);
     if (await lstatIfExists(temporary)) throw new HalignError(`${display(root, temporary)}: temporary path already exists`);
     const nextLayers = config.layers.filter((layer) => layer.name !== name);
     const next = nextLayers.length === config.layers.length
@@ -513,15 +525,15 @@ export async function renameLayer(rootPath: string, from: string, to: string): P
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
-    if (!hasCatalogLayer(options, from)) throw new HalignError(`.halign/layers/${from}: layer does not exist, got ${valueText(from)}`);
-    if (!LAYER_NAME.test(to)) throw new HalignError(`.halign/layers/${to}: layer name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
-    assertWindowsSafeName(to, `.halign/layers/${to}`);
+    if (!hasCatalogLayer(options, from)) throw new HalignError(`.harness-align/layers/${from}: layer does not exist, got ${valueText(from)}`);
+    if (!LAYER_NAME.test(to)) throw new HalignError(`.harness-align/layers/${to}: layer name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
+    assertWindowsSafeName(to, `.harness-align/layers/${to}`);
     if (from.toLowerCase() !== to.toLowerCase() && catalogHasFoldedName(options, to))
     {
-        throw new HalignError(`.halign/layers/${to}: layer names must be unique without case sensitivity, got ${valueText(to)}`);
+        throw new HalignError(`.harness-align/layers/${to}: layer names must be unique without case sensitivity, got ${valueText(to)}`);
     }
-    const source = join(root, ".halign", "layers", from);
-    const destination = join(root, ".halign", "layers", to);
+    const source = join(root, ".harness-align", "layers", from);
+    const destination = join(root, ".harness-align", "layers", to);
     await ensureRegularSource(root, source);
     await ensureRegularSource(root, destination);
     if (from !== to && await lstatIfExists(destination)) throw new HalignError(`${display(root, destination)}: path already exists`);
@@ -548,14 +560,14 @@ export async function addLayerOption(rootPath: string, layer: string, option: st
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
-    if (!hasCatalogLayer(options, layer)) throw new HalignError(`.halign/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
+    if (!hasCatalogLayer(options, layer)) throw new HalignError(`.harness-align/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
     if (!LAYER_NAME.test(option)) throw new HalignError(`layer option name must match ${LAYER_NAME.source}, got ${valueText(option)}`);
     assertWindowsSafeName(option, `layer option ${option}`);
     if (options[layer]!.some((candidate) => candidate.name.toLowerCase() === option.toLowerCase()))
     {
-        throw new HalignError(`.halign/layers/${layer}: option already exists, got ${valueText(option)}`);
+        throw new HalignError(`.harness-align/layers/${layer}: option already exists, got ${valueText(option)}`);
     }
-    await writeManaged(root, `.halign/layers/${layer}/${option}.md`, Buffer.alloc(0));
+    await writeManaged(root, `.harness-align/layers/${layer}/${option}.md`, Buffer.alloc(0));
 }
 
 /** Delete a non-selected layer option, allowing an unconfigured layer to become empty. */
@@ -564,12 +576,12 @@ export async function removeLayerOption(rootPath: string, layer: string, option:
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
-    if (!hasCatalogLayer(options, layer)) throw new HalignError(`.halign/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
+    if (!hasCatalogLayer(options, layer)) throw new HalignError(`.harness-align/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
     const layerConfig = config.layers.find((candidate) => candidate.name === layer);
     const layerOptions = options[layer]!;
-    if (!layerOptions.some((candidate) => candidate.name === option)) throw new HalignError(`.halign/layers/${layer}: option does not exist, got ${valueText(option)}`);
-    if (layerConfig?.selected === option) throw new HalignError(`.halign/config.json: selected layer option cannot be removed, got ${valueText(option)}`);
-    const relative = `.halign/layers/${layer}/${option}.md`;
+    if (!layerOptions.some((candidate) => candidate.name === option)) throw new HalignError(`.harness-align/layers/${layer}: option does not exist, got ${valueText(option)}`);
+    if (layerConfig?.selected === option) throw new HalignError(`.harness-align/config.json: selected layer option cannot be removed, got ${valueText(option)}`);
+    const relative = `.harness-align/layers/${layer}/${option}.md`;
     const path = await resolveManaged(root, relative, relative);
     const stats = await lstatIfExists(path);
     if (!stats) throw new HalignError(`${relative}: file does not exist`);
@@ -584,17 +596,17 @@ export async function renameLayerOption(rootPath: string, layer: string, from: s
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const options = await loadLayerOptions(root, config);
-    if (!hasCatalogLayer(options, layer)) throw new HalignError(`.halign/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
+    if (!hasCatalogLayer(options, layer)) throw new HalignError(`.harness-align/layers/${layer}: layer does not exist, got ${valueText(layer)}`);
     const layerConfig = config.layers.find((candidate) => candidate.name === layer);
-    if (!options[layer]!.some((candidate) => candidate.name === from)) throw new HalignError(`.halign/layers/${layer}: option does not exist, got ${valueText(from)}`);
+    if (!options[layer]!.some((candidate) => candidate.name === from)) throw new HalignError(`.harness-align/layers/${layer}: option does not exist, got ${valueText(from)}`);
     if (!LAYER_NAME.test(to)) throw new HalignError(`layer option name must match ${LAYER_NAME.source}, got ${valueText(to)}`);
     assertWindowsSafeName(to, `layer option ${to}`);
     if (from.toLowerCase() !== to.toLowerCase() && options[layer]!.some((candidate) => candidate.name.toLowerCase() === to.toLowerCase()))
     {
-        throw new HalignError(`.halign/layers/${layer}: option names must be unique without case sensitivity, got ${valueText(to)}`);
+        throw new HalignError(`.harness-align/layers/${layer}: option names must be unique without case sensitivity, got ${valueText(to)}`);
     }
-    const source = join(root, ".halign", "layers", layer, `${from}.md`);
-    const destination = join(root, ".halign", "layers", layer, `${to}.md`);
+    const source = join(root, ".harness-align", "layers", layer, `${from}.md`);
+    const destination = join(root, ".harness-align", "layers", layer, `${to}.md`);
     await ensureRegularSource(root, source);
     await ensureRegularSource(root, destination);
     if (source !== destination && await lstatIfExists(destination)) throw new HalignError(`${display(root, destination)}: path already exists`);
@@ -629,7 +641,7 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
     const existing = config.harnesses.find((candidate) => candidate.name === from);
     if (!existing)
     {
-        throw new HalignError(`.halign/config.json: harness is not configured, got ${valueText(from)}`);
+        throw new HalignError(`.harness-align/config.json: harness is not configured, got ${valueText(from)}`);
     }
     const nextConfig = validateConfig(configDocument({
         ...config,
@@ -652,7 +664,7 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
         return { ...agent, harnesses };
     });
     const writes: Array<{ path: string; content: Buffer; original?: Buffer }> = [{
-        path: ".halign/config.json",
+        path: ".harness-align/config.json",
         content: Buffer.from(`${JSON.stringify(configDocument(nextConfig), null, 2)}\n`, "utf8"),
     }];
     for (const rule of nextRules) assertTargets(rule.path, rule.targets, nextConfig.harnesses);
@@ -720,11 +732,11 @@ export async function removeHarness(rootPath: string, name: string): Promise<voi
     const config = await loadConfig(root);
     if (!config.harnesses.some((harness) => harness.name === name))
     {
-        throw new HalignError(`.halign/config.json: harness is not configured, got ${valueText(name)}`);
+        throw new HalignError(`.harness-align/config.json: harness is not configured, got ${valueText(name)}`);
     }
     if (config.harnesses.length === 1)
     {
-        throw new HalignError(`.halign/config.json: harnesses must be a non-empty mapping array, got []`);
+        throw new HalignError(`.harness-align/config.json: harnesses must be a non-empty mapping array, got []`);
     }
     const nextConfig: Config = { ...config, harnesses: config.harnesses.filter((harness) => harness.name !== name) };
     validateConfig(configDocument(nextConfig));
@@ -781,7 +793,7 @@ export async function addSkillSource(rootPath: string, input: { url: string; bra
     const key = `${source.owner.toLowerCase()}/${source.name.toLowerCase()}`;
     if (config.skillSources.some((item) => `${item.owner.toLowerCase()}/${item.name.toLowerCase()}` === key))
     {
-        throw new HalignError(`.halign/config.json: skill_sources owner/name must be unique without case sensitivity, got ${valueText(`${source.owner}/${source.name}`)}`);
+        throw new HalignError(`.harness-align/config.json: skill_sources owner/name must be unique without case sensitivity, got ${valueText(`${source.owner}/${source.name}`)}`);
     }
     return saveConfig(root, { ...config, skillSources: [...config.skillSources, source] });
 }
@@ -795,7 +807,7 @@ export async function removeSkillSource(rootPath: string, owner: string, name: s
         !(source.owner.toLowerCase() === owner.toLowerCase() && source.name.toLowerCase() === name.toLowerCase()));
     if (nextSources.length === config.skillSources.length)
     {
-        throw new HalignError(`.halign/config.json: skill source is not configured, got ${valueText(`${owner}/${name}`)}`);
+        throw new HalignError(`.harness-align/config.json: skill source is not configured, got ${valueText(`${owner}/${name}`)}`);
     }
     return saveConfig(root, { ...config, skillSources: nextSources });
 }

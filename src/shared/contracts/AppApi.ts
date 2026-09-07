@@ -23,7 +23,6 @@ export interface AppApi
     app: {
         getVersion(): Promise<string>;
         openExternal(url: string): Promise<void>;
-        openConfigDirectory(): Promise<string>;
     };
     settings: {
         get(): Promise<AppSettings>;
@@ -58,7 +57,6 @@ export interface AppApi
         importUserSkills(ids: string[], overwrite: boolean): Promise<string>;
         removeSkill(id: string): Promise<void>;
         generate(selection?: LayerSelection[]): Promise<string>;
-        check(selection?: LayerSelection[]): Promise<string[]>;
         setup(selection?: LayerSelection[]): Promise<string>;
     };
 }

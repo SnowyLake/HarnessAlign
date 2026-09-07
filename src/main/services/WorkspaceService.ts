@@ -1,9 +1,8 @@
 /**
- * Privileged workspace operations that wrap the CLI engine after path validation.
+ * Privileged workspace operations that wrap the engine after path validation.
  * The config root is always `%USERPROFILE%`; renderer input never chooses a directory.
  */
 
-import { join } from "node:path";
 import {
     addHarness,
     addLayer,
@@ -29,7 +28,7 @@ import {
     saveSharedRule,
     updateHarness,
 } from "../../engine/Edit.js";
-import { check, generate, readGeneratedFiles, reportGenerate } from "../../engine/Generate.js";
+import { generate, readGeneratedFiles, reportGenerate } from "../../engine/Generate.js";
 import { reportSetup, setup } from "../../engine/Setup.js";
 import type {
     Agent,
@@ -45,16 +44,20 @@ import type {
 } from "../../shared/models/Workspace.js";
 import * as skillRemote from "./SkillRemoteService.js";
 
-/** Resolve `%USERPROFILE%` and create `.halign` on first use. */
-async function userRoot(): Promise<string>
+/** Initialization shared by overlapping IPC requests, released after completion or failure. */
+let initializingWorkspace: Promise<string> | undefined;
+
+/** Resolve the fixed user workspace without running concurrent migrations. */
+function userRoot(): Promise<string>
 {
-    return ensureUserWorkspace();
+    initializingWorkspace ??= ensureUserWorkspace().finally(() => { initializingWorkspace = undefined; });
+    return initializingWorkspace;
 }
 
-/** Privileged workspace operations that wrap the CLI engine. */
+/** Privileged workspace operations that wrap the engine. */
 export class WorkspaceService
 {
-    /** Load and validate the user `.halign` workspace. */
+    /** Load and validate the user `.harness-align` workspace. */
     async load(): Promise<Workspace>
     {
         const root = await userRoot();
@@ -98,7 +101,7 @@ export class WorkspaceService
         return saveAgent(await userRoot(), agent);
     }
 
-    /** Delete a `.halign` source file after containment checks. */
+    /** Delete a `.harness-align` source file after containment checks. */
     async deleteSource(path: string): Promise<void>
     {
         return deleteSource(await userRoot(), path);
@@ -218,18 +221,12 @@ export class WorkspaceService
         return removeSkill(await userRoot(), id);
     }
 
-    /** Generate outputs and return the CLI report string. */
+    /** Generate outputs and return the report string. */
     async generate(selection?: LayerSelection[]): Promise<string>
     {
         const root = await userRoot();
         const outputs = await generate(root, selection);
-        return reportGenerate(join(root, ".halign", "generated"), outputs);
-    }
-
-    /** Compare generated output with the workspace and return differences. */
-    async check(selection?: LayerSelection[]): Promise<string[]>
-    {
-        return check(await userRoot(), selection);
+        return reportGenerate(outputs);
     }
 
     /** Generate then deploy into existing user harness roots. */

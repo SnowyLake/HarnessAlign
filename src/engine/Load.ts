@@ -1,5 +1,5 @@
 /**
- * Discover and validate untrusted `.halign` sources.
+ * Discover and validate untrusted `.harness-align` sources.
  * Re-check containment on every directory step, and promote parser output to domain types only after field checks.
  */
 
@@ -221,7 +221,7 @@ function validateSkillSource(value: unknown, path: string, index: number): Skill
 /** Validate a parsed config.json value into a Config. */
 export function validateConfig(value: unknown): Config
 {
-    const path = ".halign/config.json";
+    const path = ".harness-align/config.json";
     if (!isRecord(value)) throw new HalignError(`${path}: expected a mapping`);
     const knownFields = new Set(["version", "name", "layers", "harnesses", "skill_sources"]);
     const unknownFields = Object.keys(value).filter((field) => !knownFields.has(field));
@@ -310,7 +310,7 @@ export function validateConfig(value: unknown): Config
         {
             throw new HalignError(`${path}: harness config_path must not use the managed skills target, got ${valueText(harness.configPath)}`);
         }
-        if (foldedPath === ".halign" || foldedPath.startsWith(".halign/"))
+        if (foldedPath === ".harness-align" || foldedPath.startsWith(".harness-align/"))
         {
             throw new HalignError(`${path}: harness config_path must not use the managed config directory, got ${valueText(harness.configPath)}`);
         }
@@ -343,24 +343,24 @@ export function validateConfig(value: unknown): Config
     return { version: 1, name, layers, harnesses, skillSources };
 }
 
-/** Read and validate `.halign/config.json`. */
+/** Read and validate `.harness-align/config.json`. */
 export async function loadConfig(root: string): Promise<Config>
 {
-    const path = join(root, ".halign", "config.json");
+    const path = join(root, ".harness-align", "config.json");
     await ensureRegularSource(root, path);
     if (!(await lstatIfExists(path)))
     {
-        throw new HalignError(".halign/config.json: file is required");
+        throw new HalignError(".harness-align/config.json: file is required");
     }
     let parsed: unknown;
     try
     {
-        parsed = JSON.parse(await readUtf8(root, path, ".halign/config.json")) as unknown;
+        parsed = JSON.parse(await readUtf8(root, path, ".harness-align/config.json")) as unknown;
     }
     catch (error)
     {
         if (error instanceof HalignError) throw error;
-        throw new HalignError(`.halign/config.json: invalid JSON: ${errorText(error)}`);
+        throw new HalignError(`.harness-align/config.json: invalid JSON: ${errorText(error)}`);
     }
     return validateConfig(parsed);
 }
@@ -368,7 +368,7 @@ export async function loadConfig(root: string): Promise<Config>
 /** Load root rules, filtered later by harness targets. */
 export async function loadRules(root: string, harnesses: HarnessConfig[]): Promise<Rule[]>
 {
-    const halign = join(root, ".halign");
+    const halign = join(root, ".harness-align");
     const rulesDirectory = join(halign, "rules");
     const paths = (await markdownFiles(root, rulesDirectory, true, [join(rulesDirectory, "shared")]))
         .sort((left, right) => codePointCompare(display(root, left), display(root, right)));
@@ -491,7 +491,7 @@ async function loadLayerDirectory(root: string, directory: string, layer: string
     }
     if (selected !== undefined && !options.some((option) => option.name === selected))
     {
-        throw new HalignError(`.halign/config.json: layer ${valueText(layer)} selected option does not exist, got ${valueText(selected)}`);
+        throw new HalignError(`.harness-align/config.json: layer ${valueText(layer)} selected option does not exist, got ${valueText(selected)}`);
     }
     return options;
 }
@@ -499,15 +499,15 @@ async function loadLayerDirectory(root: string, directory: string, layer: string
 /** Discover every layer directory and require configured selections to exist. */
 export async function loadLayerOptions(root: string, config: Config): Promise<Record<string, LayerOption[]>>
 {
-    const layersRoot = join(root, ".halign", "layers");
+    const layersRoot = join(root, ".harness-align", "layers");
     await ensureRegularSource(root, layersRoot);
     const stats = await lstatIfExists(layersRoot);
     if (!stats)
     {
         if (config.layers.length === 0) return {};
-        throw new HalignError(".halign/layers: directory is required when layers are configured");
+        throw new HalignError(".harness-align/layers: directory is required when layers are configured");
     }
-    if (!stats.isDirectory()) throw new HalignError(".halign/layers: expected a directory");
+    if (!stats.isDirectory()) throw new HalignError(".harness-align/layers: expected a directory");
     const configured = new Map(config.layers.map((layer) => [layer.name, layer]));
     const entries = await fs.readdir(layersRoot, { withFileTypes: true });
     entries.sort((left, right) => codePointCompare(left.name, right.name));
@@ -530,7 +530,7 @@ export async function loadLayerOptions(root: string, config: Config): Promise<Re
         options[entry.name] = await loadLayerDirectory(root, directory, entry.name, configured.get(entry.name)?.selected, config.harnesses);
     }
     const missing = config.layers.find((layer) => !discovered.has(layer.name));
-    if (missing) throw new HalignError(`.halign/layers/${missing.name}: configured layer directory is required`);
+    if (missing) throw new HalignError(`.harness-align/layers/${missing.name}: configured layer directory is required`);
     return options;
 }
 
@@ -547,7 +547,7 @@ function validateString(path: string, field: string, value: unknown): string
 /** Load subagent sources and validate harness metadata blocks. */
 export async function loadAgents(root: string, configuredHarnesses: HarnessConfig[]): Promise<Agent[]>
 {
-    const paths = await markdownFiles(root, join(root, ".halign", "agents"), false);
+    const paths = await markdownFiles(root, join(root, ".harness-align", "agents"), false);
     const agents: Agent[] = [];
     const names = new Map<string, string>();
     const harnessConfigs = new Map(configuredHarnesses.map((harness) => [harness.name, harness]));
@@ -610,10 +610,10 @@ export interface SharedRule
     body: string;
 }
 
-/** Load `.halign/rules/shared` markdown files. */
+/** Load `.harness-align/rules/shared` markdown files. */
 export async function loadSharedRules(root: string): Promise<SharedRule[]>
 {
-    const paths = await markdownFiles(root, join(root, ".halign", "rules", "shared"), true);
+    const paths = await markdownFiles(root, join(root, ".harness-align", "rules", "shared"), true);
     const rules: SharedRule[] = [];
     for (const sourcePath of paths)
     {

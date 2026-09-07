@@ -8,7 +8,7 @@ export type AgentFormat = "toml" | "yaml";
 /** Untyped harness-specific metadata mapping. */
 export type Metadata = Record<string, unknown>;
 
-/** One harness declared in `.halign/config.json`. */
+/** One harness declared in `.harness-align/config.json`. */
 export interface HarnessConfig
 {
     name: string;
@@ -40,7 +40,7 @@ export interface SkillSource
     branch: string;
 }
 
-/** Validated `.halign/config.json` document. */
+/** Validated `.harness-align/config.json` document. */
 export interface Config
 {
     version: 1;
@@ -139,17 +139,16 @@ export interface Agent
     body: string;
 }
 
-/** One real file currently present under `.halign/generated/`. */
+/** One real file currently present under `.harness-align/generated/`. */
 export interface GeneratedFile
 {
     path: string;
     content: string;
 }
 
-/** Loaded `.halign` workspace shown in the desktop shell. */
+/** Loaded `.harness-align` workspace shown in the desktop shell. */
 export interface Workspace
 {
-    root: string;
     config: Config;
     rootRules: RuleInput[];
     layerOptions: Record<string, LayerOption[]>;

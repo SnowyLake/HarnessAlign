@@ -1,10 +1,10 @@
 /**
- * Ant Design desktop preferences and workspace location page.
+ * Ant Design desktop preferences page.
  */
 
-import { DesktopOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { DesktopOutlined, FileTextOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import type { ThemeMode } from "@shared/models/AppSettings";
-import { Button, Card, Col, Form, Input, Row, Segmented, Space, Typography } from "antd";
+import { Card, Col, Form, Row, Segmented, Space, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { showError, showSuccess } from "@/components/common/Feedback";
 import { AgentDocumentTitleForm } from "@/features/workspace/WorkspaceEditor";
@@ -24,15 +24,13 @@ export function applyTheme(theme: ThemeMode): void
     document.documentElement.classList.toggle("dark", isDark);
 }
 
-/** Render desktop appearance and local workspace information. */
+/** Render desktop appearance and generated document preferences. */
 export function SettingsPage()
 {
     const theme = useAppStore((state) => state.theme);
     const setTheme = useAppStore((state) => state.setTheme);
     const workspace = useAppStore((state) => state.workspace);
     const [version, setVersion] = useState("");
-    const [isOpening, setIsOpening] = useState(false);
-    const configDirectory = workspace ? `${workspace.root}\\.halign` : "%USERPROFILE%\\.halign";
 
     useEffect(() =>
     {
@@ -77,31 +75,6 @@ export function SettingsPage()
                     <Col xs={24} lg={12}>
                         <Card title="Generated instructions" extra={<FileTextOutlined />} className="settings-card">
                             {workspace ? <AgentDocumentTitleForm workspace={workspace} /> : <Typography.Text type="secondary">The user workspace is not loaded yet.</Typography.Text>}
-                        </Card>
-                    </Col>
-                    <Col xs={24} lg={12}>
-                        <Card title="Workspace" extra={<FolderOpenOutlined />} className="settings-card">
-                            <Form layout="vertical" requiredMark={false}>
-                                <Form.Item label="Config directory">
-                            <Space.Compact block>
-                                <Input value={configDirectory} readOnly />
-                                <Button
-                                    icon={<FolderOpenOutlined />}
-                                    loading={isOpening}
-                                    onClick={() =>
-                                    {
-                                        setIsOpening(true);
-                                        void window.appApi.app.openConfigDirectory().catch((error: unknown) =>
-                                        {
-                                            showError(error instanceof Error ? error.message : String(error));
-                                        }).finally(() => setIsOpening(false));
-                                    }}
-                                >
-                                    Open
-                                </Button>
-                            </Space.Compact>
-                                </Form.Item>
-                            </Form>
                         </Card>
                     </Col>
                 </Row>

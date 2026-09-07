@@ -174,12 +174,6 @@ export function registerWorkspaceHandlers(): void
         return workspaceService.generate(selection);
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceCheck, (event, selection?: LayerSelection[]) => runIpc(async () =>
-    {
-        assertTrusted(event);
-        return workspaceService.check(selection);
-    }));
-
     ipcMain.handle(IPC_CHANNELS.workspaceSetup, (event, selection?: LayerSelection[]) => runIpc(async () =>
     {
         assertTrusted(event);

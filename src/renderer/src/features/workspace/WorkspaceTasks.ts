@@ -4,7 +4,7 @@
  */
 
 import { showError, showSuccess } from "@/components/common/Feedback";
-import { ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { fileName, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type FormSnapshot, type Selection } from "@/stores/AppStore";
 import type { AgentFormat, Config, HarnessConfig, RuleInput, Workspace } from "@shared/models/Workspace";
 
@@ -67,10 +67,10 @@ function savedSelection(current: Selection, before: Selection, after: Selection)
 {
     if (before.kind === "layer" && after.kind === "layer" && before.name !== after.name)
     {
-        const previousPrefix = `.halign/layers/${before.name}/`;
+        const previousPrefix = `.harness-align/layers/${before.name}/`;
         if (current.kind === "layer-option" && current.path.startsWith(previousPrefix))
         {
-            return { kind: "layer-option", path: `.halign/layers/${after.name}/${current.path.slice(previousPrefix.length)}` };
+            return { kind: "layer-option", path: `.harness-align/layers/${after.name}/${current.path.slice(previousPrefix.length)}` };
         }
         if (current.kind === "layer-option-new" && current.layer === before.name)
         {
@@ -183,8 +183,8 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             const defaultPath = selection.kind === "rule"
                 ? selection.path
                 : isShared
-                    ? ".halign/rules/shared/new-rule.md"
-                    : ".halign/rules/new-rule.md";
+                    ? ".harness-align/rules/shared/new-rule.md"
+                    : ".harness-align/rules/new-rule.md";
             const original = sharedExisting?.path ?? existing?.path;
             const path = uniqueRulePath(
                 original ?? defaultPath,
@@ -207,7 +207,7 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             else await save(path);
             return {
                 selection: { kind: "rule", path },
-                message: selection.kind === "rule-new" ? `Created ${path}` : `Saved ${path}`,
+                message: selection.kind === "rule-new" ? `Created ${fileName(path)}` : `Saved ${fileName(path)}`,
             };
         }
         case "layer-option":
@@ -254,12 +254,12 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             else
             {
                 await window.appApi.workspace.addLayerOption(layer, nextName);
-                path = `.halign/layers/${layer}/${nextName}.md`;
+                path = `.harness-align/layers/${layer}/${nextName}.md`;
                 await window.appApi.workspace.saveLayerOption({ path, targets, body });
             }
             return {
                 selection: { kind: "layer-option", path },
-                message: existing ? `Saved ${path}` : `Created option ${nextName}`,
+                message: existing ? `Saved ${fileName(path)}` : `Created option ${nextName}`,
             };
         }
         case "agent":
@@ -285,7 +285,7 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             else await save(path);
             return {
                 selection: { kind: "agent", path },
-                message: selection.kind === "agent-new" ? `Created ${path}` : `Saved ${path}`,
+                message: selection.kind === "agent-new" ? `Created ${fileName(path)}` : `Saved ${fileName(path)}`,
             };
         }
         case "generated":
@@ -376,7 +376,7 @@ export async function refreshWorkspace(next?: Selection): Promise<void>
     if (next) useAppStore.getState().setSelection(next);
 }
 
-/** Run Generate / Check / Setup work while holding busy; errors open the output notification flow. */
+/** Run Generate / Setup work while holding busy; errors open the output notification flow. */
 export async function runCommand(work: () => Promise<void>): Promise<void>
 {
     const { setIsBusy, setOutput } = useAppStore.getState();
@@ -422,12 +422,12 @@ export async function persistLayerRename(from: string, to: string): Promise<void
 {
     await window.appApi.workspace.renameLayer(from, to);
     const state = useAppStore.getState();
-    const previousOptionPrefix = `layer-option:.halign/layers/${from}/`;
-    const nextOptionPrefix = `layer-option:.halign/layers/${to}/`;
+    const previousOptionPrefix = `layer-option:.harness-align/layers/${from}/`;
+    const nextOptionPrefix = `layer-option:.harness-align/layers/${to}/`;
     for (const [key, draft] of Object.entries(state.editorDrafts))
     {
         if (!key.startsWith(previousOptionPrefix)) continue;
-        const nextPath = `.halign/layers/${to}/${key.slice(previousOptionPrefix.length)}`;
+        const nextPath = `.harness-align/layers/${to}/${key.slice(previousOptionPrefix.length)}`;
         state.setEditorDraft(nextOptionPrefix + key.slice(previousOptionPrefix.length), {
             ...draft,
             selection: { kind: "layer-option", path: nextPath },
@@ -450,9 +450,9 @@ export async function persistLayerRename(from: string, to: string): Promise<void
         selection: { kind: "layer", name: to },
     });
     state.clearEditorDraft(previousLayerKey);
-    if (state.selection.kind === "layer-option" && state.selection.path.startsWith(`.halign/layers/${from}/`))
+    if (state.selection.kind === "layer-option" && state.selection.path.startsWith(`.harness-align/layers/${from}/`))
     {
-        state.setSelection({ kind: "layer-option", path: `.halign/layers/${to}/${state.selection.path.slice(`.halign/layers/${from}/`.length)}` });
+        state.setSelection({ kind: "layer-option", path: `.harness-align/layers/${to}/${state.selection.path.slice(`.harness-align/layers/${from}/`.length)}` });
     }
     else if (state.selection.kind === "layer-option-new" && state.selection.layer === from)
     {
@@ -469,12 +469,12 @@ export async function persistLayerRename(from: string, to: string): Promise<void
 export async function persistLayerOptionRename(layer: string, from: string, to: string): Promise<string>
 {
     await window.appApi.workspace.renameLayerOption(layer, from, to);
-    const nextPath = `.halign/layers/${layer}/${to}.md`;
+    const nextPath = `.harness-align/layers/${layer}/${to}.md`;
     const state = useAppStore.getState();
     state.setLayerSelection(state.layerSelection.map((selection) => selection.name === layer && selection.option === from
         ? { ...selection, option: to }
         : selection));
-    const previousKey = selectionKey({ kind: "layer-option", path: `.halign/layers/${layer}/${from}.md` });
+    const previousKey = selectionKey({ kind: "layer-option", path: `.harness-align/layers/${layer}/${from}.md` });
     const nextKey = selectionKey({ kind: "layer-option", path: nextPath });
     const draft = state.editorDrafts[previousKey];
     if (draft) state.setEditorDraft(nextKey, {

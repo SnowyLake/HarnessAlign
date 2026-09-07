@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, ty
 import { showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
 import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { catalogLayerNames, defaultLayerOption, ruleDisplayName, selectableLayerNames } from "@/lib/Utils";
+import { catalogLayerNames, defaultLayerOption, fileName, ruleDisplayName, selectableLayerNames } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
 /** Form bindings that preserve drafts and respond to tree commands. */
@@ -292,7 +292,7 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                             }}
                         />
                     </Form.Item>
-                    <Form.Item label="Config path" htmlFor="harness-config-path" extra={<>Relative to <span className="break-anywhere">{workspace.root}</span>. Use / between folders.</>}>
+                    <Form.Item label="Config path" htmlFor="harness-config-path" extra="Relative to your user home directory. Use / between folders.">
                         <Input id="harness-config-path" name="configPath" placeholder=".config/opencode" defaultValue={draftText(editor.draft, "configPath", harness?.configPath ?? "")} />
                     </Form.Item>
                     <Form.Item label="Agent file format" htmlFor="harness-agent-format">
@@ -499,7 +499,7 @@ function LayerCard({ workspace, selection, order, canMoveUp, canMoveDown, isDrag
                     showSuccess(`Removed layer ${selection.name}`);
                 }}
             >
-                <Typography.Paragraph>The files in .halign/layers/{selection.name}/ are kept.</Typography.Paragraph>
+                <Typography.Paragraph>The files in layer {selection.name} are kept.</Typography.Paragraph>
             </Modal>
         </>
     );
@@ -516,8 +516,8 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
     const defaultPath = selection.kind === "rule"
         ? selection.path
         : selection.scope === "root"
-            ? ".halign/rules/new-rule.md"
-            : ".halign/rules/shared/new-rule.md";
+            ? ".harness-align/rules/new-rule.md"
+            : ".harness-align/rules/shared/new-rule.md";
     const sharedExisting = workspace.sharedRules.find((rule) => selection.kind === "rule" && rule.path === selection.path);
     const existing = selection.kind === "rule" ? workspace.rootRules.find((rule) => rule.path === selection.path) : undefined;
     const existingPath = sharedExisting?.path ?? existing?.path;
@@ -567,7 +567,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
             {existingPath ? (
                 <DeleteModal
                     open={isDeleteOpen}
-                    title={`Delete ${existingPath}?`}
+                    title={`Delete ${fileName(existingPath)}?`}
                     description="This permanently deletes the source file from the workspace."
                     isBusy={isBusy}
                     onCancel={() => setIsDeleteOpen(false)}
@@ -579,7 +579,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                             await window.appApi.workspace.deleteSource(existingPath);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace();
-                            showSuccess(`Deleted ${existingPath}`);
+                            showSuccess(`Deleted ${fileName(existingPath)}`);
                         }).then((result) =>
                         {
                             if (!result.ok) setFormError(result.message);
@@ -755,7 +755,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
             {existing ? (
                 <DeleteModal
                     open={isDeleteOpen}
-                    title={`Delete ${existing.path}?`}
+                    title={`Delete ${fileName(existing.path)}?`}
                     description="This permanently deletes the source file from the workspace."
                     isBusy={isBusy}
                     onCancel={() => setIsDeleteOpen(false)}
@@ -767,7 +767,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                             await window.appApi.workspace.deleteSource(existing.path);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace();
-                            showSuccess(`Deleted ${existing.path}`);
+                            showSuccess(`Deleted ${fileName(existing.path)}`);
                         }).then((result) =>
                         {
                             if (!result.ok) setFormError(result.message);
@@ -786,7 +786,7 @@ function GeneratedFileView({ workspace, path }: { workspace: Workspace; path: st
     if (!file) return <MissingEditorEmpty title="Generated file not found" description="Generate or reload the project to refresh output files." />;
     return (
         <Space orientation="vertical" size="middle" className="full-width">
-            <Typography.Text type="secondary">.halign/generated/{file.path}</Typography.Text>
+            <Typography.Text type="secondary">{file.path}</Typography.Text>
             <SourceEditor
                 aria-label={file.path}
                 language={file.path.toLowerCase().endsWith(".md") ? "markdown" : "plain"}
@@ -800,7 +800,7 @@ function GeneratedFileView({ workspace, path }: { workspace: Workspace; path: st
 /** Render the empty generated-output state. */
 function GeneratedEmpty()
 {
-    return <Empty description="Run Generate to populate .halign/generated" />;
+    return <Empty description="Run Generate to create output files" />;
 }
 
 /** Render an empty editor state for a selection that no longer exists. */
@@ -905,7 +905,7 @@ export function HarnessesPanel()
                 />
             </div>
             <Typography.Paragraph type="secondary" className="break-anywhere">
-                Paths are relative to {workspace.root}. Setup updates existing directories and skips missing ones.
+                Paths are relative to your user home directory. Setup updates existing directories and skips missing ones.
             </Typography.Paragraph>
             <Drawer
                 title={selectedHarness ? `Edit ${selectedHarness.name}` : "New harness"}

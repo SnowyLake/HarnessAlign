@@ -13,7 +13,6 @@ const appApi: AppApi = {
     app: {
         getVersion: () => ipcRenderer.invoke(IPC_CHANNELS.appGetVersion),
         openExternal: (url) => ipcRenderer.invoke(IPC_CHANNELS.appOpenExternal, url),
-        openConfigDirectory: () => ipcRenderer.invoke(IPC_CHANNELS.appOpenConfigDirectory),
     },
     settings: {
         get: () => ipcRenderer.invoke(IPC_CHANNELS.settingsGet),
@@ -59,7 +58,6 @@ const appApi: AppApi = {
         importUserSkills: (ids, overwrite) => ipcRenderer.invoke(IPC_CHANNELS.workspaceImportUserSkills, ids, overwrite),
         removeSkill: (id) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRemoveSkill, id),
         generate: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceGenerate, selection),
-        check: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceCheck, selection),
         setup: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetup, selection),
     },
 };

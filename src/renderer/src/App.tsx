@@ -31,7 +31,7 @@ export function App()
             applyTheme(settings.theme);
             const loaded = await window.appApi.workspace.load();
             useAppStore.getState().setWorkspace(loaded);
-            useAppStore.getState().setOutput(`Loaded ${loaded.root}\\.halign`, "success", "Workspace loaded");
+            useAppStore.getState().setOutput("Workspace loaded.", "success", "Workspace loaded");
         })().catch((error: unknown) =>
         {
             const message = error instanceof Error ? error.message : String(error);
@@ -83,25 +83,6 @@ export function App()
             useAppStore.getState().setOutput(report, "success", "Generate completed");
             await refreshWorkspace();
             useAppStore.getState().setView("generated");
-        });
-    };
-
-    /** Check generated output against the current sources. */
-    const handleCheck = (): void =>
-    {
-        const current = useAppStore.getState().workspace;
-        if (!current) return;
-        void runCommand(async () =>
-        {
-            const differences = await window.appApi.workspace.check(useAppStore.getState().layerSelection);
-            if (differences.length === 0)
-            {
-                useAppStore.getState().setOutput("Check passed. Generated output is up to date.", "success", "Check passed");
-            }
-            else
-            {
-                useAppStore.getState().setOutput(`Check failed:\n${differences.join("\n")}`, "error", "Check failed");
-            }
         });
     };
 
@@ -166,7 +147,7 @@ export function App()
         >
             <AntApp className="app-root">
                 <FeedbackBridge />
-                <AppShell onSave={handleSave} onGenerate={handleGenerate} onCheck={handleCheck} onSetup={handleSetup}>
+                <AppShell onSave={handleSave} onGenerate={handleGenerate} onSetup={handleSetup}>
                     {page}
                 </AppShell>
                 <AppOutput />

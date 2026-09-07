@@ -7,7 +7,6 @@
 export const IPC_CHANNELS = {
     appGetVersion: "app:get-version",
     appOpenExternal: "app:open-external",
-    appOpenConfigDirectory: "app:open-config-directory",
     settingsGet: "settings:get",
     settingsUpdate: "settings:update",
     settingsChanged: "settings:changed",
@@ -38,6 +37,5 @@ export const IPC_CHANNELS = {
     workspaceImportUserSkills: "workspace:import-user-skills",
     workspaceRemoveSkill: "workspace:remove-skill",
     workspaceGenerate: "workspace:generate",
-    workspaceCheck: "workspace:check",
     workspaceSetup: "workspace:setup",
 } as const;

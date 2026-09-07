@@ -47,7 +47,7 @@ export type AgentFormat = "toml" | "yaml";
 /** Untyped metadata mapping for one harness. */
 export type Metadata = Record<string, unknown>;
 
-/** One harness declared in `.halign/config.json`. */
+/** One harness declared in `.harness-align/config.json`. */
 export interface HarnessConfig
 {
     name: Harness;
@@ -79,7 +79,7 @@ export interface SkillSource
     branch: string;
 }
 
-/** Validated `.halign/config.json` document. */
+/** Validated `.harness-align/config.json` document. */
 export interface Config
 {
     version: 1;
@@ -144,7 +144,7 @@ export interface Agent
 /** Generated relative path to UTF-8 bytes. */
 export type OutputMap = Map<string, Buffer>;
 
-/** Domain error that the CLI reports as exit code 1. */
+/** Domain error reported by the desktop application. */
 export class HalignError extends Error
 {
     /** Create a domain error with a stable `HalignError` name. */

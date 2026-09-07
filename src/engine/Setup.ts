@@ -190,13 +190,13 @@ async function copySkillDirectory(source: string, destination: string): Promise<
     await visit(source, "");
 }
 
-/** Format the setup success report for CLI and the desktop log. */
+/** Format the setup success report for the desktop log. */
 export function reportSetup(result: SetupResult): string
 {
     const files = [...result.outputs.keys()];
     const lines = [
         "Setup complete.",
-        `Wrote ${files.length} files to ${result.generatedRoot}`,
+        `Wrote ${files.length} files`,
         ...files.map((path) => `  ${path}`),
     ];
     for (const target of result.targets)
@@ -229,7 +229,7 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     const outputs = await generate(root, selection);
-    const generatedRoot = join(root, ".halign", "generated");
+    const generatedRoot = join(root, ".harness-align", "generated");
     const deploymentRoot = resolveUserHome(userProfile);
     await assertRegularDirectory(deploymentRoot, "USERPROFILE");
     await assertNoReparseComponents(root, generatedRoot, "generated root");
@@ -279,7 +279,7 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
         reports.push({ harness: target.harness, root: targetRoot, skipped: false, files });
     }
 
-    const sourceSharedRules = await assertNoReparseComponents(root, join(root, ".halign", "rules", "shared"), "shared rules source");
+    const sourceSharedRules = await assertNoReparseComponents(root, join(root, ".harness-align", "rules", "shared"), "shared rules source");
     await assertRegularDirectory(sourceSharedRules, "shared rules source");
     await assertNoReparseTree(sourceSharedRules, "shared rules source");
     const targetAgentsRoot = await assertNoReparseComponents(deploymentRoot, join(deploymentRoot, ".agents"), "shared rules root");
@@ -296,7 +296,7 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
     const skillInstallations: Array<{ id: string; source: string; target: string }> = [];
     for (const skill of projectSkills)
     {
-        const source = await assertNoReparseComponents(root, join(root, ".halign", "skills", skill.id), `skill ${skill.id} source`);
+        const source = await assertNoReparseComponents(root, join(root, ".harness-align", "skills", skill.id), `skill ${skill.id} source`);
         await assertRegularDirectory(source, `skill ${skill.id} source`);
         await assertNoReparseTree(source, `skill ${skill.id} source`);
         const target = await assertNoReparseComponents(deploymentRoot, join(targetSkillsRoot, skill.id), `skill ${skill.id} target`);

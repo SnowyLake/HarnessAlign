@@ -5,8 +5,6 @@
 import {
     AppstoreOutlined,
     BuildOutlined,
-    CheckCircleOutlined,
-    CloudServerOutlined,
     DeploymentUnitOutlined,
     ExperimentOutlined,
     FileDoneOutlined,
@@ -49,12 +47,11 @@ export interface AppShellProps
     children: ReactNode;
     onSave: () => void;
     onGenerate: () => void;
-    onCheck: () => void;
     onSetup: () => void;
 }
 
 /** Render the Ant Design application shell and top-level commands. */
-export function AppShell({ children, onSave, onGenerate, onCheck, onSetup }: AppShellProps)
+export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProps)
 {
     const view = useAppStore((state) => state.view);
     const setView = useAppStore((state) => state.setView);
@@ -128,13 +125,6 @@ export function AppShell({ children, onSave, onGenerate, onCheck, onSetup }: App
                             <span className="app-brand-version">{version ? `Desktop ${version}` : "Desktop"}</span>
                         </span>
                     </button>
-                    <span className="app-topbar-divider" />
-                    <div className="app-workspace-identity">
-                        <CloudServerOutlined />
-                        <span className="app-workspace-copy">
-                            <Typography.Text ellipsis title={workspace?.root ?? ""}>{workspace ? `${workspace.root}\\.halign` : "Loading workspace..."}</Typography.Text>
-                        </span>
-                    </div>
                 </Flex>
                 <Flex align="center" gap={12} wrap={false}>
                     {isBusy ? <Space size={6}><Spin size="small" /><Typography.Text type="secondary">Working...</Typography.Text></Space> : dirtyCount > 0 ? <Badge status="processing" text={`${dirtyCount} unsaved`} /> : null}
@@ -142,7 +132,6 @@ export function AppShell({ children, onSave, onGenerate, onCheck, onSetup }: App
                         <Button classNames={topbarButtonClassNames} icon={<SaveOutlined />} disabled={!workspace || isBusy} aria-keyshortcuts="Control+S" onClick={onSave}>Save</Button>
                     </Tooltip>
                     <Space.Compact>
-                        <Button classNames={topbarButtonClassNames} icon={<CheckCircleOutlined />} disabled={!workspace || isBusy} onClick={onCheck}>Check</Button>
                         <Button classNames={topbarButtonClassNames} type="primary" icon={<BuildOutlined />} disabled={!workspace || isBusy} onClick={onGenerate}>Generate</Button>
                         <Button classNames={topbarButtonClassNames} icon={<RocketOutlined />} disabled={!workspace || isBusy} onClick={() => setIsSetupOpen(true)}>Setup</Button>
                     </Space.Compact>

@@ -250,7 +250,7 @@ export const useAppStore = create<AppState>((set) => ({
     })),
     setWorkspace: (workspace) => set((state) =>
     {
-        const isDifferentRoot = state.workspace?.root !== workspace?.root;
+        const shouldReset = !state.workspace || !workspace;
         return {
             workspace,
             selection: state.view === "settings" || state.view === "showcase"
@@ -258,11 +258,11 @@ export const useAppStore = create<AppState>((set) => ({
                 : selectionForView(state.view, state.selection, workspace),
             layerSelection: !workspace
                 ? []
-                : isDifferentRoot
+                : shouldReset
                     ? savedLayerSelection(workspace)
                     : reconcileLayerSelection(state.layerSelection, workspace),
-            editorDrafts: isDifferentRoot ? {} : state.editorDrafts,
-            pendingEditorAction: isDifferentRoot ? undefined : state.pendingEditorAction,
+            editorDrafts: shouldReset ? {} : state.editorDrafts,
+            pendingEditorAction: shouldReset ? undefined : state.pendingEditorAction,
         };
     }),
     setSelection: (selection) => set({ selection }),

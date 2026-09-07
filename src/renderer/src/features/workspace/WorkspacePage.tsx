@@ -18,12 +18,11 @@ export interface WorkspacePageProps
 export function WorkspacePage({ view }: WorkspacePageProps)
 {
     const selection = useAppStore((state) => state.selection);
-    const workspaceRoot = useAppStore((state) => state.workspace?.root);
 
     if (view === "project" || view === "skills" || view === "skill-registration")
     {
         return (
-            <div className="workspace-scroll" key={`${workspaceRoot ?? ""}:${view}`}>
+            <div className="workspace-scroll" key={view}>
                 <div className="workspace-wide-page">{view === "project" ? <HarnessesPanel /> : view === "skills" ? <SkillsPanel /> : <SkillRegistrationPanel />}</div>
             </div>
         );
@@ -48,7 +47,7 @@ export function WorkspacePage({ view }: WorkspacePageProps)
                         <WorkspaceTree view={view} />
                     </Splitter.Panel>
                     <Splitter.Panel min={480}>
-                        <div className="workspace-scroll" key={`${workspaceRoot ?? ""}:${selectionKey(selection)}`}>
+                        <div className="workspace-scroll" key={selectionKey(selection)}>
                             <div className="workspace-editor-page"><WorkspaceEditor /></div>
                         </div>
                     </Splitter.Panel>

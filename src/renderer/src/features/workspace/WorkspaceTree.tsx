@@ -352,7 +352,7 @@ function LayerGroupEditor({ name, isBusy, onAddOption }: LayerGroupEditorProps)
         {
             await window.appApi.workspace.removeLayer(name);
             const state = useAppStore.getState();
-            const optionPrefix = `layer-option:.halign/layers/${name}/`;
+            const optionPrefix = `layer-option:.harness-align/layers/${name}/`;
             const newOptionKey = selectionKey({ kind: "layer-option-new", layer: name });
             const layerKey = selectionKey({ kind: "layer", name });
             for (const key of Object.keys(state.editorDrafts))
@@ -453,7 +453,7 @@ function LayerGroupEditor({ name, isBusy, onAddOption }: LayerGroupEditorProps)
                 onCancel={() => setIsDeleteOpen(false)}
                 onOk={() => void handleDelete()}
             >
-                <Typography.Text>This permanently removes .halign/layers/{name}/ and every option inside it.</Typography.Text>
+                <Typography.Text>This permanently removes layer {name} and every option inside it.</Typography.Text>
             </Modal>
         </>
     );

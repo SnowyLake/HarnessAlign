@@ -1,6 +1,6 @@
 /**
  * Engine tests against temporary directories.
- * Do not use this repository as a `.halign` config root, and do not open Electron windows here.
+ * Do not use this repository as a `.harness-align` config root, and do not open Electron windows here.
  */
 
 import assert from "node:assert/strict";
@@ -10,13 +10,19 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
+import { workspaceService } from "../src/main/services/WorkspaceService.js";
+import { atomicWrite } from "../src/engine/FsSafe.js";
+import { buildOutputs, generate, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
+import { loadConfig, validateConfig } from "../src/engine/Load.js";
+import { HalignError } from "../src/engine/Model.js";
+import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
+import { reportSetup, setup } from "../src/engine/Setup.js";
+import { assertSafeZipEntry, hashSkillDirectory, installSkillFromDirectory, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
-    atomicWrite, addHarness, addLayer, addLayerOption, addSkillSource, assertSafeZipEntry, buildOutputs, check, deleteSource,
-    downgradeMarkdownHeadings, ensureUserWorkspace, generate, HalignError, hashSkillDirectory, importUserSkills, installSkillFromDirectory,
-    listUserSkills, loadConfig, loadSkills, loadWorkspace, main, parseGitHubSkillSource, removeHarness, removeLayer, removeLayerOption,
-    removeSkill, removeSkillSource, renameLayer, renameLayerOption, renameSource, renderMarkdownToc, reportGenerate, reportSetup,
-    safeOutputRelative, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, setup, updateHarness, validateConfig,
-} from "../src/engine/Halign.js";
+    addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace, importUserSkills,
+    listUserSkills, loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource,
+    renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, updateHarness,
+} from "../src/engine/Edit.js";
 
 const config = {
     version: 1,
@@ -32,16 +38,16 @@ const config = {
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
 
-/** Create a temporary `.halign` project, run the case, then delete the directory. */
+/** Create a temporary `.harness-align` project, run the case, then delete the directory. */
 async function withProject(run: (root: string) => Promise<void>): Promise<void>
 {
     const root = await mkdtemp(join(tmpdir(), "halign-ts-"));
     try
     {
-        await mkdir(join(root, ".halign", "rules"), { recursive: true });
-        await mkdir(join(root, ".halign", "layers", "soul"), { recursive: true });
-        await mkdir(join(root, ".halign", "agents"), { recursive: true });
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify(config), "utf8");
+        await mkdir(join(root, ".harness-align", "rules"), { recursive: true });
+        await mkdir(join(root, ".harness-align", "layers", "soul"), { recursive: true });
+        await mkdir(join(root, ".harness-align", "agents"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify(config), "utf8");
         await writeLayerOption(root, "soul", "arona", "# Soul\n\narona soul");
         await writeLayerOption(root, "soul", "kei", "# Soul\n\nkei soul");
         await writeRule(root, "base.md", 100, "# Base\n\nbase");
@@ -59,14 +65,14 @@ async function writeLayerOption(root: string, layer: string, option: string, bod
 {
     const targetLines = targets.length === 0 ? "targets: []\n" : `targets:\n${targets.map((target) => `  - ${target}\n`).join("")}`;
     const frontmatter = `---\n${targetLines}---\n\n`;
-    await writeFile(join(root, ".halign", "layers", layer, `${option}.md`), `${frontmatter}${body}`, "utf8");
+    await writeFile(join(root, ".harness-align", "layers", layer, `${option}.md`), `${frontmatter}${body}`, "utf8");
 }
 
-/** Write a root rule markdown file under `.halign/rules`. */
+/** Write a root rule markdown file under `.harness-align/rules`. */
 async function writeRule(root: string, name: string, priority: number, body: string, targets: string[] = ALL_HARNESS_NAMES): Promise<void>
 {
     const targetLines = targets.length === 0 ? "targets: []\n" : "targets:\n" + targets.map((target) => "  - " + target + "\n").join("");
-    await writeFile(join(root, ".halign", "rules", name), "---\npriority: " + priority + "\n" + targetLines + "---\n\n" + body + "\n", "utf8");
+    await writeFile(join(root, ".harness-align", "rules", name), "---\npriority: " + priority + "\n" + targetLines + "---\n\n" + body + "\n", "utf8");
 }
 
 /** Write a sample subagent with per-harness metadata. */
@@ -105,7 +111,7 @@ async function writeAgent(root: string, name = "explorer"): Promise<void>
         "Read evidence.",
         "",
     ].join("\n");
-    await writeFile(join(root, ".halign", "agents", name + ".md"), content, "utf8");
+    await writeFile(join(root, ".harness-align", "agents", name + ".md"), content, "utf8");
 }
 
 /** Decode one generated path from an output map. */
@@ -135,96 +141,67 @@ async function snapshot(root: string): Promise<Map<string, Buffer>>
     return files;
 }
 
-/** Capture stdout and stderr while `run` executes, then restore the original writers. */
-async function withCapturedStdio(run: () => Promise<number>): Promise<{ code: number; stdout: string; stderr: string }>
-{
-    let stdout = "";
-    let stderr = "";
-    const originalOut = process.stdout.write;
-    const originalErr = process.stderr.write;
-    const capture = (target: "stdout" | "stderr"): typeof process.stdout.write => ((chunk: unknown, encoding?: unknown, callback?: unknown) =>
-    {
-        const text = String(chunk);
-        if (target === "stdout") stdout += text;
-        else stderr += text;
-        if (typeof encoding === "function") (encoding as () => void)();
-        else if (typeof callback === "function") (callback as () => void)();
-        return true;
-    }) as typeof process.stdout.write;
-    process.stdout.write = capture("stdout");
-    process.stderr.write = capture("stderr");
-    try
-    {
-        return { code: await run(), stdout, stderr };
-    }
-    finally
-    {
-        process.stdout.write = originalOut;
-        process.stderr.write = originalErr;
-    }
-}
-
 test("config and metadata validation reject unsafe input", async () =>
 {
     await withProject(async (root) =>
     {
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, layers: [{ name: "../x", selected: "arona" }] }), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, layers: [{ name: "../x", selected: "arona" }] }), "utf8");
         await assert.rejects(buildOutputs(root), /name must match/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[0], config_path: "../escape" }] }), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[0], config_path: "../escape" }] }), "utf8");
         await assert.rejects(buildOutputs(root), /normalized relative path/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [
             { ...config.harnesses[0], config_path: ".tools" },
             { ...config.harnesses[1], config_path: ".tools/nested" },
         ] }), "utf8");
         await assert.rejects(buildOutputs(root), /must not overlap/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [
             { ...config.harnesses[0], config_path: ".agents/shared-rules/custom" },
         ] }), "utf8");
         await assert.rejects(buildOutputs(root), /managed shared rules target/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
-            { ...config.harnesses[0], config_path: ".halign" },
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [
+            { ...config.harnesses[0], config_path: ".harness-align" },
         ] }), "utf8");
         await assert.rejects(buildOutputs(root), /managed config directory/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
-            { ...config.harnesses[0], config_path: ".halign/extra" },
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [
+            { ...config.harnesses[0], config_path: ".harness-align/extra" },
         ] }), "utf8");
         await assert.rejects(buildOutputs(root), /managed config directory/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [
             { ...config.harnesses[0], name: "con" },
         ] }), "utf8");
         await assert.rejects(buildOutputs(root), /Windows reserved device name/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, version: 2 }), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, version: 2 }), "utf8");
         await assert.rejects(buildOutputs(root), /version must be integer 1/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, profiles: ["legacy"] }), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, profiles: ["legacy"] }), "utf8");
         await assert.rejects(buildOutputs(root), /unknown field "profiles"/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], extra: true }] }), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], extra: true }] }), "utf8");
         await assert.rejects(buildOutputs(root), /unknown field/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], agent_format: "json" }] }), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], agent_format: "json" }] }), "utf8");
         await assert.rejects(buildOutputs(root), /agent_format must be toml or yaml/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], agent_extension: ".md" }] }), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], agent_extension: ".md" }] }), "utf8");
         await assert.rejects(buildOutputs(root), /agent_extension must match/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[0], instructions_field: undefined }] }), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[0], instructions_field: undefined }] }), "utf8");
         await assert.rejects(buildOutputs(root), /instructions_field is required/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], instructions_field: "developer_instructions" }] }), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], instructions_field: "developer_instructions" }] }), "utf8");
         await assert.rejects(buildOutputs(root), /instructions_field is only supported when agent_format is toml/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[0], instructions_field: "name" }] }), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[0], instructions_field: "name" }] }), "utf8");
         await assert.rejects(buildOutputs(root), /other than name or description/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({
             ...config,
             harnesses: [config.harnesses[0], { ...config.harnesses[0], config_path: ".other" }],
         }), "utf8");
         await assert.rejects(buildOutputs(root), /harness names must be unique/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify(config), "utf8");
-        await writeFile(join(root, ".halign", "agents", "explorer.md"), "---\nname: explorer\ndescription: Read only.\nharnesses:\n  codex:\n    developer_instructions: stolen\n---\n\nbody\n", "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify(config), "utf8");
+        await writeFile(join(root, ".harness-align", "agents", "explorer.md"), "---\nname: explorer\ndescription: Read only.\nharnesses:\n  codex:\n    developer_instructions: stolen\n---\n\nbody\n", "utf8");
         await assert.rejects(buildOutputs(root), /reserved for the Markdown body/u);
         await writeAgent(root);
-        await writeFile(join(root, ".halign", "agents", "explorer.md"), "---\nname: explorer\ndescription: Read only.\nharnesses:\n  missing:\n    model: x\n---\n\nbody\n", "utf8");
+        await writeFile(join(root, ".harness-align", "agents", "explorer.md"), "---\nname: explorer\ndescription: Read only.\nharnesses:\n  missing:\n    model: x\n---\n\nbody\n", "utf8");
         await assert.rejects(buildOutputs(root), /configured harness names/u);
         await writeAgent(root);
-        await writeFile(join(root, ".halign", "rules", "bad.md"), "---\npriority: high\n---\n\n# Bad\n\nbad\n", "utf8");
+        await writeFile(join(root, ".harness-align", "rules", "bad.md"), "---\npriority: high\n---\n\n# Bad\n\nbad\n", "utf8");
         await assert.rejects(buildOutputs(root), /priority/u);
-        await unlink(join(root, ".halign", "rules", "bad.md"));
-        await writeFile(join(root, ".halign", "layers", "soul", "arona.md"), "---\npriority: 3\n---\n\n# Soul\n", "utf8");
+        await unlink(join(root, ".harness-align", "rules", "bad.md"));
+        await writeFile(join(root, ".harness-align", "layers", "soul", "arona.md"), "---\npriority: 3\n---\n\n# Soul\n", "utf8");
         await assert.rejects(buildOutputs(root), /unknown layer field "priority"/u);
     });
 });
@@ -233,12 +210,12 @@ test("Layer discovery is strict and empty layers and options are valid", async (
 {
     await withProject(async (root) =>
     {
-        await saveLayerOption(root, { path: ".halign/layers/soul/arona.md", targets: [], body: "" });
+        await saveLayerOption(root, { path: ".harness-align/layers/soul/arona.md", targets: [], body: "" });
         assert.ok(!output(await buildOutputs(root), "codex/AGENTS.md").includes("arona soul"));
-        await mkdir(join(root, ".halign", "layers", "soul", "nested"));
+        await mkdir(join(root, ".harness-align", "layers", "soul", "nested"));
         await assert.rejects(buildOutputs(root), /only contain direct Markdown files/u);
-        await rm(join(root, ".halign", "layers", "soul", "nested"), { recursive: true });
-        await mkdir(join(root, ".halign", "layers", "orphan"));
+        await rm(join(root, ".harness-align", "layers", "soul", "nested"), { recursive: true });
+        await mkdir(join(root, ".harness-align", "layers", "orphan"));
         assert.deepEqual((await loadWorkspace(root)).layerOptions.orphan, []);
         await writeLayerOption(root, "orphan", "x", "x");
         const catalog = await loadWorkspace(root);
@@ -250,10 +227,10 @@ test("Layer discovery is strict and empty layers and options are valid", async (
         const withoutSoul = await buildOutputs(root, []);
         assert.ok(!output(withoutSoul, "codex/AGENTS.md").includes("kei soul"));
         await assert.rejects(buildOutputs(root, [{ name: "missing", option: "x" }]), /unknown layer selection/u);
-        await rm(join(root, ".halign", "layers", "orphan"), { recursive: true });
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({ ...config, layers: [{ name: "soul", selected: "missing" }] }), "utf8");
+        await rm(join(root, ".harness-align", "layers", "orphan"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, layers: [{ name: "soul", selected: "missing" }] }), "utf8");
         await assert.rejects(buildOutputs(root), /selected option does not exist/u);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify(config), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify(config), "utf8");
         await assert.rejects(buildOutputs(root, [{ name: "soul", option: "missing" }]), /option does not exist/u);
     });
 });
@@ -266,12 +243,12 @@ test("root rules, ordered Layer selection, targets, Markdown, and renderers are 
         await writeRule(root, "alpha.md", 10, "# Alpha\n\nalpha");
         await writeRule(root, "cursor.md", 1, "# Cursor\n\ncursor only", ["cursor"]);
         await writeRule(root, "disabled.md", 0, "# Disabled\n\nempty target rule", []);
-        await writeFile(join(root, ".halign", "rules", "missing-targets.md"), "---\npriority: 0\n---\n\n# Missing Targets\n\nmissing target rule\n", "utf8");
-        await mkdir(join(root, ".halign", "layers", "workflow"));
+        await writeFile(join(root, ".harness-align", "rules", "missing-targets.md"), "---\npriority: 0\n---\n\n# Missing Targets\n\nmissing target rule\n", "utf8");
+        await mkdir(join(root, ".harness-align", "layers", "workflow"));
         await writeLayerOption(root, "workflow", "strict", "# Workflow\n\nstrict workflow");
-        await mkdir(join(root, ".halign", "layers", "disabled"));
+        await mkdir(join(root, ".harness-align", "layers", "disabled"));
         await writeLayerOption(root, "disabled", "off", "# Disabled Layer\n\nempty target layer", []);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({
             ...config,
             layers: [...config.layers, { name: "workflow", selected: "strict" }, { name: "disabled", selected: "off" }],
         }), "utf8");
@@ -318,25 +295,23 @@ test("root rules, ordered Layer selection, targets, Markdown, and renderers are 
     });
 });
 
-test("generate, check, stale ownership, and preflight keep valid output safe", async () =>
+test("generate, stale ownership, and preflight keep valid output safe", async () =>
 {
     await withProject(async (root) =>
     {
         await writeAgent(root, "second");
         await generate(root);
-        const generated = join(root, ".halign", "generated");
+        const generated = join(root, ".harness-align", "generated");
         const first = await snapshot(generated);
         await generate(root);
         assert.deepEqual(await snapshot(generated), first);
         await writeFile(join(generated, "unmanaged.txt"), "keep", "utf8");
-        await unlink(join(root, ".halign", "agents", "second.md"));
+        await unlink(join(root, ".harness-align", "agents", "second.md"));
         await generate(root);
         await assert.rejects(readFile(join(generated, "codex", "agents", "second.toml")));
         assert.equal(await readFile(join(generated, "unmanaged.txt"), "utf8"), "keep");
-        assert.ok((await check(root)).includes("extra: unmanaged.txt"));
         await unlink(join(generated, "unmanaged.txt"));
         await unlink(join(generated, "codex", "AGENTS.md"));
-        assert.ok((await check(root)).includes("missing: codex/AGENTS.md"));
         await generate(root);
         await rm(join(generated, "codex", "AGENTS.md"));
         await mkdir(join(generated, "codex", "AGENTS.md"));
@@ -351,15 +326,15 @@ test("manifest path, encoding, atomic failure, and reparse boundaries are reject
     await withProject(async (root) =>
     {
         for (const path of ["../escape", "C:/escape", "a\\b", "."]) assert.throws(() => safeOutputRelative(path), HalignError);
-        await writeFile(join(root, ".halign", "rules", "bad.md"), Buffer.from([0xff, 0xfe]));
+        await writeFile(join(root, ".harness-align", "rules", "bad.md"), Buffer.from([0xff, 0xfe]));
         await assert.rejects(buildOutputs(root), /UTF-8/u);
-        await unlink(join(root, ".halign", "rules", "bad.md"));
+        await unlink(join(root, ".harness-align", "rules", "bad.md"));
         const target = join(root, "atomic.txt");
         await writeFile(target, "old", "utf8");
         await assert.rejects(atomicWrite(target, Buffer.from("new"), async () =>
         { throw new Error("replace failed"); }), /replace failed/u);
         assert.equal(await readFile(target, "utf8"), "old");
-        const rules = join(root, ".halign", "rules");
+        const rules = join(root, ".harness-align", "rules");
         const redirectedRules = join(root, "redirected-rules");
         await rename(rules, redirectedRules);
         await symlink(redirectedRules, rules, "junction");
@@ -367,11 +342,11 @@ test("manifest path, encoding, atomic failure, and reparse boundaries are reject
         await unlink(rules);
         await rename(redirectedRules, rules);
         await generate(root);
-        await rm(join(root, ".halign", "generated", "codex"), { recursive: true });
+        await rm(join(root, ".harness-align", "generated", "codex"), { recursive: true });
         const redirected = join(root, "redirected");
         await mkdir(redirected);
-        await symlink(redirected, join(root, ".halign", "generated", "codex"), "junction");
-        await assert.rejects(check(root), /symbolic link outputs/u);
+        await symlink(redirected, join(root, ".harness-align", "generated", "codex"), "junction");
+        await assert.rejects(generate(root), /symbolic link outputs/u);
     });
 });
 test("setup deploys generated harness content into existing roots and shared rules", async () =>
@@ -379,8 +354,8 @@ test("setup deploys generated harness content into existing roots and shared rul
     await withProject(async (root) =>
     {
         const userProfile = join(root, "isolated-userprofile");
-        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
-        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        await mkdir(join(root, ".harness-align", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
         await mkdir(join(userProfile, ".codex", "agents"), { recursive: true });
         await mkdir(join(userProfile, ".config", "opencode", "agents"), { recursive: true });
         await writeFile(join(userProfile, ".codex", "AGENTS.md"), "old codex\n", "utf8");
@@ -390,9 +365,9 @@ test("setup deploys generated harness content into existing roots and shared rul
 
         await setup(root, undefined, userProfile);
 
-        assert.deepEqual(await snapshot(join(userProfile, ".codex")), await snapshot(join(root, ".halign", "generated", "codex")));
-        assert.deepEqual(await snapshot(join(userProfile, ".config", "opencode")), await snapshot(join(root, ".halign", "generated", "opencode")));
-        assert.deepEqual(await snapshot(join(userProfile, ".agents", "shared-rules")), await snapshot(join(root, ".halign", "rules", "shared")));
+        assert.deepEqual(await snapshot(join(userProfile, ".codex")), await snapshot(join(root, ".harness-align", "generated", "codex")));
+        assert.deepEqual(await snapshot(join(userProfile, ".config", "opencode")), await snapshot(join(root, ".harness-align", "generated", "opencode")));
+        assert.deepEqual(await snapshot(join(userProfile, ".agents", "shared-rules")), await snapshot(join(root, ".harness-align", "rules", "shared")));
         await assert.rejects(readFile(join(userProfile, ".cursor", "AGENTS.md")));
     });
 });
@@ -405,7 +380,7 @@ test("setup follows configurable harness names, formats, extensions, and deploym
             ...config,
             harnesses: [{ name: "atlas", config_path: ".tools/atlas", agent_format: "yaml", agent_extension: "agent" }],
         };
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify(customConfig), "utf8");
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify(customConfig), "utf8");
         await writeRule(root, "base.md", 100, "# Base\n\nbase", ["atlas"]);
         await writeLayerOption(root, "soul", "arona", "# Soul\n\narona soul", ["atlas"]);
         await writeLayerOption(root, "soul", "kei", "# Soul\n\nkei soul", ["atlas"]);
@@ -423,9 +398,9 @@ test("setup follows configurable harness names, formats, extensions, and deploym
             "Read custom evidence.",
             "",
         ].join("\n");
-        await writeFile(join(root, ".halign", "agents", "explorer.md"), agent, "utf8");
-        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
-        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        await writeFile(join(root, ".harness-align", "agents", "explorer.md"), agent, "utf8");
+        await mkdir(join(root, ".harness-align", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
 
         const userProfile = join(root, "isolated-userprofile");
         const targetRoot = join(userProfile, ".tools", "atlas");
@@ -433,7 +408,7 @@ test("setup follows configurable harness names, formats, extensions, and deploym
 
         await setup(root, undefined, userProfile);
 
-        assert.deepEqual(await snapshot(targetRoot), await snapshot(join(root, ".halign", "generated", "atlas")));
+        assert.deepEqual(await snapshot(targetRoot), await snapshot(join(root, ".harness-align", "generated", "atlas")));
         const generatedAgent = await readFile(join(targetRoot, "agents", "explorer.agent"), "utf8");
         const metadata = parseYaml(generatedAgent.split("---\n")[1] ?? "");
         assert.equal(metadata.arbitrary_flag, true);
@@ -449,8 +424,8 @@ test("setup rejects target reparse points before replacing an existing root", as
         const userProfile = join(root, "isolated-userprofile");
         const targetRoot = join(userProfile, ".codex");
         const redirected = join(root, "redirected-target");
-        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
-        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        await mkdir(join(root, ".harness-align", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
         await mkdir(targetRoot, { recursive: true });
         await writeFile(join(targetRoot, "AGENTS.md"), "keep this file\n", "utf8");
         await mkdir(redirected, { recursive: true });
@@ -467,12 +442,12 @@ test("generate and setup reports list written files and destination directories"
 {
     await withProject(async (root) =>
     {
-        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
-        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        await mkdir(join(root, ".harness-align", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
         const outputs = await generate(root);
-        const generatedRoot = join(root, ".halign", "generated");
-        const generateLog = reportGenerate(generatedRoot, outputs);
-        assert.ok(generateLog.includes(`Wrote ${outputs.size} files to ${generatedRoot}`));
+        const generateLog = reportGenerate(outputs);
+        assert.ok(generateLog.includes(`Wrote ${outputs.size} files`));
+        assert.ok(!generateLog.includes(".harness-align"));
         assert.ok(generateLog.includes("  .manifest.json"));
         assert.ok(generateLog.includes("  codex/AGENTS.md"));
         assert.ok(generateLog.includes("  codex/agents/explorer.toml"));
@@ -482,7 +457,8 @@ test("generate and setup reports list written files and destination directories"
         const userProfile = join(root, "isolated-userprofile");
         await mkdir(join(userProfile, ".codex", "agents"), { recursive: true });
         const setupLog = reportSetup(await setup(root, undefined, userProfile));
-        assert.ok(setupLog.includes(`Wrote ${outputs.size} files to ${generatedRoot}`));
+        assert.ok(setupLog.includes(`Wrote ${outputs.size} files`));
+        assert.ok(!setupLog.includes(".harness-align"));
         assert.ok(setupLog.includes(`Updated codex at ${join(userProfile, ".codex")}`));
         assert.ok(setupLog.includes("  agents/explorer.toml"));
         assert.ok(setupLog.includes(`Skipped cursor; target does not exist: ${join(userProfile, ".cursor")}`));
@@ -499,10 +475,10 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
     {
         const loaded = await loadConfig(root);
         await saveConfig(root, { ...loaded, name: "Aligned" });
-        const written = JSON.parse(await readFile(join(root, ".halign", "config.json"), "utf8")) as { layers: Array<{ name: string; selected: string }>; name: string };
+        const written = JSON.parse(await readFile(join(root, ".harness-align", "config.json"), "utf8")) as { layers: Array<{ name: string; selected: string }>; name: string };
         assert.equal(written.name, "Aligned");
         assert.deepEqual(written.layers, [{ name: "soul", selected: "arona" }]);
-        const before = await readFile(join(root, ".halign", "config.json"), "utf8");
+        const before = await readFile(join(root, ".harness-align", "config.json"), "utf8");
         await assert.rejects(saveConfig(root, {
             ...loaded,
             name: "Aligned",
@@ -511,18 +487,18 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
                 { name: "b", configPath: ".tools/nested", agentFormat: "yaml", agentExtension: "md" },
             ],
         }), /must not overlap/u);
-        assert.equal(await readFile(join(root, ".halign", "config.json"), "utf8"), before);
+        assert.equal(await readFile(join(root, ".harness-align", "config.json"), "utf8"), before);
 
-        await saveRule(root, { path: ".halign/rules/cursor.md", priority: 1, targets: ["cursor"], body: "# Cursor\n\ncursor only" });
-        await saveLayerOption(root, { path: ".halign/layers/soul/kei.md", targets: ["cursor"], body: "# Soul\n\nkei soul" });
-        await saveSharedRule(root, ".halign/rules/shared/shared.md", "shared rule");
+        await saveRule(root, { path: ".harness-align/rules/cursor.md", priority: 1, targets: ["cursor"], body: "# Cursor\n\ncursor only" });
+        await saveLayerOption(root, { path: ".harness-align/layers/soul/kei.md", targets: ["cursor"], body: "# Soul\n\nkei soul" });
+        await saveSharedRule(root, ".harness-align/rules/shared/shared.md", "shared rule");
         await addLayer(root, "mode");
-        assert.deepEqual(await readdir(join(root, ".halign", "layers", "mode")), []);
+        assert.deepEqual(await readdir(join(root, ".harness-align", "layers", "mode")), []);
         assert.deepEqual((await loadWorkspace(root)).layerOptions.mode, []);
         assert.deepEqual((await loadConfig(root)).layers.map((layer) => layer.name), ["soul"]);
         await addLayerOption(root, "mode", "strict");
         await removeLayerOption(root, "mode", "strict");
-        assert.deepEqual(await readdir(join(root, ".halign", "layers", "mode")), []);
+        assert.deepEqual(await readdir(join(root, ".harness-align", "layers", "mode")), []);
         await addLayerOption(root, "mode", "fast");
         const withMode = await loadConfig(root);
         await saveConfig(root, { ...withMode, layers: [...withMode.layers, { name: "mode", selected: "fast" }] });
@@ -534,17 +510,17 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
         await renameLayer(root, "mode", "workflow");
         assert.equal((await loadConfig(root)).layers.find((layer) => layer.name === "workflow")?.selected, "quick");
         await removeLayer(root, "workflow");
-        await assert.rejects(readdir(join(root, ".halign", "layers", "workflow")));
+        await assert.rejects(readdir(join(root, ".harness-align", "layers", "workflow")));
 
-        const renamedRuleBody = await readFile(join(root, ".halign", "rules", "cursor.md"), "utf8");
-        await renameSource(root, ".halign/rules/cursor.md", ".halign/rules/renamed-cursor.md");
-        await assert.rejects(readFile(join(root, ".halign", "rules", "cursor.md")));
-        assert.equal(await readFile(join(root, ".halign", "rules", "renamed-cursor.md"), "utf8"), renamedRuleBody);
-        const baseBeforeCollision = await readFile(join(root, ".halign", "rules", "base.md"), "utf8");
-        await assert.rejects(renameSource(root, ".halign/rules/base.md", ".halign/rules/renamed-cursor.md"), /destination already exists/u);
-        assert.equal(await readFile(join(root, ".halign", "rules", "base.md"), "utf8"), baseBeforeCollision);
+        const renamedRuleBody = await readFile(join(root, ".harness-align", "rules", "cursor.md"), "utf8");
+        await renameSource(root, ".harness-align/rules/cursor.md", ".harness-align/rules/renamed-cursor.md");
+        await assert.rejects(readFile(join(root, ".harness-align", "rules", "cursor.md")));
+        assert.equal(await readFile(join(root, ".harness-align", "rules", "renamed-cursor.md"), "utf8"), renamedRuleBody);
+        const baseBeforeCollision = await readFile(join(root, ".harness-align", "rules", "base.md"), "utf8");
+        await assert.rejects(renameSource(root, ".harness-align/rules/base.md", ".harness-align/rules/renamed-cursor.md"), /destination already exists/u);
+        assert.equal(await readFile(join(root, ".harness-align", "rules", "base.md"), "utf8"), baseBeforeCollision);
 
-        const configBeforeInvalidHarness = await readFile(join(root, ".halign", "config.json"), "utf8");
+        const configBeforeInvalidHarness = await readFile(join(root, ".harness-align", "config.json"), "utf8");
         await assert.rejects(updateHarness(root, "cursor", {
             name: "invalid name",
             configPath: ".atlas",
@@ -552,7 +528,7 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
             agentExtension: "toml",
             instructionsField: "instructions",
         }), /name must match/u);
-        assert.equal(await readFile(join(root, ".halign", "config.json"), "utf8"), configBeforeInvalidHarness);
+        assert.equal(await readFile(join(root, ".harness-align", "config.json"), "utf8"), configBeforeInvalidHarness);
 
         await updateHarness(root, "cursor", {
             name: "atlas",
@@ -570,8 +546,8 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
             instructionsField: "instructions",
         });
         assert.ok(!renamed.config.harnesses.some((harness) => harness.name === "cursor"));
-        assert.deepEqual(renamed.rootRules.map((rule) => rule.path), [".halign/rules/renamed-cursor.md", ".halign/rules/base.md"]);
-        assert.deepEqual(renamed.rootRules.find((rule) => rule.path === ".halign/rules/renamed-cursor.md")?.targets, ["atlas"]);
+        assert.deepEqual(renamed.rootRules.map((rule) => rule.path), [".harness-align/rules/renamed-cursor.md", ".harness-align/rules/base.md"]);
+        assert.deepEqual(renamed.rootRules.find((rule) => rule.path === ".harness-align/rules/renamed-cursor.md")?.targets, ["atlas"]);
         assert.deepEqual(renamed.layerOptions.soul?.find((option) => option.name === "kei")?.targets, ["atlas"]);
         assert.ok(renamed.agents[0]?.harnesses.atlas);
         assert.equal(renamed.agents[0]?.harnesses.cursor, undefined);
@@ -579,7 +555,7 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
 
         await addHarness(root, { name: "nova", configPath: ".nova", agentFormat: "yaml", agentExtension: "md" });
         await saveAgent(root, {
-            path: ".halign/agents/explorer.md",
+            path: ".harness-align/agents/explorer.md",
             name: "explorer",
             description: "Read only.",
             harnesses: {
@@ -588,20 +564,20 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
             },
             body: "Read evidence.",
         });
-        await saveRule(root, { path: ".halign/rules/nova.md", priority: 2, targets: ["nova"], body: "# Nova\n\nnova only" });
-        await saveLayerOption(root, { path: ".halign/layers/soul/kei.md", targets: ["nova"], body: "# Soul\n\nkei soul" });
+        await saveRule(root, { path: ".harness-align/rules/nova.md", priority: 2, targets: ["nova"], body: "# Nova\n\nnova only" });
+        await saveLayerOption(root, { path: ".harness-align/layers/soul/kei.md", targets: ["nova"], body: "# Soul\n\nkei soul" });
         await removeHarness(root, "nova");
         const afterRemove = await loadWorkspace(root);
         assert.ok(!afterRemove.config.harnesses.some((harness) => harness.name === "nova"));
         assert.equal(afterRemove.agents[0]?.harnesses.nova, undefined);
-        assert.deepEqual(afterRemove.rootRules.find((rule) => rule.path === ".halign/rules/nova.md")?.targets, []);
+        assert.deepEqual(afterRemove.rootRules.find((rule) => rule.path === ".harness-align/rules/nova.md")?.targets, []);
         assert.deepEqual(afterRemove.layerOptions.soul?.find((option) => option.name === "kei")?.targets, []);
 
-        await deleteSource(root, ".halign/rules/renamed-cursor.md");
-        await assert.rejects(saveRule(root, { path: ".halign/rules/../escape.md", priority: 1, targets: [], body: "no" }), /must stay inside \.halign/u);
-        await assert.rejects(saveRule(root, { path: ".halign/generated/x.md", priority: 1, targets: [], body: "no" }), /managed \.halign sources/u);
-        await assert.rejects(saveSharedRule(root, ".halign/rules/base.md", "no"), /must stay under \.halign\/rules\/shared/u);
-        await assert.rejects(deleteSource(root, ".halign/config.json"), /cannot be deleted/u);
+        await deleteSource(root, ".harness-align/rules/renamed-cursor.md");
+        await assert.rejects(saveRule(root, { path: ".harness-align/rules/../escape.md", priority: 1, targets: [], body: "no" }), /must stay inside \.harness-align/u);
+        await assert.rejects(saveRule(root, { path: ".harness-align/generated/x.md", priority: 1, targets: [], body: "no" }), /managed \.harness-align sources/u);
+        await assert.rejects(saveSharedRule(root, ".harness-align/rules/base.md", "no"), /must stay under \.harness-align\/rules\/shared/u);
+        await assert.rejects(deleteSource(root, ".harness-align/config.json"), /cannot be deleted/u);
         assert.equal((await loadConfig(root)).name, "Aligned");
     });
 });
@@ -610,10 +586,10 @@ test("legal prototype property Layer names survive discovery and harness cascade
 {
     await withProject(async (root) =>
     {
-        await rm(join(root, ".halign", "layers", "soul"), { recursive: true });
-        await mkdir(join(root, ".halign", "layers", "constructor"), { recursive: true });
+        await rm(join(root, ".harness-align", "layers", "soul"), { recursive: true });
+        await mkdir(join(root, ".harness-align", "layers", "constructor"), { recursive: true });
         await writeLayerOption(root, "constructor", "arona", "# Soul\n\nprototype-safe soul", ["cursor"]);
-        await writeFile(join(root, ".halign", "config.json"), JSON.stringify({
+        await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({
             ...config,
             layers: [{ name: "constructor", selected: "arona" }],
         }), "utf8");
@@ -643,7 +619,7 @@ test("skill_sources config omit, write, unknown field, duplicates, version, and 
             skillSources: [{ owner: "acme", name: "skills", branch: "main" }],
         });
         assert.deepEqual(withSources.skillSources, [{ owner: "acme", name: "skills", branch: "main" }]);
-        const written = JSON.parse(await readFile(join(root, ".halign", "config.json"), "utf8")) as { skill_sources?: unknown; version: number };
+        const written = JSON.parse(await readFile(join(root, ".harness-align", "config.json"), "utf8")) as { skill_sources?: unknown; version: number };
         assert.equal(written.version, 1);
         assert.deepEqual(written.skill_sources, [{ owner: "acme", name: "skills", branch: "main" }]);
         await assert.rejects(Promise.resolve().then(() => validateConfig({
@@ -667,7 +643,7 @@ test("skill_sources config omit, write, unknown field, duplicates, version, and 
             harnesses: [{ ...config.harnesses[0], config_path: ".agents/skills/nested" }],
         })), /managed skills target/u);
         await saveConfig(root, { ...withSources, skillSources: [] });
-        const omitted = JSON.parse(await readFile(join(root, ".halign", "config.json"), "utf8")) as { skill_sources?: unknown };
+        const omitted = JSON.parse(await readFile(join(root, ".harness-align", "config.json"), "utf8")) as { skill_sources?: unknown };
         assert.equal(omitted.skill_sources, undefined);
     });
 });
@@ -691,17 +667,17 @@ test("loadSkills tolerates a missing directory, loads SKILL.md, and rejects junk
         assert.deepEqual(await loadSkills(root), []);
         const workspace = await loadWorkspace(root);
         assert.deepEqual(workspace.skills, []);
-        await mkdir(join(root, ".halign", "skills", "demo"), { recursive: true });
-        await writeFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "---\nname: Demo\ndescription: Demo skill\n---\n\nBody.\n", "utf8");
+        await mkdir(join(root, ".harness-align", "skills", "demo"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "skills", "demo", "SKILL.md"), "---\nname: Demo\ndescription: Demo skill\n---\n\nBody.\n", "utf8");
         const skills = await loadSkills(root);
         assert.equal(skills.length, 1);
         assert.equal(skills[0]?.id, "demo");
         assert.equal(skills[0]?.title, "Demo");
         assert.equal(skills[0]?.origin.kind, "unknown");
-        await writeFile(join(root, ".halign", "skills", "junk.txt"), "nope\n", "utf8");
+        await writeFile(join(root, ".harness-align", "skills", "junk.txt"), "nope\n", "utf8");
         await assert.rejects(loadSkills(root), /index.json and skill subdirectories/u);
-        await unlink(join(root, ".halign", "skills", "junk.txt"));
-        await assert.rejects(deleteSource(root, ".halign/skills/demo/SKILL.md"), /deleted with removeSkill/u);
+        await unlink(join(root, ".harness-align", "skills", "junk.txt"));
+        await assert.rejects(deleteSource(root, ".harness-align/skills/demo/SKILL.md"), /deleted with removeSkill/u);
     });
 });
 
@@ -731,7 +707,7 @@ test("assertSafeZipEntry rejects traversal, absolute, and backslash paths", () =
     assert.throws(() => assertSafeZipEntry("repo\\SKILL.md"), /unsafe/u);
 });
 
-test("installSkillFromDirectory copies a local extracted skill into .halign/skills", async () =>
+test("installSkillFromDirectory copies a local extracted skill into .harness-align/skills", async () =>
 {
     await withProject(async (root) =>
     {
@@ -744,19 +720,19 @@ test("installSkillFromDirectory copies a local extracted skill into .halign/skil
         const skills = await loadSkills(root);
         assert.equal(skills[0]?.id, "demo");
         assert.equal(skills[0]?.origin.kind, "local");
-        assert.deepEqual(await readFile(join(root, ".halign", "skills", "demo", "scripts", "run.bin")), Buffer.from([0, 1, 2, 255]));
-        await assert.rejects(readFile(join(root, ".halign", "skills", "demo", ".cache")));
+        assert.deepEqual(await readFile(join(root, ".harness-align", "skills", "demo", "scripts", "run.bin")), Buffer.from([0, 1, 2, 255]));
+        await assert.rejects(readFile(join(root, ".harness-align", "skills", "demo", ".cache")));
         await writeFile(join(source, "SKILL.md"), "---\nname: Demo\ndescription: Replaced\n---\n\nNew body.\n", "utf8");
         await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "unused" });
-        assert.equal(await readFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: Demo\ndescription: Replaced\n---\n\nNew body.\n");
+        assert.equal(await readFile(join(root, ".harness-align", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: Demo\ndescription: Replaced\n---\n\nNew body.\n");
         const redirected = join(root, "redirected-nested");
         await mkdir(redirected, { recursive: true });
         await writeFile(join(redirected, "secret.md"), "protected\n", "utf8");
-        await symlink(redirected, join(root, ".halign", "skills", "demo", "nested"), "junction");
+        await symlink(redirected, join(root, ".harness-align", "skills", "demo", "nested"), "junction");
         await writeFile(join(source, "SKILL.md"), "---\nname: Demo\n---\n\nShould not land.\n", "utf8");
         await assert.rejects(installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "unused" }), /symbolic link/u);
         assert.equal(await readFile(join(redirected, "secret.md"), "utf8"), "protected\n");
-        assert.equal(await readFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: Demo\ndescription: Replaced\n---\n\nNew body.\n");
+        assert.equal(await readFile(join(root, ".harness-align", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: Demo\ndescription: Replaced\n---\n\nNew body.\n");
     });
 });
 
@@ -774,7 +750,7 @@ test("importUserSkills respects overwrite and records local origin", async () =>
         await writeFile(join(userSkill, "SKILL.md"), "---\nname: User Demo\n---\n\nUpdated user.\n", "utf8");
         await assert.rejects(importUserSkills(root, ["demo"], false, userProfile), /already exists/u);
         await importUserSkills(root, ["demo"], true, userProfile);
-        assert.equal(await readFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: User Demo\n---\n\nUpdated user.\n");
+        assert.equal(await readFile(join(root, ".harness-align", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: User Demo\n---\n\nUpdated user.\n");
         assert.equal((await loadSkills(root))[0]?.origin.kind, "local");
         await installSkillFromDirectory(root, "demo", userSkill, {
             kind: "github",
@@ -787,7 +763,7 @@ test("importUserSkills respects overwrite and records local origin", async () =>
         assert.equal((await loadSkills(root))[0]?.origin.kind, "github");
         await writeFile(join(userSkill, "SKILL.md"), "---\nname: User Demo\n---\n\nImported over github.\n", "utf8");
         await importUserSkills(root, ["demo"], true, userProfile);
-        assert.equal(await readFile(join(root, ".halign", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: User Demo\n---\n\nImported over github.\n");
+        assert.equal(await readFile(join(root, ".harness-align", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: User Demo\n---\n\nImported over github.\n");
         assert.equal((await loadSkills(root))[0]?.origin.kind, "local");
     });
 });
@@ -820,8 +796,8 @@ test("removeSkill deletes the skill directory and index entry", async () =>
         await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "x" });
         await removeSkill(root, "demo");
         assert.deepEqual(await loadSkills(root), []);
-        await assert.rejects(readdir(join(root, ".halign", "skills", "demo")));
-        const index = JSON.parse(await readFile(join(root, ".halign", "skills", "index.json"), "utf8")) as { skills: Record<string, unknown> };
+        await assert.rejects(readdir(join(root, ".harness-align", "skills", "demo")));
+        const index = JSON.parse(await readFile(join(root, ".harness-align", "skills", "index.json"), "utf8")) as { skills: Record<string, unknown> };
         assert.deepEqual(index.skills, {});
     });
 });
@@ -830,8 +806,8 @@ test("setup without skills succeeds and keeps unrelated user skills", async () =
 {
     await withProject(async (root) =>
     {
-        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
-        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        await mkdir(join(root, ".harness-align", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
         const userProfile = join(root, "isolated-userprofile");
         await mkdir(join(userProfile, ".codex", "agents"), { recursive: true });
         await mkdir(join(userProfile, ".agents", "skills", "unrelated"), { recursive: true });
@@ -846,8 +822,8 @@ test("setup overwrites same-name skills and keeps unrelated siblings", async () 
 {
     await withProject(async (root) =>
     {
-        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
-        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        await mkdir(join(root, ".harness-align", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
         const source = join(root, "extracted", "demo");
         await mkdir(source, { recursive: true });
         await writeFile(join(source, "SKILL.md"), "---\nname: Demo\n---\n\nProject skill.\n", "utf8");
@@ -872,8 +848,8 @@ test("setup rejects a junction at the target skill directory before deleting any
 {
     await withProject(async (root) =>
     {
-        await mkdir(join(root, ".halign", "rules", "shared"), { recursive: true });
-        await writeFile(join(root, ".halign", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
+        await mkdir(join(root, ".harness-align", "rules", "shared"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "rules", "shared", "shared.md"), "shared rule\n", "utf8");
         const source = join(root, "extracted", "demo");
         await mkdir(source, { recursive: true });
         await writeFile(join(source, "SKILL.md"), "---\nname: Demo\n---\n\nProject skill.\n", "utf8");
@@ -890,7 +866,7 @@ test("setup rejects a junction at the target skill directory before deleting any
     });
 });
 
-test("generate and check ignore project skills", async () =>
+test("generate ignores project skills", async () =>
 {
     await withProject(async (root) =>
     {
@@ -904,8 +880,7 @@ test("generate and check ignore project skills", async () =>
         {
             if (path.endsWith("AGENTS.md")) assert.equal(content.toString("utf8").includes("demo"), false);
         }
-        assert.deepEqual(await check(root), []);
-        const manifest = JSON.parse(await readFile(join(root, ".halign", "generated", ".manifest.json"), "utf8")) as { files: string[] };
+        const manifest = JSON.parse(await readFile(join(root, ".harness-align", "generated", ".manifest.json"), "utf8")) as { files: string[] };
         assert.equal(manifest.files.some((path) => path.includes("skill")), false);
     });
 });
@@ -928,14 +903,14 @@ test("ensureUserWorkspace creates a default user config once", async () =>
     {
         const root = await ensureUserWorkspace(home);
         assert.equal(root, resolve(home));
-        const created = JSON.parse(await readFile(join(home, ".halign", "config.json"), "utf8")) as { name: string; harnesses: unknown[] };
+        const created = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string; harnesses: unknown[] };
         assert.equal(created.name, "AGENTS");
         assert.ok(created.harnesses.length > 0);
         await loadWorkspace(home);
         created.name = "KEEP";
-        await writeFile(join(home, ".halign", "config.json"), `${JSON.stringify(created, null, 2)}\n`, "utf8");
+        await writeFile(join(home, ".harness-align", "config.json"), `${JSON.stringify(created, null, 2)}\n`, "utf8");
         await ensureUserWorkspace(home);
-        const kept = JSON.parse(await readFile(join(home, ".halign", "config.json"), "utf8")) as { name: string };
+        const kept = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string };
         assert.equal(kept.name, "KEEP");
     }
     finally
@@ -944,77 +919,155 @@ test("ensureUserWorkspace creates a default user config once", async () =>
     }
 });
 
-test("cli uses USERPROFILE not the current working directory", async () =>
+test("workspace migration preserves all legacy files and is idempotent", async () =>
 {
-    const home = await mkdtemp(join(tmpdir(), "halign-cli-home-"));
+    await withProject(async (root) =>
+    {
+        const current = join(root, ".harness-align");
+        const legacy = join(root, ".halign");
+        await mkdir(join(current, "skills", "demo"), { recursive: true });
+        await writeFile(join(current, "skills", "demo", "SKILL.md"), "# Demo\n", "utf8");
+        await generate(root);
+        await writeFile(join(current, "custom.bin"), Buffer.from([0, 255, 13, 10]));
+        const before = await snapshot(current);
+        await rename(current, legacy);
+        assert.equal(await ensureUserWorkspace(root), root);
+        assert.deepEqual(await snapshot(current), before);
+        await assert.rejects(readdir(legacy), /ENOENT/u);
+        const workspace = await loadWorkspace(root);
+        assert.equal(workspace.config.name, config.name);
+        assert.equal(workspace.skills[0]?.id, "demo");
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await snapshot(current), before);
+    });
+});
+
+test("workspace service coalesces migration and retries initialization after failure", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const previousHome = process.env.USERPROFILE;
+        const current = join(root, ".harness-align");
+        const legacy = join(root, ".halign");
+        const before = await snapshot(current);
+        await rename(current, legacy);
+        process.env.USERPROFILE = root;
+        try
+        {
+            const workspaces = await Promise.all([workspaceService.load(), workspaceService.load()]);
+            assert.deepEqual(workspaces[0], workspaces[1]);
+            assert.equal("root" in workspaces[0]!, false);
+            assert.deepEqual(await snapshot(current), before);
+            await rename(current, legacy);
+            await writeFile(current, "invalid directory", "utf8");
+            await assert.rejects(workspaceService.load(), /expected a directory/u);
+            await unlink(current);
+            const retried = await workspaceService.load();
+            assert.deepEqual(retried, workspaces[0]);
+            assert.deepEqual(await snapshot(current), before);
+        }
+        finally
+        {
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+        }
+    });
+});
+
+test("workspace migration keeps both directories when the new workspace exists", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const current = join(root, ".harness-align");
+        const legacy = join(root, ".halign");
+        await mkdir(legacy);
+        await writeFile(join(legacy, "config.json"), "legacy sentinel", "utf8");
+        const before = await snapshot(current);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await snapshot(current), before);
+        assert.equal(await readFile(join(legacy, "config.json"), "utf8"), "legacy sentinel");
+    });
+});
+
+test("workspace migration rejects files and junctions without moving legacy data", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const current = join(root, ".harness-align");
+        const legacy = join(root, ".halign");
+        const redirected = join(root, "redirected");
+        await rename(current, legacy);
+        await mkdir(redirected);
+        await writeFile(join(redirected, "sentinel.txt"), "keep", "utf8");
+        const before = await snapshot(legacy);
+        const nestedLink = join(legacy, "nested-link");
+        await symlink(redirected, nestedLink, "junction");
+        try
+        {
+            await assert.rejects(ensureUserWorkspace(root), /symbolic link sources/u);
+            await assert.rejects(readdir(current), /ENOENT/u);
+        }
+        finally
+        {
+            await unlink(nestedLink);
+        }
+        await rename(legacy, join(root, "legacy-backup"));
+        await symlink(redirected, legacy, "junction");
+        try
+        {
+            await assert.rejects(ensureUserWorkspace(root), /symbolic link sources/u);
+        }
+        finally
+        {
+            await unlink(legacy);
+        }
+        await writeFile(legacy, "keep", "utf8");
+        await assert.rejects(ensureUserWorkspace(root), /expected a directory for migration/u);
+        assert.equal(await readFile(legacy, "utf8"), "keep");
+        await unlink(legacy);
+        await rename(join(root, "legacy-backup"), legacy);
+        await writeFile(current, "keep", "utf8");
+        await assert.rejects(ensureUserWorkspace(root), /expected a directory/u);
+        await unlink(current);
+        await symlink(redirected, current, "junction");
+        try
+        {
+            await assert.rejects(ensureUserWorkspace(root), /symbolic link sources/u);
+        }
+        finally
+        {
+            await unlink(current);
+        }
+        assert.deepEqual(await snapshot(legacy), before);
+        assert.equal(await readFile(join(redirected, "sentinel.txt"), "utf8"), "keep");
+    });
+});
+
+test("workspace initialization uses USERPROFILE not the current working directory", async () =>
+{
+    const home = await mkdtemp(join(tmpdir(), "harness-align-home-"));
     const cwd = await mkdtemp(join(tmpdir(), "halign-cli-cwd-"));
     const previous = process.cwd();
     try
     {
-        await mkdir(join(cwd, ".halign", "rules", "shared"), { recursive: true });
-        await writeFile(join(cwd, ".halign", "config.json"), JSON.stringify({
+        await mkdir(join(cwd, ".harness-align", "rules", "shared"), { recursive: true });
+        await writeFile(join(cwd, ".harness-align", "config.json"), JSON.stringify({
             ...config,
             name: "CWD",
             harnesses: [{ name: "cursor", config_path: ".cursor", agent_format: "yaml", agent_extension: "md" }],
         }), "utf8");
         process.chdir(cwd);
-        assert.equal(await main(["generate"], home), 0);
-        const generated = JSON.parse(await readFile(join(home, ".halign", "config.json"), "utf8")) as { name: string };
+        await generate(await ensureUserWorkspace(home));
+        const generated = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string };
         assert.equal(generated.name, "AGENTS");
-        assert.equal(await readFile(join(home, ".halign", "generated", "cursor", "AGENTS.md"), "utf8").then(() => true), true);
-        await assert.rejects(readFile(join(cwd, ".halign", "generated", "cursor", "AGENTS.md")), /ENOENT/u);
+        assert.equal(await readFile(join(home, ".harness-align", "generated", "cursor", "AGENTS.md"), "utf8").then(() => true), true);
+        await assert.rejects(readFile(join(cwd, ".harness-align", "generated", "cursor", "AGENTS.md")), /ENOENT/u);
     }
     finally
     {
         process.chdir(previous);
         await rm(home, { recursive: true, force: true });
         await rm(cwd, { recursive: true, force: true });
-    }
-});
-
-test("cli help and version return 0 without touching USERPROFILE", async () =>
-{
-    const help = await withCapturedStdio(() => main(["--help"], ""));
-    assert.equal(help.code, 0);
-    assert.match(help.stdout, /halign --version/u);
-    assert.equal(help.stderr, "");
-    const commandHelp = await withCapturedStdio(() => main(["generate", "-h"], ""));
-    assert.equal(commandHelp.code, 0);
-    assert.equal(commandHelp.stdout, help.stdout);
-    const pkg = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as { version: string };
-    const version = await withCapturedStdio(() => main(["--version"], ""));
-    assert.equal(version.code, 0);
-    assert.equal(version.stdout, `${pkg.version}\n`);
-});
-
-test("cli usage covers invalid commands, missing --layer values, and duplicates", async () =>
-{
-    const missing = await withCapturedStdio(() => main([], ""));
-    assert.equal(missing.code, 2);
-    assert.match(missing.stderr, /usage: halign/u);
-    const unknown = await withCapturedStdio(() => main(["build"], ""));
-    assert.equal(unknown.code, 2);
-    const dangling = await withCapturedStdio(() => main(["generate", "--layer"], ""));
-    assert.equal(dangling.code, 2);
-    assert.match(dangling.stderr, /--layer requires a value/u);
-    const duplicate = await withCapturedStdio(() => main(["generate", "--layer", "soul=arona", "--layer", "soul=kei"], ""));
-    assert.equal(duplicate.code, 2);
-    assert.match(duplicate.stderr, /--layer must not repeat soul/u);
-});
-
-test("cli unknown --layer is a domain error against the user workspace", async () =>
-{
-    const home = await mkdtemp(join(tmpdir(), "halign-cli-layer-"));
-    try
-    {
-        await ensureUserWorkspace(home);
-        const result = await withCapturedStdio(() => main(["generate", "--layer", "soul=arona"], home));
-        assert.equal(result.code, 1);
-        assert.match(result.stderr, /unknown layer selection "soul"/u);
-    }
-    finally
-    {
-        await rm(home, { recursive: true, force: true });
     }
 });
 

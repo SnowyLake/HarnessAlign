@@ -30,13 +30,13 @@ export function uniqueRulePath(currentPath: string, name: string, existingPaths:
     return nextPath;
 }
 
-/** Build `.halign/agents/<name>.md` from a heading, rejecting separators and collisions. */
+/** Build `.harness-align/agents/<name>.md` from a heading, rejecting separators and collisions. */
 export function uniqueAgentPath(currentPath: string | undefined, name: string, existingPaths: readonly string[]): string
 {
     const trimmed = name.trim();
     if (!trimmed || trimmed.includes("/") || trimmed.includes("\\")) throw new Error(`Agent name must not contain path separators, got ${name}`);
     const stem = trimmed.toLowerCase().endsWith(".md") ? trimmed.slice(0, -3) : trimmed;
-    const nextPath = `.halign/agents/${stem}.md`;
+    const nextPath = `.harness-align/agents/${stem}.md`;
     if (nextPath !== currentPath && existingPaths.includes(nextPath)) throw new Error(`${nextPath}: agent already exists`);
     return nextPath;
 }
