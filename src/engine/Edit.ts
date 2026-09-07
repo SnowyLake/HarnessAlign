@@ -5,8 +5,9 @@
 
 import { promises as fs } from "node:fs";
 import { join, posix, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { stringify as stringifyYaml } from "yaml";
-import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, pathKey, reparseError, resolveUserHome } from "./FsSafe.js";
+import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, isAtomicWriteTemporary, lstatIfExists, pathKey, reparseError, resolveUserHome } from "./FsSafe.js";
 import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, type SharedRule, validateConfig } from "./Load.js";
 import {
     IDENTIFIER_NAME,
@@ -29,6 +30,7 @@ import {
     valueText,
 } from "./Model.js";
 import { importUserSkills as importUserSkillsEngine, listUserSkills as listUserSkillsEngine, loadSkills, parseGitHubSkillSource, removeSkill as removeSkillEngine } from "./Skills.js";
+import { parseSyncSnapshot, readSyncSnapshot, syncSnapshotHash, type SyncSnapshot } from "./Sync.js";
 
 export type { SharedRule };
 export { listUserSkillsEngine as listUserSkills, importUserSkillsEngine as importUserSkills, removeSkillEngine as removeSkill };
@@ -352,6 +354,128 @@ export async function loadWorkspace(rootPath: string): Promise<Workspace>
     return { config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents, skills };
 }
 
+/** Materialize only snapshot-managed paths, preserving generated output and unrelated root files. */
+async function replaceSyncSources(root: string, before: SyncSnapshot, after: SyncSnapshot): Promise<void>
+{
+    const sourceRoot = join(root, ".harness-align");
+    await ensureRegularSource(root, sourceRoot);
+    for (const path of [...Object.keys(before.files), ...Object.keys(after.files), ...before.directories, ...after.directories])
+    {
+        await ensureRegularSource(root, join(sourceRoot, ...path.split("/")));
+    }
+    for (const path of Object.keys(before.files))
+    {
+        if (!Object.hasOwn(after.files, path)) await fs.unlink(join(sourceRoot, ...path.split("/")));
+    }
+    for (const path of before.directories.filter((path) => !after.directories.includes(path)).sort((a, b) => b.length - a.length))
+    {
+        const directory = join(sourceRoot, ...path.split("/"));
+        for (const entry of await fs.readdir(directory, { withFileTypes: true }))
+        {
+            if (!entry.isFile() || !isAtomicWriteTemporary(entry.name)) continue;
+            const temporary = join(directory, entry.name);
+            await ensureRegularSource(root, temporary);
+            await fs.unlink(temporary);
+        }
+        await fs.rmdir(directory);
+    }
+    for (const path of after.directories) await fs.mkdir(join(sourceRoot, ...path.split("/")), { recursive: true });
+    for (const [path, content] of Object.entries(after.files))
+    {
+        await writeManaged(root, `.harness-align/${path}`, Buffer.from(content, "base64"));
+    }
+}
+
+/** Validate a complete source candidate in an isolated temporary workspace before changing live data. */
+export async function validateSyncSources(snapshot: SyncSnapshot): Promise<void>
+{
+    const checked = parseSyncSnapshot(snapshot);
+    const staging = await fs.mkdtemp(join(tmpdir(), "halign-sync-"));
+    try
+    {
+        await replaceSyncSources(staging, { version: 1, files: {}, directories: [] }, checked);
+        await loadWorkspace(staging);
+    }
+    finally
+    {
+        assertContained(tmpdir(), staging, "sync validation cleanup");
+        await assertNoReparseTree(staging, staging);
+        await fs.rm(staging, { recursive: true, force: true });
+    }
+}
+
+/** Resolve a local recovery record without accepting a renderer-selected path. */
+async function syncRecordPath(root: string, name: ".sync-recovery.json" | ".sync-backup.json"): Promise<string>
+{
+    const path = join(root, ".harness-align", name);
+    await ensureRegularSource(root, path);
+    const stats = await lstatIfExists(path);
+    if (stats && !stats.isFile()) throw new HalignError(`${path}: expected a regular sync recovery file`);
+    return path;
+}
+
+/** Restore an interrupted source update, refusing to discard edits made outside that update. */
+export async function recoverSyncSources(root: string): Promise<void>
+{
+    const journalPath = await syncRecordPath(root, ".sync-recovery.json");
+    const stats = await lstatIfExists(journalPath);
+    if (!stats) return;
+    if (stats.size > 96 * 1024 * 1024) throw new HalignError(`${journalPath}: recovery record exceeds 96 MiB`);
+    try
+    {
+        const journal: unknown = JSON.parse(await fs.readFile(journalPath, "utf8"));
+        if (!isRecord(journal) || journal.version !== 1) throw new HalignError(`${journalPath}: expected recovery version 1`);
+        const before = parseSyncSnapshot(journal.before);
+        const after = parseSyncSnapshot(journal.after);
+        const current = await readSyncSnapshot(root);
+        for (const path of new Set([...Object.keys(current.files), ...Object.keys(before.files), ...Object.keys(after.files)]))
+        {
+            const value = current.files[path];
+            if (value !== before.files[path] && value !== after.files[path])
+            {
+                throw new HalignError(`sync file ${path}: changed outside the interrupted update; preserve that edit before retrying recovery`);
+            }
+        }
+        for (const path of new Set([...current.directories, ...before.directories, ...after.directories]))
+        {
+            const exists = current.directories.includes(path);
+            if (exists !== before.directories.includes(path) && exists !== after.directories.includes(path)) throw new HalignError(`sync directory ${path}: changed outside the interrupted update`);
+        }
+        await replaceSyncSources(root, current, before);
+        await fs.unlink(journalPath);
+    }
+    catch (error)
+    {
+        throw new HalignError(`sync recovery failed; original data remains in ${journalPath}: ${errorText(error)}`);
+    }
+}
+
+/** Apply a validated full source snapshot with a persistent rollback record and stale-preview guard. */
+export async function applySyncSources(root: string, expected: SyncSnapshot, snapshot: SyncSnapshot): Promise<void>
+{
+    await recoverSyncSources(root);
+    const next = parseSyncSnapshot(snapshot);
+    await validateSyncSources(next);
+    const before = await readSyncSnapshot(root);
+    if (syncSnapshotHash(before) !== syncSnapshotHash(expected)) throw new HalignError("sync: local sources changed; preview again before applying");
+    if (syncSnapshotHash(before) === syncSnapshotHash(next)) return;
+    const journalPath = await syncRecordPath(root, ".sync-recovery.json");
+    const backupPath = await syncRecordPath(root, ".sync-backup.json");
+    await atomicWrite(backupPath, Buffer.from(`${JSON.stringify(before)}\n`));
+    await atomicWrite(journalPath, Buffer.from(`${JSON.stringify({ version: 1, before, after: next })}\n`));
+    try
+    {
+        await replaceSyncSources(root, before, next);
+        await loadWorkspace(root);
+        await fs.unlink(journalPath);
+    }
+    catch (error)
+    {
+        await recoverSyncSources(root);
+        throw new HalignError(`sync source update rolled back; backup: ${backupPath}: ${errorText(error)}`);
+    }
+}
+
 /** Initialize the fixed user workspace, moving a safe legacy directory only when the destination is absent. */
 export async function ensureUserWorkspace(userProfile = process.env.USERPROFILE): Promise<string>
 {
@@ -377,6 +501,7 @@ export async function ensureUserWorkspace(userProfile = process.env.USERPROFILE)
             await fs.rename(legacy, halign);
         }
     }
+    await recoverSyncSources(root);
     const configPath = join(halign, "config.json");
     if (!(await lstatIfExists(configPath)))
     {

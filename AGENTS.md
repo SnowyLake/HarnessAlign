@@ -45,7 +45,7 @@
 - 错误信息必须包含足以定位问题的文件路径, 字段, 实际值和期望约束.
 - 保持 UTF-8 without BOM, LF 和确定性排序.
 - 保持 symbolic link, junction, 路径逃逸, manifest 管理范围和单文件原子写入安全检查. 路径 containment 使用 `path.relative()`, 不要用 `path.startsWith(root)`.
-- Skills 远端下载和发现只存在于 Main 的 `SkillRemoteService`.
+- Skills 上游仓库的下载和发现只存在于 Main 的 `SkillRemoteService`. GitHub 配置快照的读写只存在于 Main 的 `GitHubSyncService`, 不触发 Skills 上游更新.
 - 本仓库根目录不包含 `.harness-align`. 不得用 package script 包装 `generate` 或 `setup`.
 - 不得手工编辑 `dist/`, `out/`, `release/` 或 `node_modules/`.
 
@@ -65,6 +65,7 @@
 3. Main handler 校验 sender 与输入, 再调用 `WorkspaceService`.
 4. 源文件写回走 `Edit.ts`: 先编码并校验, 再 `atomicWrite`. 写回 API 供桌面应用与测试使用.
 5. GitHub Skills 发现, 下载, 解压只发生在 `SkillRemoteService`. 安装进 `.harness-align/skills/` 仍走 `Skills.ts`.
+6. GitHub 同步与其他工作区操作共用 `WorkspaceService` 队列. 同步预览绑定本地内容哈希, 远端 commit 和共同基线; Renderer 只提交预览 id 和冲突选择. 快照先通过 `Edit.ts` 在临时工作区完整校验, 再写回源文件, 不自动生成或部署.
 
 ## 目录职责
 
@@ -77,7 +78,9 @@
   - `Skills.ts` — 项目 Skills 加载, 哈希, 安装, 导入与 zip 路径守卫; 不联网, 不依赖解压库
   - `Setup.ts` — 部署到已存在的用户 Harness 根目录, shared-rules 与 skills
   - `Edit.ts` — 校验后写回 `.harness-align` 源文件; 负责固定用户目录的初始化和迁移, 写回 API 供桌面应用与测试使用
+  - `Sync.ts` — 有界配置源快照, 路径与内容校验, 三方合并; 不联网, 不部署, 同一个 Skill 的内容与来源记录整体合并
 - `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, `SettingsService.ts` 模块函数, `WorkspaceService`, `SkillRemoteService`.
+- `src/main/services/GitHubSyncService.ts` 负责私有仓库快照读写, 同步预览, 共同基线与上传恢复记录. `SyncHandlers.ts` 负责 sender 和 payload 校验以及 `safeStorage` 凭据加解密. Token 不回传 Renderer, 不写入同步快照或日志.
 - `src/preload/` 只把 typed `window.appApi` 暴露给 Renderer.
 - `src/renderer/` 是 React UI. 标准界面控件直接使用 Ant Design 官方组件, `components/common/` 只保存 Ant Design 没有对应物的共享领域控件与反馈桥接, `features/` 保存业务界面, `stores/AppStore.ts` 只保存 UI 状态. `showcase` 视图仅开发模式可见.
 - `.agents/skills/antd/SKILL.md` 是本仓库的 Ant Design 开发辅助规则, 面向在仓库工作的 Agent. 它不属于 `.harness-align/skills/`, 不参与产品的 Skills 发现, 安装或 `setup` 部署.
@@ -113,6 +116,8 @@
 - 只删除旧 manifest 记录且本次不再生成的文件. 不删除 manifest 未管理的文件.
 - 所有新文件写入与 stale 删除成功后, 才写入新的 manifest. 若 stale 删除失败, 保留旧 manifest.
 - 写回 `.harness-align` 源文件必须经 `src/engine/Edit.ts` 先校验再原子写入. 多文件更新不是单一磁盘事务.
+- 同步替换源文件前写入 `.sync-backup.json` 和 `.sync-recovery.json`, 后者在工作区初始化之前恢复. 恢复只能处理属于中断操作的内容, 检测到外部后续编辑时保留恢复记录并失败. 同步快照只包含配置源白名单, 不包含生成文件, 本机恢复记录或同步凭据.
+- GitHub 同步使用单个 commit 更新专用源目录, 保留仓库其他路径, 分支引用更新必须 `force: false`. 上传前保留待确认提交, 上传结果不确定时先查询提交归属, 本地应用成功后才推进共同基线. 同步连接, 凭据和基线保存在 Electron `userData`.
 - Harness 编辑统一走 `updateHarness`; 名称变化时级联更新 Rule 与 Layer Option `targets` 以及 Agent `harnesses` 键, 不保留独立 rename IPC.
 
 ## 部署安全

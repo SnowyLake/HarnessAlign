@@ -5,6 +5,7 @@
 import { create } from "zustand";
 import type { ThemeMode } from "@shared/models/AppSettings";
 import type { LayerSelection, Workspace } from "@shared/models/Workspace";
+import type { SyncPreview } from "@shared/models/Sync";
 
 /** Workspace modules available from the primary navigation. */
 export type WorkspaceView = "project" | "rules" | "shared-rules" | "layers" | "skills" | "skill-registration" | "agents" | "generated";
@@ -193,6 +194,7 @@ interface AppState
 {
     view: AppView;
     workspace: Workspace | undefined;
+    syncPreview: SyncPreview | undefined;
     selection: Selection;
     layerSelection: LayerSelection[];
     output: string;
@@ -208,6 +210,7 @@ interface AppState
     nextEditorActionId: number;
     setView: (view: AppView) => void;
     setWorkspace: (workspace: Workspace | undefined) => void;
+    setSyncPreview: (preview: SyncPreview | undefined) => void;
     setSelection: (selection: Selection) => void;
     setLayerSelection: (selection: LayerSelection[]) => void;
     setOutput: (output: string, tone: OutputTone, title: string) => void;
@@ -235,6 +238,7 @@ export function workspaceChangeCount(state: Pick<AppState, "workspace" | "layerS
 export const useAppStore = create<AppState>((set) => ({
     view: "project",
     workspace: undefined,
+    syncPreview: undefined,
     selection: { kind: "config" },
     layerSelection: [],
     output: "No command output yet.",
@@ -284,6 +288,7 @@ export const useAppStore = create<AppState>((set) => ({
     setOutputDialogOpen: (isOutputDialogOpen) => set({ isOutputDialogOpen }),
     setIsBusy: (isBusy) => set({ isBusy }),
     setTheme: (theme) => set({ theme }),
+    setSyncPreview: (syncPreview) => set({ syncPreview }),
     setEditorDraft: (key, draft) => set((state) =>
     {
         const editorDrafts = { ...state.editorDrafts };

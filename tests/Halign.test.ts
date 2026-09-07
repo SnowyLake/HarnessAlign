@@ -4,6 +4,7 @@
  */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,6 +15,8 @@ import { parse as parseYaml } from "yaml";
 import { workspaceService } from "../src/main/services/WorkspaceService.js";
 import { uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
 import { discoverSkills, installSkills } from "../src/main/services/SkillRemoteService.js";
+import { applySync, connectSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
+import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, readSyncSnapshot, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
 import { buildOutputs, generate, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
@@ -26,6 +29,7 @@ import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace, importUserSkills,
     listUserSkills, loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource,
     renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, updateHarness,
+    applySyncSources, recoverSyncSources, validateSyncSources,
 } from "../src/engine/Edit.js";
 
 const config = {
@@ -47,6 +51,523 @@ const TEST_SKILL_ARCHIVE = Buffer.from(
     "UEsDBBQAAAAIAFgSKF30xqGHCQAAAAcAAAAXAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRTVnBJzc3nAgBQSwECFAAUAAAACABYEihd9MahhwkAAAAHAAAAFwAAAAAAAAAAAAAAAAAAAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRQSwUGAAAAAAEAAQBFAAAAPgAAAAAA",
     "base64",
 );
+
+/** Git tree entry used by the in-memory remote, including regular-file bytes in POST requests. */
+interface TestGitEntry
+{
+    path: string;
+    mode: string;
+    type: string;
+    sha: string;
+    size?: number;
+    content?: string;
+}
+
+/** Simulate immutable Git objects and fast-forward publication without network or real credentials. */
+function createSyncRemote()
+{
+    const blobs = new Map<string, Buffer>();
+    const trees = new Map<string, TestGitEntry[]>();
+    const commits = new Map<string, { tree: { sha: string }; parents: string[] }>();
+    let serial = 0;
+    /** Allocate stable-looking commit and tree ids for test objects. */
+    const id = (): string => (++serial).toString(16).padStart(40, "0");
+    /** Store a real content-addressed Git blob for integrity checks. */
+    const blob = (bytes: Buffer): string =>
+    {
+        const sha = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+        blobs.set(sha, bytes);
+        return sha;
+    };
+    const initialTree = id();
+    trees.set(initialTree, [{ path: "README.md", mode: "100644", type: "blob", sha: blob(Buffer.from("Keep this repository file.\n")) }]);
+    let head = id();
+    commits.set(head, { tree: { sha: initialTree }, parents: [] });
+    const controls = { losePatchResponse: false, raceOnPatch: false, isPrivate: true, truncated: false, rejectedMode: "", patchCount: 0 };
+
+    /** Determine ancestry exactly enough to reject a racing sibling commit. */
+    const isAncestor = (ancestor: string, descendant: string): boolean =>
+    {
+        if (ancestor === descendant) return true;
+        return commits.get(descendant)?.parents.some((parent) => isAncestor(ancestor, parent)) ?? false;
+    };
+    /** Simulate an external commit while retaining unrelated repository content. */
+    const publish = (snapshot: SyncSnapshot): void =>
+    {
+        const entries: TestGitEntry[] = Object.entries(snapshot.files).map(([path, encoded]) => ({ path, mode: "100644", type: "blob", sha: blob(Buffer.from(encoded, "base64")) }));
+        entries.push({ path: "sync.json", mode: "100644", type: "blob", sha: blob(Buffer.from(JSON.stringify({ version: 1, directories: snapshot.directories }))) });
+        const subtree = id();
+        trees.set(subtree, entries);
+        const tree = id();
+        trees.set(tree, [...trees.get(commits.get(head)!.tree.sha)!.filter((entry) => entry.path !== "harness-align"), { path: "harness-align", type: "tree", mode: "040000", sha: subtree }]);
+        const next = id();
+        commits.set(next, { tree: { sha: tree }, parents: [head] });
+        head = next;
+    };
+    /** Handle only the documented GitHub REST routes used by the sync service. */
+    const request = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> =>
+    {
+        const url = new URL(String(input));
+        assert.equal(url.origin, "https://api.github.com");
+        const path = decodeURIComponent(url.pathname.replace("/repos/test/sync", ""));
+        const method = init?.method ?? "GET";
+        /** Return a JSON response to the service's bounded response reader. */
+        const response = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+        if (method === "GET")
+        {
+            if (!path) return response({ private: controls.isPrivate, archived: false, permissions: { push: true } });
+            if (path === "/git/ref/heads/main") return response({ object: { type: "commit", sha: head } });
+            if (path.startsWith("/git/commits/")) return response(commits.get(path.split("/").at(-1)!));
+            if (path.startsWith("/git/trees/"))
+            {
+                const entries = trees.get(path.split("/").at(-1)!)!;
+                return response({ truncated: controls.truncated, tree: entries.map((entry) => ({
+                    ...entry,
+                    mode: controls.rejectedMode && entry.path === "config.json" ? controls.rejectedMode : entry.mode,
+                    ...(entry.type === "blob" ? { size: blobs.get(entry.sha)!.length } : {}),
+                })) });
+            }
+            if (path.startsWith("/git/blobs/"))
+            {
+                const bytes = blobs.get(path.split("/").at(-1)!)!;
+                return response({ content: bytes.toString("base64"), encoding: "base64", size: bytes.length });
+            }
+            if (path.startsWith("/compare/"))
+            {
+                const [before, after] = path.slice(9).split("...");
+                return response({ status: before === after ? "identical" : isAncestor(before!, after!) ? "ahead" : isAncestor(after!, before!) ? "behind" : "diverged" });
+            }
+        }
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+            tree: TestGitEntry[] | string; base_tree: string; content: string; encoding: BufferEncoding; parents: string[]; sha: string; force: boolean;
+        };
+        if (method === "POST")
+        {
+            if (path === "/git/blobs") return response({ sha: blob(Buffer.from(body.content, body.encoding)) }, 201);
+            if (path === "/git/trees")
+            {
+                assert.ok(Array.isArray(body.tree));
+                const entries = body.tree.map((entry) => ({ ...entry, sha: entry.content === undefined ? entry.sha : blob(Buffer.from(entry.content)) }));
+                const next = id();
+                trees.set(next, [...(trees.get(body.base_tree) ?? []).filter((entry) => !entries.some((next) => next.path === entry.path)), ...entries]);
+                return response({ sha: next }, 201);
+            }
+            if (path === "/git/commits")
+            {
+                assert.equal(typeof body.tree, "string");
+                const next = id();
+                commits.set(next, { tree: { sha: body.tree as string }, parents: body.parents });
+                return response({ sha: next }, 201);
+            }
+        }
+        if (method === "PATCH" && path === "/git/refs/heads/main")
+        {
+            controls.patchCount += 1;
+            assert.equal(body.force, false);
+            if (controls.raceOnPatch)
+            {
+                controls.raceOnPatch = false;
+                const next = id();
+                commits.set(next, { tree: commits.get(head)!.tree, parents: [head] });
+                head = next;
+            }
+            if (!isAncestor(head, body.sha)) return response({ message: "not a fast forward" }, 422);
+            head = body.sha;
+            if (controls.losePatchResponse)
+            {
+                controls.losePatchResponse = false;
+                throw new TypeError("simulated response loss");
+            }
+            return response({ object: { sha: head } });
+        }
+        return response({ message: `Unexpected mock route: ${method} ${path}` }, 404);
+    };
+    return { request, publish, controls, rootEntries: () => trees.get(commits.get(head)!.tree.sha)! };
+}
+
+test("sync snapshots preserve binary assets and empty layers while rejecting unsafe paths", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".harness-align/layers/empty"));
+        await mkdir(join(root, ".harness-align/skills/demo"), { recursive: true });
+        await writeFile(join(root, ".harness-align/skills/demo/SKILL.md"), "# Demo\n");
+        await writeFile(join(root, ".harness-align/skills/demo/asset.bin"), Buffer.from([0, 255, 128, 1]));
+        await mkdir(join(root, ".harness-align/generated"));
+        await writeFile(join(root, ".harness-align/generated/ignored.txt"), "generated");
+        await writeFile(join(root, ".harness-align/private.txt"), "not in sync scopes");
+        const saved = await readSyncSnapshot(root);
+        assert.ok(saved.directories.includes("layers/empty"));
+        assert.equal(saved.files["skills/demo/asset.bin"], Buffer.from([0, 255, 128, 1]).toString("base64"));
+        assert.ok(!Object.hasOwn(saved.files, "generated/ignored.txt"));
+        assert.ok(!Object.hasOwn(saved.files, "private.txt"));
+        for (const path of ["../config.json", "generated/evil.md", "rules/../escape", "rules/a:stream", "rules/CON.md", "rules\\evil.md", "/config.json"])
+        {
+            assert.throws(() => parseSyncSnapshot({ version: 1, directories: [], files: { [path]: "" } }));
+        }
+        assert.throws(() => parseSyncSnapshot({ version: 1, directories: [], files: { "rules/A.md": "", "rules/a.md": "" } }), /case sensitivity/u);
+        assert.throws(() => parseSyncSnapshot({ version: 1, directories: ["rules/a.md"], files: { "rules/a.md": "" } }), /both a file and a directory/u);
+        assert.throws(() => parseSyncSnapshot({ version: 1, directories: [], files: { "rules/a.md": "not base64!" } }), /base64/u);
+    });
+});
+
+test("sync merges independent files and treats a skill with provenance as one conflict", () =>
+{
+    const base = parseSyncSnapshot({ version: 1, directories: ["layers/empty"], files: {
+        "rules/a.md": Buffer.from("before").toString("base64"),
+        "rules/b.md": Buffer.from("before").toString("base64"),
+        "skills/demo/SKILL.md": Buffer.from("# Before").toString("base64"),
+        "skills/demo/script.txt": Buffer.from("before").toString("base64"),
+        "skills/index.json": Buffer.from(JSON.stringify({ skills: { demo: { origin: "local", contentHash: "before" } } })).toString("base64"),
+    } });
+    const local = structuredClone(base);
+    const remote = structuredClone(base);
+    local.files["rules/a.md"] = Buffer.from("local").toString("base64");
+    remote.files["rules/b.md"] = Buffer.from("remote").toString("base64");
+    local.files["skills/demo/script.txt"] = Buffer.from("local script").toString("base64");
+    remote.files["skills/demo/SKILL.md"] = Buffer.from("# Remote").toString("base64");
+    remote.files["skills/index.json"] = Buffer.from(JSON.stringify({ skills: { demo: { origin: "local", contentHash: "remote" } } })).toString("base64");
+    const unresolved = mergeSyncSnapshots(base, local, remote);
+    assert.deepEqual(unresolved.conflicts, ["skills/demo"]);
+    const merged = mergeSyncSnapshots(base, local, remote, { "skills/demo": "remote" });
+    assert.equal(merged.snapshot.files["rules/a.md"], local.files["rules/a.md"]);
+    assert.equal(merged.snapshot.files["rules/b.md"], remote.files["rules/b.md"]);
+    assert.equal(merged.snapshot.files["skills/demo/script.txt"], base.files["skills/demo/script.txt"]);
+    assert.match(Buffer.from(merged.snapshot.files["skills/index.json"]!, "base64").toString(), /remote/u);
+    assert.ok(merged.snapshot.directories.includes("layers/empty"));
+    delete local.files["rules/b.md"];
+    assert.ok(mergeSyncSnapshots(base, local, remote).conflicts.includes("rules/b.md"));
+});
+
+test("sync validates the complete candidate before writes and rejects stale local previews", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const before = await readSyncSnapshot(root);
+        const invalid = structuredClone(before);
+        invalid.files["config.json"] = Buffer.from(JSON.stringify({ ...config, layers: [{ name: "missing", selected: "none" }] })).toString("base64");
+        await assert.rejects(applySyncSources(root, before, invalid));
+        assert.equal(syncSnapshotHash(await readSyncSnapshot(root)), syncSnapshotHash(before));
+        const next = structuredClone(before);
+        next.files["rules/base.md"] = Buffer.from("---\npriority: 100\ntargets: []\n---\n\nUpdated\n").toString("base64");
+        await writeRule(root, "new.md", 101, "# Unsynced");
+        await assert.rejects(applySyncSources(root, before, next), /local sources changed/u);
+        assert.match(await readFile(join(root, ".harness-align/rules/new.md"), "utf8"), /Unsynced/u);
+    });
+});
+
+test("sync surfaces case and file-directory aliases as selectable source groups", () =>
+{
+    const local = parseSyncSnapshot({ version: 1, directories: ["layers/Foo"], files: { "rules/Foo.md": "YQ==", "layers/Foo/a.md": "YQ==", "rules/asset.md": "YQ==" } });
+    const remote = parseSyncSnapshot({ version: 1, directories: ["layers/foo"], files: { "rules/foo.md": "Yg==", "layers/foo/b.md": "Yg==", "rules/asset.md/child.md": "Yg==" } });
+    const merged = mergeSyncSnapshots(emptySyncSnapshot(), local, remote);
+    assert.deepEqual(merged.conflicts, ["layers/foo/", "rules/asset.md/", "rules/foo.md"]);
+    const selected = mergeSyncSnapshots(emptySyncSnapshot(), local, remote, { "layers/foo/": "remote", "rules/asset.md/": "remote", "rules/foo.md": "local" });
+    assert.equal(selected.conflicts.length, 0);
+    assert.equal(selected.snapshot.files["rules/Foo.md"], "YQ==");
+    assert.equal(selected.snapshot.files["rules/asset.md/child.md"], "Yg==");
+    assert.ok(selected.snapshot.directories.includes("layers/foo"));
+    assert.ok(!selected.snapshot.directories.includes("layers/Foo"));
+});
+
+test("sync preserves inherited-property skill names and rejects invalid provenance ids", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".harness-align/skills/constructor"), { recursive: true });
+        await writeFile(join(root, ".harness-align/skills/constructor/SKILL.md"), "# Constructor skill\n");
+        await writeFile(join(root, ".harness-align/skills/index.json"), JSON.stringify({ skills: { constructor: { origin: "local", contentHash: "hash" } } }));
+        const local = await readSyncSnapshot(root);
+        const merged = mergeSyncSnapshots(emptySyncSnapshot(), local, emptySyncSnapshot()).snapshot;
+        await validateSyncSources(merged);
+        const index = JSON.parse(Buffer.from(merged.files["skills/index.json"]!, "base64").toString("utf8")) as { skills: Record<string, unknown> };
+        assert.ok(Object.hasOwn(index.skills, "constructor"));
+        assert.deepEqual(index.skills["constructor"], { origin: "local", contentHash: "hash" });
+        local.files["skills/index.json"] = Buffer.from('{"skills":{"__proto__":{"origin":"local","contentHash":"hash"}}}').toString("base64");
+        assert.throws(() => mergeSyncSnapshots(emptySyncSnapshot(), local, emptySyncSnapshot()), /skill id must match/u);
+    });
+});
+
+test("sync ignores only regular atomic leftovers and can remove their otherwise empty layer", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".harness-align/layers/empty"));
+        const before = await readSyncSnapshot(root);
+        const temporary = ".harness-align-01234567-0123-4123-8123-0123456789ab.tmp";
+        await writeFile(join(root, ".harness-align/rules", temporary), "partial write");
+        await writeFile(join(root, ".harness-align/layers/empty", temporary), "partial write");
+        assert.equal(syncSnapshotHash(await readSyncSnapshot(root)), syncSnapshotHash(before));
+        const after = structuredClone(before);
+        after.directories = after.directories.filter((path) => path !== "layers/empty");
+        await applySyncSources(root, before, after);
+        assert.equal(syncSnapshotHash(await readSyncSnapshot(root)), syncSnapshotHash(after));
+        assert.throws(() => parseSyncSnapshot({ version: 1, directories: [], files: { [`rules/${temporary}`]: "" } }), /expected a relative source path/u);
+    });
+});
+
+test("sync recovery does not recreate externally deleted unchanged directories or modified files", async () =>
+{
+    for (const deletion of ["file", "directory"])
+    {
+        await withProject(async (root) =>
+        {
+            await mkdir(join(root, ".harness-align/layers/empty"));
+            const before = await readSyncSnapshot(root);
+            const after = structuredClone(before);
+            after.files["rules/base.md"] = Buffer.from("Changed\n").toString("base64");
+            const journal = join(root, ".harness-align/.sync-recovery.json");
+            await writeFile(journal, JSON.stringify({ version: 1, before, after }));
+            const path = join(root, deletion === "file" ? ".harness-align/rules/base.md" : ".harness-align/layers/empty");
+            if (deletion === "file") await unlink(path);
+            else await fs.rmdir(path);
+            await assert.rejects(recoverSyncSources(root), /changed outside the interrupted update/u);
+            await assert.rejects(fs.stat(path), { code: "ENOENT" });
+        });
+    }
+});
+
+test("sync replaces only managed sources and keeps a backup while preserving empty layers", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".harness-align/generated"));
+        await writeFile(join(root, ".harness-align/generated/keep.md"), "keep");
+        await writeFile(join(root, ".harness-align/keep.txt"), "keep");
+        const before = await readSyncSnapshot(root);
+        const next = structuredClone(before);
+        delete next.files["layers/soul/kei.md"];
+        next.files["rules/Base.md"] = next.files["rules/base.md"]!;
+        delete next.files["rules/base.md"];
+        next.directories.push("layers/empty");
+        await applySyncSources(root, before, next);
+        assert.equal(syncSnapshotHash(await readSyncSnapshot(root)), syncSnapshotHash(next));
+        assert.equal(await readFile(join(root, ".harness-align/generated/keep.md"), "utf8"), "keep");
+        assert.equal(await readFile(join(root, ".harness-align/keep.txt"), "utf8"), "keep");
+        assert.ok((await readdir(join(root, ".harness-align/rules"))).includes("Base.md"));
+        assert.equal(syncSnapshotHash(parseSyncSnapshot(JSON.parse(await readFile(join(root, ".harness-align/.sync-backup.json"), "utf8")))), syncSnapshotHash(before));
+        await assert.rejects(readFile(join(root, ".harness-align/.sync-recovery.json")), { code: "ENOENT" });
+    });
+});
+
+test("sync restores completed writes after a later source write fails", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const before = await readSyncSnapshot(root);
+        const next = structuredClone(before);
+        next.files["config.json"] = Buffer.from(JSON.stringify({ ...config, name: "Incoming" })).toString("base64");
+        next.files["rules/base.md"] = Buffer.from("---\npriority: 100\ntargets: []\n---\nChanged").toString("base64");
+        const original = fs.rename;
+        let failed = false;
+        const mocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            if (!failed && String(args[1]) === join(root, ".harness-align/rules/base.md"))
+            {
+                failed = true;
+                throw new Error("simulated locked source file");
+            }
+            return original(...args);
+        });
+        try
+        {
+            await assert.rejects(applySyncSources(root, before, next), /rolled back/u);
+            assert.equal(failed, true);
+            assert.equal(syncSnapshotHash(await readSyncSnapshot(root)), syncSnapshotHash(before));
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("sync startup recovery restores an interrupted update and preserves unrelated later edits", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const before = await readSyncSnapshot(root);
+        const next = structuredClone(before);
+        next.files["config.json"] = Buffer.from(JSON.stringify({ ...config, name: "Incoming" })).toString("base64");
+        const journal = join(root, ".harness-align/.sync-recovery.json");
+        await writeFile(journal, JSON.stringify({ version: 1, before, after: next }));
+        await writeFile(join(root, ".harness-align/config.json"), Buffer.from(next.files["config.json"]!, "base64"));
+        await ensureUserWorkspace(root);
+        assert.equal(syncSnapshotHash(await readSyncSnapshot(root)), syncSnapshotHash(before));
+        await writeFile(journal, JSON.stringify({ version: 1, before, after: next }));
+        await writeFile(join(root, ".harness-align/config.json"), JSON.stringify({ ...config, name: "External edit" }));
+        await assert.rejects(recoverSyncSources(root), /changed outside the interrupted update/u);
+        assert.match(await readFile(join(root, ".harness-align/config.json"), "utf8"), /External edit/u);
+        assert.ok(await readFile(journal));
+    });
+});
+
+test("sync rejects a linked source scope without touching its target", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const outside = join(root, "outside");
+        await mkdir(outside);
+        await writeFile(join(outside, "keep.txt"), "keep");
+        await mkdir(join(root, ".harness-align/skills"));
+        await symlink(outside, join(root, ".harness-align/skills/linked"), process.platform === "win32" ? "junction" : "dir");
+        await assert.rejects(readSyncSnapshot(root), /symbolic link/u);
+        assert.equal(await readFile(join(outside, "keep.txt"), "utf8"), "keep");
+    });
+});
+
+test("GitHub sync round-trips two devices, binary skills, empty layers, and independent edits", async (t) =>
+{
+    await withProject(async (first) => withProject(async (second) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const firstState = join(first, "app-state");
+        const secondState = join(second, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-only-token" };
+        try
+        {
+            await mkdir(join(first, ".harness-align/layers/empty"));
+            await mkdir(join(first, ".harness-align/skills/demo"), { recursive: true });
+            await writeFile(join(first, ".harness-align/skills/demo/SKILL.md"), "# Demo\n");
+            await writeFile(join(first, ".harness-align/skills/demo/icon.bin"), Buffer.from([0, 255, 128]));
+            await connectSync(firstState, input, "encrypted-test-credential");
+            const initial = await previewSync(first, firstState, input.token);
+            assert.equal(initial.remoteEmpty, true);
+            await applySync(first, firstState, input.token, { previewId: initial.id, mode: "merge", choices: {} });
+            assert.ok(remote.rootEntries().some((entry) => entry.path === "README.md"));
+            assert.doesNotMatch(await readFile(join(firstState, "github-sync.json"), "utf8"), /test-only-token/u);
+            await connectSync(secondState, input, "another-encrypted-credential");
+            const adoption = await previewSync(second, secondState, input.token);
+            assert.equal(adoption.firstSync, true);
+            await applySync(second, secondState, input.token, { previewId: adoption.id, mode: "remote", choices: {} });
+            assert.equal(syncSnapshotHash(await readSyncSnapshot(second)), syncSnapshotHash(await readSyncSnapshot(first)));
+            await writeRule(first, "base.md", 100, "# First device");
+            const upload = await previewSync(first, firstState, input.token);
+            await applySync(first, firstState, input.token, { previewId: upload.id, mode: "merge", choices: {} });
+            await writeLayerOption(second, "soul", "kei", "# Second device");
+            const mixed = await previewSync(second, secondState, input.token);
+            assert.ok(mixed.uploadCount > 0 && mixed.downloadCount > 0);
+            assert.equal(mixed.changes.filter((change) => change.direction === "conflict").length, 0);
+            assert.match(inspectSync(mixed.id, "rules/base.md").files[0]!.remote!.text!, /First device/u);
+            await applySync(second, secondState, input.token, { previewId: mixed.id, mode: "merge", choices: {} });
+            const download = await previewSync(first, firstState, input.token);
+            await applySync(first, firstState, input.token, { previewId: download.id, mode: "merge", choices: {} });
+            assert.equal(syncSnapshotHash(await readSyncSnapshot(first)), syncSnapshotHash(await readSyncSnapshot(second)));
+            assert.equal((await getSyncStatus(firstState)).hasPendingUpload, false);
+            await assert.rejects(fs.stat(join(first, ".codex")), { code: "ENOENT" });
+            await disconnectSync(firstState);
+            assert.equal((await getSyncStatus(firstState)).connected, false);
+            assert.doesNotMatch(await readFile(join(firstState, "github-sync.json"), "utf8"), /encrypted-test-credential/u);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    }));
+});
+
+test("GitHub sync detects stale remote previews and rejects racing non-fast-forward uploads", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const stale = await previewSync(root, state, input.token);
+            remote.publish(await readSyncSnapshot(root));
+            await assert.rejects(applySync(root, state, input.token, { previewId: stale.id, mode: "merge", choices: {} }), /remote branch changed/u);
+            assert.equal(remote.controls.patchCount, 0);
+            let preview = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: preview.id, mode: "remote", choices: {} });
+            await writeRule(root, "base.md", 100, "# Local update");
+            preview = await previewSync(root, state, input.token);
+            remote.controls.raceOnPatch = true;
+            await assert.rejects(applySync(root, state, input.token, { previewId: preview.id, mode: "merge", choices: {} }), /HTTP 422/u);
+            assert.equal((await getSyncStatus(state)).hasPendingUpload, true);
+            const retry = await previewSync(root, state, input.token);
+            assert.match(retry.notice, /not on the current branch/u);
+            assert.equal((await getSyncStatus(state)).hasPendingUpload, false);
+            await applySync(root, state, input.token, { previewId: retry.id, mode: "merge", choices: {} });
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("GitHub sync recovers a lost upload response without publishing duplicate commits", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const initial = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: initial.id, mode: "merge", choices: {} });
+            const external = await readSyncSnapshot(root);
+            external.files["layers/soul/kei.md"] = Buffer.from("# Remote option\n").toString("base64");
+            remote.publish(external);
+            await writeRule(root, "base.md", 100, "# Local rule");
+            const preview = await previewSync(root, state, input.token);
+            remote.controls.losePatchResponse = true;
+            await assert.rejects(applySync(root, state, input.token, { previewId: preview.id, mode: "merge", choices: {} }), /network/u);
+            const patches = remote.controls.patchCount;
+            assert.equal((await getSyncStatus(state)).hasPendingUpload, true);
+            assert.doesNotMatch(await readFile(join(root, ".harness-align/layers/soul/kei.md"), "utf8"), /Remote option/u);
+            const recovered = await previewSync(root, state, input.token);
+            assert.match(recovered.notice, /Recovered an earlier upload/u);
+            assert.match(await readFile(join(root, ".harness-align/layers/soul/kei.md"), "utf8"), /Remote option/u);
+            await applySync(root, state, input.token, { previewId: recovered.id, mode: "merge", choices: {} });
+            assert.equal(remote.controls.patchCount, patches);
+            assert.equal((await getSyncStatus(state)).hasPendingUpload, false);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("GitHub sync refuses public, truncated, and linked remote data before source changes", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        const before = await readSyncSnapshot(root);
+        try
+        {
+            remote.controls.isPrivate = false;
+            await assert.rejects(connectSync(state, input, "encrypted"), /private/u);
+            remote.controls.isPrivate = true;
+            await connectSync(state, input, "encrypted");
+            remote.publish(before);
+            remote.controls.truncated = true;
+            await assert.rejects(previewSync(root, state, input.token), /truncated/u);
+            remote.controls.truncated = false;
+            remote.controls.rejectedMode = "120000";
+            await assert.rejects(previewSync(root, state, input.token), /symbolic links/u);
+            assert.equal(syncSnapshotHash(await readSyncSnapshot(root)), syncSnapshotHash(before));
+            assert.equal(remote.controls.patchCount, 0);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
 
 /** Create a temporary `.harness-align` project, run the case, then delete the directory. */
 async function withProject(run: (root: string) => Promise<void>): Promise<void>

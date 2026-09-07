@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { showError } from "@/components/common/Feedback";
 import { AgentDocumentTitleForm } from "@/features/workspace/WorkspaceEditor";
 import { useAppStore } from "@/stores/AppStore";
+import { SyncPanel } from "./SyncPanel";
 
 /** Theme choices rendered by the Ant Design select. */
 const THEME_ITEMS: readonly { label: string; value: ThemeMode }[] = [
@@ -41,6 +42,7 @@ export function SettingsPage()
         <div className="workspace-scroll">
             <div className="settings-page">
                 <Row gutter={[16, 16]}>
+                    <Col span={24}><SyncPanel /></Col>
                     <Col xs={24} lg={16}>
                         <Card title="Appearance" extra={<DesktopOutlined />} className="settings-card">
                             <Form layout="vertical" requiredMark={false}>

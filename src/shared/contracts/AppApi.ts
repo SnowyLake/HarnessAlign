@@ -4,6 +4,7 @@
  */
 
 import type { AppSettings } from "../models/AppSettings.js";
+import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncPreview, SyncResult, SyncStatus } from "../models/Sync.js";
 import type {
     Agent,
     Config,
@@ -20,6 +21,14 @@ import type {
 /** Privileged capabilities exposed to the renderer through `window.appApi`. */
 export interface AppApi
 {
+    sync: {
+        status(): Promise<SyncStatus>;
+        connect(input: SyncConnectionInput): Promise<SyncStatus>;
+        disconnect(): Promise<SyncStatus>;
+        preview(): Promise<SyncPreview>;
+        inspect(previewId: string, key: string): Promise<SyncDetail>;
+        apply(input: SyncApplyInput): Promise<SyncResult>;
+    };
     app: {
         getVersion(): Promise<string>;
         openExternal(url: string): Promise<void>;

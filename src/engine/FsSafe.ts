@@ -112,6 +112,12 @@ export async function readUtf8(root: string, path: string, context = display(roo
     }
 }
 
+/** Identify only temporary files produced by this module's UUID-based atomic writer. */
+export function isAtomicWriteTemporary(name: string): boolean
+{
+    return /^\.harness-align-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u.test(name);
+}
+
 /** Write `content` through a same-directory temporary file, skipping the write when bytes are unchanged. */
 export async function atomicWrite(
     path: string,

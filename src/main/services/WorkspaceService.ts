@@ -48,7 +48,7 @@ import * as skillRemote from "./SkillRemoteService.js";
 let workspaceQueue: Promise<unknown> = Promise.resolve();
 
 /** Serialize workspace operations and release the queue even when an operation fails. */
-function withWorkspace<T>(work: (root: string) => Promise<T>): Promise<T>
+export function withWorkspace<T>(work: (root: string) => Promise<T>): Promise<T>
 {
     // ponytail: one workspace queue; split remote downloads only if UI latency becomes a measured problem.
     const operation = workspaceQueue.then(async () => work(await ensureUserWorkspace()));

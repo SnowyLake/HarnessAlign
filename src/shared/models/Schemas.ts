@@ -5,6 +5,21 @@
 
 import { z } from "zod";
 
+/** Validate the one-time private repository credential supplied by the renderer. */
+export const SYNC_CONNECTION_SCHEMA = z.strictObject({
+    owner: z.string().min(1).max(100),
+    repository: z.string().min(1).max(100),
+    branch: z.string().min(1).max(200),
+    token: z.string().min(1).max(1024).regex(/^\S+$/u, "Token must not contain whitespace"),
+});
+
+/** Accept decisions about an existing preview, never arbitrary source bytes or paths. */
+export const SYNC_APPLY_SCHEMA = z.strictObject({
+    previewId: z.uuid(),
+    mode: z.enum(["merge", "local", "remote"]),
+    choices: z.record(z.string().min(1).max(241), z.enum(["local", "remote"])).refine((choices) => Object.keys(choices).length <= 5000, "Too many conflict decisions"),
+});
+
 /** Zod schema for persisted theme mode values. */
 export const THEME_MODE_SCHEMA = z.enum(["system", "light", "dark"]);
 

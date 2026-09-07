@@ -5,6 +5,12 @@
 
 /** Channel names for the typed Main / Preload IPC contract. */
 export const IPC_CHANNELS = {
+    syncStatus: "sync:status",
+    syncConnect: "sync:connect",
+    syncDisconnect: "sync:disconnect",
+    syncPreview: "sync:preview",
+    syncInspect: "sync:inspect",
+    syncApply: "sync:apply",
     appGetVersion: "app:get-version",
     appOpenExternal: "app:open-external",
     settingsGet: "settings:get",

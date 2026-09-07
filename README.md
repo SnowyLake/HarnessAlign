@@ -10,6 +10,7 @@
 - [配置文件](#配置文件)
 - [规则, Layer 与 Subagent](#规则-layer-与-subagent)
 - [Skills](#skills)
+- [GitHub 多设备同步](#github-多设备同步)
 - [部署结果](#部署结果)
 - [安全说明](#安全说明)
 - [从源码构建](#从源码构建)
@@ -202,6 +203,42 @@ Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正�
 桌面应用可以从 Skills 的 Registration 子页面登记 GitHub 仓库, 再从 Library 子页面发现并安装 skill, 也可以从 `%USERPROFILE%\.agents\skills` 导入已有目录. Setup 把已经安装到项目里的 skill 覆盖部署到用户目录.
 
 没有项目 Skills, 或 `.harness-align/skills/` 里只有 `index.json` 时, skills 部署会跳过并视为成功. shared-rules 仍然必需.
+
+## GitHub 多设备同步
+
+在 Settings 的 GitHub Sync 中, 可以把多台设备连接到同一个 GitHub 私有仓库和分支. 同步通过 GitHub API 完成, 不需要安装 Git, 不需要自建服务器.
+
+首次连接:
+
+1. 在 GitHub 创建一个专用私有仓库, 勾选创建 README, 确保仓库已有分支.
+2. 创建 fine-grained personal access token, 选择该仓库, 授予 `Contents: Read and write` 权限. 组织仓库可能需要管理员批准 Token.
+3. 在 GitHub Sync 填写 Owner, Private repository, Existing branch 和 Token, 点击 Connect. Token 使用本机系统加密保存, 不写入同步仓库, 不会在界面中回显.
+4. 保存所有工作区草稿, 点击 Preview changes 查看上传, 下载和冲突项. View versions 可以对照本地与远端内容; 大文件只显示部分文本, 二进制文件显示大小和哈希.
+5. 首次接入已有配置时, 选择合并, 使用本机完整配置, 或使用远端完整配置. 选择某一方的完整配置会同时应用该方的删除操作. 确认后点击 Sync now.
+6. 在其他设备连接相同仓库及分支. 同步完成后按需执行 Generate 或 Setup, 更新本机生成结果或助手目录.
+
+同步使用仓库内的 `harness-align/` 目录, 保留 README 等其他仓库内容. 该目录中的 `sync.json` 记录同步格式版本和目录信息, 包括空 Layer. 不要删除或手工修改该文件. 如果该目录已有内容但没有同步标记, 应用会拒绝覆盖.
+
+| 数据 | 同步行为 |
+| --- | --- |
+| `config.json` | 同步标题, Harness, Layer 选择及 Skills 来源 |
+| `rules/`, 包括 `shared/` | 同步配置源 |
+| `layers/`, `agents/` | 同步所有配置源, 保留空 Layer |
+| `skills/`, 包括 `index.json` | 同步已安装文件, 二进制资产, 本地修改与来源记录 |
+| `generated/` 与已部署的助手目录 | 不同步, 各设备自行生成和部署 |
+| 主题, 窗口位置, Token, 同步基线与恢复记录 | 仅保留在本机 |
+
+日常同步使用上次成功同步的版本作为共同基线. 不同文件的独立修改会自动合并, 同一文件的不同修改以及删除与修改之间的冲突需要选择 Keep local 或 Keep remote. 同一个 Skill 的所有文件和来源记录作为整体选择; 目录大小写别名或文件与目录之间的冲突也会连同相关子目录整体选择. 合并结果必须通过完整配置校验, 引用错误会阻止同步. 第一版不做逐行自动合并, 不提供设备专属配置覆盖或自动后台同步.
+
+Preview changes 显示的是当时的版本. 预览后如果本地源文件或远端分支变化, Sync now 会要求重新预览. 远端更新使用一次非强制 Git commit, 不覆盖其他设备抢先上传的提交. 分支保护或仓库规则可能拒绝直接提交, 应用会报告失败, 不会绕过这些规则.
+
+上传响应丢失或程序退出后, 应用保留待确认提交的信息. 再次 Preview changes 会查询提交是否已经发布, 避免直接重复上传. 已发布且本地没有后续修改时, 会恢复本地应用步骤并刷新工作区; 检测到后续修改时保留这些修改并重新展示合并预览.
+
+本地替换前会保留最近一份 `.harness-align/.sync-backup.json` 备份, 并写入 `.sync-recovery.json` 恢复记录. 写入失败时尝试回滚; 程序中断后, 下次访问工作区会先恢复. 如果中断后又发生了外部编辑, 应用停止自动恢复并报告冲突文件和恢复记录位置, 避免丢弃这些编辑. 备份和恢复文件不上传.
+
+单个同步文件最多 8 MiB, 配置源总大小最多 32 MiB, 文件与目录总数最多 5000. 超限, GitHub 返回不完整目录树, 路径逃逸, symlink 或 junction 都会阻止同步. Skills 中的文件是实际内容快照, 不会在另一台设备自动重新下载上游最新版.
+
+Token 到期时使用 Update connection 更新凭据. Disconnect 只移除本机凭据, 保留本地配置, 同步基线和待恢复提交, 不删除远端数据. 有待恢复提交时, 需要先重新连接原仓库并完成恢复, 才能切换仓库. 私有仓库中的配置文件是明文内容, 不是端到端加密.
 
 ## 部署结果
 
