@@ -3,7 +3,7 @@
  * Renderer work stays on `window.appApi`.
  */
 
-import { App as AntApp, ConfigProvider, theme as antTheme } from "antd";
+import { App as AntApp, Button, ConfigProvider, Result, Spin, theme as antTheme } from "antd";
 import { useEffect, useState } from "react";
 import { FeedbackBridge } from "@/components/common/Feedback";
 import { AppShell } from "@/components/layout/AppShell";
@@ -12,36 +12,59 @@ import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
 import { ShowcasePage } from "@/features/showcase/ShowcasePage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
 import { refreshWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
-import { useAppStore, type WorkspaceView } from "@/stores/AppStore";
+import { useAppStore, workspaceChangeCount, type WorkspaceView } from "@/stores/AppStore";
 
 /** Root React tree for the desktop shell. */
 export function App()
 {
     const view = useAppStore((state) => state.view);
     const themeMode = useAppStore((state) => state.theme);
+    const workspace = useAppStore((state) => state.workspace);
+    const [loadError, setLoadError] = useState<string>();
+    const [loadAttempt, setLoadAttempt] = useState(0);
     const [prefersDark, setPrefersDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
     const isDark = themeMode === "dark" || (themeMode === "system" && prefersDark);
 
     useEffect(() =>
     {
+        let isCancelled = false;
+        setLoadError(undefined);
         void (async () =>
         {
             const settings = await window.appApi.settings.get();
+            if (isCancelled) return;
             useAppStore.getState().setTheme(settings.theme);
             applyTheme(settings.theme);
             const loaded = await window.appApi.workspace.load();
+            if (isCancelled) return;
             useAppStore.getState().setWorkspace(loaded);
-            useAppStore.getState().setOutput("Workspace loaded.", "success", "Workspace loaded");
         })().catch((error: unknown) =>
         {
-            const message = error instanceof Error ? error.message : String(error);
-            useAppStore.getState().setOutput(message, "error", "Load failed");
+            if (!isCancelled) setLoadError(error instanceof Error ? error.message : String(error));
         });
-        return window.appApi.settings.onChanged((settings) =>
+        const unsubscribe = window.appApi.settings.onChanged((settings) =>
         {
             useAppStore.getState().setTheme(settings.theme);
             applyTheme(settings.theme);
         });
+        return () =>
+        {
+            isCancelled = true;
+            unsubscribe();
+        };
+    }, [loadAttempt]);
+
+    useEffect(() =>
+    {
+        /** Ask the desktop shell to protect unsaved drafts when closing or reloading. */
+        const handleBeforeUnload = (event: BeforeUnloadEvent): void =>
+        {
+            if (workspaceChangeCount(useAppStore.getState()) === 0) return;
+            event.preventDefault();
+            event.returnValue = "";
+        };
+        window.addEventListener("beforeunload", handleBeforeUnload);
+        return () => window.removeEventListener("beforeunload", handleBeforeUnload);
     }, []);
 
     useEffect(() =>
@@ -62,6 +85,7 @@ export function App()
 
     useEffect(() =>
     {
+        /** Persist retained drafts using the standard desktop save shortcut. */
         const handleKeyDown = (event: KeyboardEvent): void =>
         {
             if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.key.toLowerCase() !== "s") return;
@@ -76,7 +100,7 @@ export function App()
     const handleGenerate = (): void =>
     {
         const current = useAppStore.getState().workspace;
-        if (!current) return;
+        if (!current || Object.keys(useAppStore.getState().editorDrafts).length > 0) return;
         void runCommand(async () =>
         {
             const report = await window.appApi.workspace.generate(useAppStore.getState().layerSelection);
@@ -90,7 +114,7 @@ export function App()
     const handleSetup = (): void =>
     {
         const current = useAppStore.getState().workspace;
-        if (!current) return;
+        if (!current || Object.keys(useAppStore.getState().editorDrafts).length > 0) return;
         void runCommand(async () =>
         {
             const report = await window.appApi.workspace.setup(useAppStore.getState().layerSelection);
@@ -148,7 +172,12 @@ export function App()
             <AntApp className="app-root">
                 <FeedbackBridge />
                 <AppShell onSave={handleSave} onGenerate={handleGenerate} onSetup={handleSetup}>
-                    {page}
+                    {workspace ? page : (
+                        <div className="workspace-load-state">
+                            {loadError ? <Result status="error" title="Unable to load workspace" subTitle={loadError}
+                                extra={<Button type="primary" onClick={() => setLoadAttempt((current) => current + 1)}>Retry</Button>} /> : <Spin size="large" aria-label="Loading workspace" />}
+                        </div>
+                    )}
                 </AppShell>
                 <AppOutput />
             </AntApp>

@@ -16,8 +16,8 @@ import {
     ThunderboltOutlined,
 } from "@ant-design/icons";
 import { Badge, Button, Flex, Layout, Menu, Modal, Space, Spin, Tooltip, Typography, type MenuProps } from "antd";
-import { useEffect, useState, type ReactNode } from "react";
-import { useAppStore, type AppView, type WorkspaceView } from "@/stores/AppStore";
+import { useState, type ReactNode } from "react";
+import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
 
 const { Header, Sider, Content } = Layout;
 
@@ -33,8 +33,7 @@ const WORKSPACE_NAV_ITEMS: Readonly<Record<WorkspaceView, NavItem>> = {
     project: { label: "Harnesses", icon: <DeploymentUnitOutlined /> },
     rules: { label: "Rules", icon: <FileTextOutlined /> },
     "shared-rules": { label: "Shared rules", icon: <FileTextOutlined /> },
-    "layer-registration": { label: "Layer setup", icon: <AppstoreOutlined /> },
-    "layer-editor": { label: "Layer editor", icon: <AppstoreOutlined /> },
+    layers: { label: "Layers", icon: <AppstoreOutlined /> },
     agents: { label: "Agents", icon: <RobotOutlined /> },
     skills: { label: "Skills", icon: <ThunderboltOutlined /> },
     "skill-registration": { label: "Skill registration", icon: <ThunderboltOutlined /> },
@@ -57,14 +56,9 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
     const setView = useAppStore((state) => state.setView);
     const workspace = useAppStore((state) => state.workspace);
     const isBusy = useAppStore((state) => state.isBusy);
-    const dirtyCount = useAppStore((state) =>
-    {
-        const savedLayers = state.workspace?.config.layers ?? [];
-        const hasLayerChanges = savedLayers.length !== state.layerSelection.length
-            || savedLayers.some((item, index) => item.name !== state.layerSelection[index]?.name || item.selected !== state.layerSelection[index]?.option);
-        return Object.keys(state.editorDrafts).length + (hasLayerChanges ? 1 : 0);
-    });
-    const [version, setVersion] = useState("");
+    const hasSourceDrafts = useAppStore((state) => Object.keys(state.editorDrafts).length > 0);
+    const setOutputDialogOpen = useAppStore((state) => state.setOutputDialogOpen);
+    const dirtyCount = useAppStore(workspaceChangeCount);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
     const currentNav = view === "settings" || view === "showcase" ? undefined : WORKSPACE_NAV_ITEMS[view];
     const pageLabel = currentNav?.label ?? (view === "settings" ? "Settings" : "Ant Design");
@@ -79,15 +73,7 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
                 { key: "shared-rules", label: "Shared" },
             ],
         },
-        {
-            key: "layers",
-            icon: <AppstoreOutlined />,
-            label: "Layers",
-            children: [
-                { key: "layer-editor", label: "Editor" },
-                { key: "layer-registration", label: "Setup" },
-            ],
-        },
+        { key: "layers", icon: WORKSPACE_NAV_ITEMS.layers.icon, label: WORKSPACE_NAV_ITEMS.layers.label },
         { key: "agents", icon: WORKSPACE_NAV_ITEMS.agents.icon, label: WORKSPACE_NAV_ITEMS.agents.label },
         {
             key: "skills-group",
@@ -106,11 +92,6 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
     ];
     const topbarButtonClassNames = { content: "app-topbar-button-label" };
 
-    useEffect(() =>
-    {
-        void window.appApi.app.getVersion().then(setVersion).catch(() => setVersion(""));
-    }, []);
-
     /** Select one known application view from an Ant Design menu. */
     const handleMenuClick: MenuProps["onClick"] = ({ key }) => setView(key as AppView);
 
@@ -120,27 +101,34 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
                 <Flex align="center" gap={20} className="app-topbar-context">
                     <button type="button" className="app-brand" onClick={() => setView("project")}>
                         <span className="app-brand-mark">HA</span>
-                        <span className="app-brand-copy">
-                            <span className="app-brand-name">Harness Align</span>
-                            <span className="app-brand-version">{version ? `Desktop ${version}` : "Desktop"}</span>
-                        </span>
+                        <span className="app-brand-name">Harness Align</span>
                     </button>
                 </Flex>
                 <Flex align="center" gap={12} wrap={false}>
                     {isBusy ? <Space size={6}><Spin size="small" /><Typography.Text type="secondary">Working...</Typography.Text></Space> : dirtyCount > 0 ? <Badge status="processing" text={`${dirtyCount} unsaved`} /> : null}
                     <Tooltip title="Save all changes (Ctrl+S)">
-                        <Button classNames={topbarButtonClassNames} icon={<SaveOutlined />} disabled={!workspace || isBusy} aria-keyshortcuts="Control+S" onClick={onSave}>Save</Button>
+                        <Button classNames={topbarButtonClassNames} icon={<SaveOutlined />} disabled={!workspace || isBusy || dirtyCount === 0} aria-label="Save all changes" aria-keyshortcuts="Control+S" onClick={onSave}>Save</Button>
                     </Tooltip>
                     <Space.Compact>
-                        <Button classNames={topbarButtonClassNames} type="primary" icon={<BuildOutlined />} disabled={!workspace || isBusy} onClick={onGenerate}>Generate</Button>
-                        <Button classNames={topbarButtonClassNames} icon={<RocketOutlined />} disabled={!workspace || isBusy} onClick={() => setIsSetupOpen(true)}>Setup</Button>
+                        <Tooltip title={hasSourceDrafts ? "Save source changes before generating" : "Generate"}>
+                            <Button classNames={topbarButtonClassNames} type="primary" icon={<BuildOutlined />} disabled={!workspace || isBusy || hasSourceDrafts} aria-label="Generate" onClick={onGenerate}>Generate</Button>
+                        </Tooltip>
+                        <Tooltip title={hasSourceDrafts ? "Save source changes before deploying" : "Deploy to existing harnesses"}>
+                            <Button classNames={topbarButtonClassNames} icon={<RocketOutlined />} disabled={!workspace || isBusy || hasSourceDrafts} aria-label="Setup" onClick={() => setIsSetupOpen(true)}>Setup</Button>
+                        </Tooltip>
                     </Space.Compact>
+                    <Tooltip title="Output">
+                        <Button type="text" icon={<FileTextOutlined />} aria-label="Open output" onClick={() => setOutputDialogOpen(true)} />
+                    </Tooltip>
                 </Flex>
             </Header>
             <Layout className="app-workbench" hasSider>
                 <Sider
                     className="app-sider"
-                    width={200}
+                    width={184}
+                    breakpoint="xl"
+                    collapsedWidth={64}
+                    trigger={null}
                     theme="light"
                 >
                     <nav className="app-sider-navigation" aria-label="Application navigation">
@@ -167,7 +155,7 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
                 }}
             >
                 <Typography.Paragraph>
-                    Setup updates existing harness directories under USERPROFILE, shared-rules, and same-name skills. Other user skills are kept.
+                    Replace generated rules, agents, shared rules, and same-name skills in existing harness directories?
                 </Typography.Paragraph>
             </Modal>
         </Layout>

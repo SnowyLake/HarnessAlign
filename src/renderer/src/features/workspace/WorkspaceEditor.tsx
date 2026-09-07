@@ -2,14 +2,14 @@
  * Ant Design workspace editors that preserve native FormData drafts and Main-process path validation.
  */
 
-import { ArrowDownOutlined, ArrowUpOutlined, CloseOutlined, DeleteOutlined, EditOutlined, HolderOutlined, PlusOutlined } from "@ant-design/icons";
-import type { HarnessConfig, LayerSelection, Workspace } from "@shared/models/Workspace";
-import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Typography } from "antd";
+import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
+import type { HarnessConfig, Workspace } from "@shared/models/Workspace";
+import { Alert, Button, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Typography } from "antd";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
 import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { catalogLayerNames, defaultLayerOption, fileName, ruleDisplayName, selectableLayerNames } from "@/lib/Utils";
+import { fileName, ruleDisplayName } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
 /** Form bindings that preserve drafts and respond to tree commands. */
@@ -148,7 +148,7 @@ function TargetBoxes({ selected }: { selected: string[] | undefined })
 function FormError({ message }: { message: string | undefined })
 {
     if (!message) return null;
-    return <Alert className="editor-alert" type="error" title="Error" description={<span className="pre-wrap">{message}</span>} showIcon />;
+    return <Alert className="editor-alert" type="error" title={<span className="pre-wrap">{message}</span>} showIcon />;
 }
 
 /** Render the standard editor name field and optional create button. */
@@ -160,9 +160,9 @@ function EditorNameField({ value, isBusy, submitLabel, onChange }: {
 })
 {
     return (
-        <Form.Item label="Name">
+        <Form.Item label="Name" htmlFor="editor-name">
             <Flex gap={8}>
-                <Input name="name" value={value} onChange={(event) => onChange(event.currentTarget.value)} />
+                <Input id="editor-name" name="name" value={value} onChange={(event) => onChange(event.currentTarget.value)} />
                 {submitLabel ? <Button type="primary" htmlType="submit" loading={isBusy}>{submitLabel}</Button> : null}
             </Flex>
         </Form.Item>
@@ -204,6 +204,7 @@ export function AgentDocumentTitleForm({ workspace }: { workspace: Workspace })
             className="editor-form"
             onFocusCapture={() => setSelection(selection)}
             onChange={editor.handleChange}
+            onInput={editor.handleChange}
             onSubmit={(event) =>
             {
                 event.preventDefault();
@@ -265,6 +266,7 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                 aria-busy={isBusy}
                 onFocusCapture={() => setSelection(selection)}
                 onChange={editor.handleChange}
+                onInput={editor.handleChange}
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
@@ -313,9 +315,6 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                             <Input id="harness-instructions" name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", harness?.instructionsField ?? "")} />
                         </Form.Item>
                     ) : null}
-                    <Typography.Paragraph type="secondary">
-                        {editor.draft ? "Unsaved changes. Closing keeps this draft until you save or discard it." : "Save this harness before running Generate or Setup."}
-                    </Typography.Paragraph>
                     <Flex justify="space-between" gap={12} wrap>
                         <Space>
                             {original ? <Button type="text" danger icon={<DeleteOutlined />} onClick={() => setIsDeleteOpen(true)}>Delete</Button> : null}
@@ -372,6 +371,7 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
             className="editor-form"
             onFocusCapture={() => setSelection(selection)}
             onChange={editor.handleChange}
+            onInput={editor.handleChange}
             onSubmit={(event) =>
             {
                 event.preventDefault();
@@ -396,112 +396,6 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
                 />
             </Form>
         </form>
-    );
-}
-
-/** Props for one ordered layer card in the Layers generation panel. */
-interface LayerCardProps
-{
-    workspace: Workspace;
-    selection: LayerSelection;
-    order: number;
-    canMoveUp: boolean;
-    canMoveDown: boolean;
-    isDragging: boolean;
-    onMove: (offset: -1 | 1) => void;
-    onDragStart: () => void;
-    onDragEnd: () => void;
-    onDrop: () => void;
-}
-
-/** Render the picker for adding an existing catalog layer to the project. */
-function NewLayerCard({ workspace, onAdd, onCancel }: { workspace: Workspace; onAdd: (name: string) => void; onCancel: () => void })
-{
-    const isBusy = useAppStore((state) => state.isBusy);
-    const layerSelection = useAppStore((state) => state.layerSelection);
-    const available = selectableLayerNames(workspace).filter((name) => !layerSelection.some((item) => item.name === name));
-
-    return (
-        <Card size="small" title="Add layer" extra={<Button type="text" icon={<CloseOutlined />} aria-label="Cancel new layer" onClick={onCancel} />}>
-            {available.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Every catalog layer is already in this project" /> : (
-                <Select
-                    autoFocus
-                    placeholder="Choose a layer"
-                    disabled={isBusy}
-                    options={available.map((name) => ({ label: name, value: name }))}
-                    onChange={onAdd}
-                    className="full-width"
-                />
-            )}
-        </Card>
-    );
-}
-
-/** Render one draggable project layer card with its selected option. */
-function LayerCard({ workspace, selection, order, canMoveUp, canMoveDown, isDragging, onMove, onDragStart, onDragEnd, onDrop }: LayerCardProps)
-{
-    const isBusy = useAppStore((state) => state.isBusy);
-    const setLayerSelection = useAppStore((state) => state.setLayerSelection);
-    const [isRemoveOpen, setIsRemoveOpen] = useState(false);
-    const options = Object.hasOwn(workspace.layerOptions, selection.name) ? workspace.layerOptions[selection.name] ?? [] : [];
-
-    return (
-        <>
-            <Card
-                size="small"
-                className="draggable-card"
-                data-dragging={isDragging || undefined}
-                draggable={!isBusy}
-                title={<Space><HolderOutlined title="Drag to reorder" /><Tag color="blue">{order}</Tag><span>{selection.name}</span></Space>}
-                extra={(
-                    <Space.Compact>
-                        <Button type="text" icon={<ArrowUpOutlined />} disabled={isBusy || !canMoveUp} aria-label={`Move ${selection.name} earlier`} onClick={() => onMove(-1)} />
-                        <Button type="text" icon={<ArrowDownOutlined />} disabled={isBusy || !canMoveDown} aria-label={`Move ${selection.name} later`} onClick={() => onMove(1)} />
-                        <Button type="text" danger icon={<CloseOutlined />} disabled={isBusy} aria-label={`Remove ${selection.name}`} onClick={() => setIsRemoveOpen(true)} />
-                    </Space.Compact>
-                )}
-                onDragStart={(event) =>
-                {
-                    event.dataTransfer.effectAllowed = "move";
-                    onDragStart();
-                }}
-                onDragEnd={onDragEnd}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) =>
-                {
-                    event.preventDefault();
-                    onDrop();
-                }}
-            >
-                <Form layout="vertical" requiredMark={false}>
-                    <Form.Item label="Selected option">
-                        <Select
-                            value={selection.option}
-                            options={options.map((option) => ({ label: option.name, value: option.name }))}
-                            onChange={(value: string) =>
-                            {
-                                setLayerSelection(useAppStore.getState().layerSelection.map((item) => item.name === selection.name ? { ...item, option: value } : item));
-                            }}
-                        />
-                    </Form.Item>
-                </Form>
-            </Card>
-            <Modal
-                open={isRemoveOpen}
-                title={`Remove ${selection.name} from this project?`}
-                okText="Remove"
-                confirmLoading={isBusy}
-                onCancel={() => setIsRemoveOpen(false)}
-                onOk={() =>
-                {
-                    setLayerSelection(useAppStore.getState().layerSelection.filter((item) => item.name !== selection.name));
-                    setIsRemoveOpen(false);
-                    showSuccess(`Removed layer ${selection.name}`);
-                }}
-            >
-                <Typography.Paragraph>The files in layer {selection.name} are kept.</Typography.Paragraph>
-            </Modal>
-        </>
     );
 }
 
@@ -531,6 +425,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                 ref={editor.formRef}
                 className="editor-form"
                 onChange={editor.handleChange}
+                onInput={editor.handleChange}
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
@@ -616,6 +511,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                 ref={editor.formRef}
                 className="editor-form"
                 onChange={editor.handleChange}
+                onInput={editor.handleChange}
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
@@ -697,6 +593,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                 ref={editor.formRef}
                 className="editor-form"
                 onChange={editor.handleChange}
+                onInput={editor.handleChange}
                 onSubmit={(event) =>
                 {
                     event.preventDefault();
@@ -723,6 +620,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                         <Input name="description" defaultValue={draftText(editor.draft, "description", existing?.description ?? "")} />
                     </Form.Item>
                     <Form.Item label="Metadata (JSON)">
+                        <input type="hidden" name="enabledHarnesses" value="" />
                         <Tabs
                             activeKey={selectedMetadataName}
                             onChange={setActiveMetadataName}
@@ -730,7 +628,9 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                                 key: harness.name,
                                 label: harness.name,
                                 forceRender: true,
-                                children: (
+                                children: (<Space orientation="vertical" size="middle" className="full-width">
+                                    <Checkbox.Group name="enabledHarnesses" options={[{ label: `Enable for ${harness.name}`, value: harness.name }]}
+                                        defaultValue={draftValues(editor.draft, "enabledHarnesses", existing ? Object.keys(existing.harnesses) : workspace.config.harnesses.map((item) => item.name)) ?? []} />
                                     <SourceEditor
                                         name={`meta-${harness.name}`}
                                         language="json"
@@ -738,7 +638,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                                         resizeKey={selectedMetadataName}
                                         defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))}
                                     />
-                                ),
+                                </Space>),
                             }))}
                         />
                     </Form.Item>
@@ -788,6 +688,7 @@ function GeneratedFileView({ workspace, path }: { workspace: Workspace; path: st
         <Space orientation="vertical" size="middle" className="full-width">
             <Typography.Text type="secondary">{file.path}</Typography.Text>
             <SourceEditor
+                key={file.content}
                 aria-label={file.path}
                 language={file.path.toLowerCase().endsWith(".md") ? "markdown" : "plain"}
                 defaultValue={file.content}
@@ -807,20 +708,6 @@ function GeneratedEmpty()
 function MissingEditorEmpty({ title, description }: { title: string; description: string })
 {
     return <Empty description={<Space orientation="vertical" size={2}><Typography.Text strong>{title}</Typography.Text><Typography.Text type="secondary">{description}</Typography.Text></Space>} />;
-}
-
-/** Move one layer around the ordered generation selection. */
-function moveLayerSelection(selection: readonly LayerSelection[], sourceName: string, targetName: string): LayerSelection[]
-{
-    const sourceIndex = selection.findIndex((item) => item.name === sourceName);
-    const targetIndex = selection.findIndex((item) => item.name === targetName);
-    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return [...selection];
-    const next = [...selection];
-    const [source] = next.splice(sourceIndex, 1);
-    if (!source) return [...selection];
-    const nextTargetIndex = next.findIndex((item) => item.name === targetName);
-    next.splice(sourceIndex < targetIndex ? nextTargetIndex + 1 : nextTargetIndex, 0, source);
-    return next;
 }
 
 /** Render the Harnesses page without unrelated project configuration. */
@@ -848,7 +735,6 @@ export function HarnessesPanel()
             <Flex align="center" justify="space-between" gap={16} wrap>
                 <div>
                     <Typography.Title level={3} className="harnesses-title">Harnesses <Typography.Text type="secondary">({workspace.config.harnesses.length})</Typography.Text></Typography.Title>
-                    <Typography.Text type="secondary">Manage where each coding assistant receives its rules and agents.</Typography.Text>
                 </div>
                 <Button type="primary" icon={<PlusOutlined />} disabled={isBusy} onClick={() => openEditor({ kind: "harness-new" })}>
                     {drafts["harness-new"] ? "Continue new harness" : "Add harness"}
@@ -904,9 +790,6 @@ export function HarnessesPanel()
                     ]}
                 />
             </div>
-            <Typography.Paragraph type="secondary" className="break-anywhere">
-                Paths are relative to your user home directory. Setup updates existing directories and skips missing ones.
-            </Typography.Paragraph>
             <Drawer
                 title={selectedHarness ? `Edit ${selectedHarness.name}` : "New harness"}
                 open={isEditorOpen}
@@ -923,90 +806,6 @@ export function HarnessesPanel()
     );
 }
 
-/** Render the ordered generation selection on the dedicated registration page. */
-export function LayerRegistrationPanel()
-{
-    const workspace = useAppStore((state) => state.workspace);
-    const isBusy = useAppStore((state) => state.isBusy);
-    const layerSelection = useAppStore((state) => state.layerSelection);
-    const setLayerSelection = useAppStore((state) => state.setLayerSelection);
-    const [draggedLayer, setDraggedLayer] = useState<string>();
-    const [isAddingLayer, setIsAddingLayer] = useState(false);
-
-    if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
-    const selectableLayers = selectableLayerNames(workspace);
-
-    return (
-        <section className="layer-selection-panel">
-            <div className="layer-selection-header">
-                <div>
-                    <Typography.Title level={5}>Layer sequence</Typography.Title>
-                    <Typography.Text type="secondary">Applied from top to bottom.</Typography.Text>
-                </div>
-                <Button
-                    type="primary"
-                    icon={<PlusOutlined />}
-                    disabled={isBusy || isAddingLayer || selectableLayers.every((name) => layerSelection.some((item) => item.name === name))}
-                    onClick={() => setIsAddingLayer(true)}
-                >
-                    Add
-                </Button>
-            </div>
-            <div className="layer-selection-content">
-                <div className="project-layer-grid">
-                    {layerSelection.map((layer, index) => (
-                        <LayerCard
-                            key={layer.name}
-                            workspace={workspace}
-                            selection={layer}
-                            order={index + 1}
-                            canMoveUp={index > 0}
-                            canMoveDown={index < layerSelection.length - 1}
-                            isDragging={draggedLayer === layer.name}
-                            onMove={(offset) =>
-                            {
-                                const current = useAppStore.getState().layerSelection;
-                                const currentIndex = current.findIndex((item) => item.name === layer.name);
-                                const target = current[currentIndex + offset];
-                                if (target) setLayerSelection(moveLayerSelection(current, layer.name, target.name));
-                            }}
-                            onDragStart={() => setDraggedLayer(layer.name)}
-                            onDragEnd={() => setDraggedLayer(undefined)}
-                            onDrop={() =>
-                            {
-                                if (!draggedLayer || draggedLayer === layer.name) return;
-                                setLayerSelection(moveLayerSelection(useAppStore.getState().layerSelection, draggedLayer, layer.name));
-                                setDraggedLayer(undefined);
-                            }}
-                        />
-                    ))}
-                    {isAddingLayer ? (
-                        <NewLayerCard
-                            workspace={workspace}
-                            onCancel={() => setIsAddingLayer(false)}
-                            onAdd={(name) =>
-                            {
-                                const option = defaultLayerOption(workspace, name);
-                                if (!option) return;
-                                setLayerSelection([...useAppStore.getState().layerSelection, { name, option }]);
-                                setIsAddingLayer(false);
-                            }}
-                        />
-                    ) : null}
-                    {!isAddingLayer && layerSelection.length === 0 ? (
-                        <Empty
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
-                            description={catalogLayerNames(workspace).length === 0
-                                ? "Create a catalog layer first"
-                                : selectableLayers.length === 0 ? "Add an option before using a layer" : "No layers selected"}
-                        />
-                    ) : null}
-                </div>
-            </div>
-        </section>
-    );
-}
-
 /** Render the editor for the current workspace selection. */
 export function WorkspaceEditor()
 {
@@ -1016,9 +815,21 @@ export function WorkspaceEditor()
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
     if (selection.kind === "layer-new") return <LayerNewForm workspace={workspace} />;
     if (selection.kind === "layer") return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Choose an option to edit, or use the Layer edit menu." />;
-    if (selection.kind === "layer-option" || selection.kind === "layer-option-new") return <LayerOptionForm workspace={workspace} selection={selection} />;
-    if (selection.kind === "rule" || selection.kind === "rule-new") return <RuleForm workspace={workspace} selection={selection} />;
-    if (selection.kind === "agent" || selection.kind === "agent-new") return <AgentForm workspace={workspace} selection={selection} />;
+    if (selection.kind === "layer-option" || selection.kind === "layer-option-new")
+    {
+        const source = selection.kind === "layer-option" ? Object.values(workspace.layerOptions).flat().find((item) => item.path === selection.path) : undefined;
+        return <LayerOptionForm key={JSON.stringify(source)} workspace={workspace} selection={selection} />;
+    }
+    if (selection.kind === "rule" || selection.kind === "rule-new")
+    {
+        const source = selection.kind === "rule" ? [...workspace.rootRules, ...workspace.sharedRules].find((item) => item.path === selection.path) : undefined;
+        return <RuleForm key={JSON.stringify(source)} workspace={workspace} selection={selection} />;
+    }
+    if (selection.kind === "agent" || selection.kind === "agent-new")
+    {
+        const source = selection.kind === "agent" ? workspace.agents.find((item) => item.path === selection.path) : undefined;
+        return <AgentForm key={JSON.stringify(source)} workspace={workspace} selection={selection} />;
+    }
     if (selection.kind === "generated-file") return <GeneratedFileView workspace={workspace} path={selection.path} />;
     return <GeneratedEmpty />;
 }

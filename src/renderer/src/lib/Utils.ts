@@ -1,4 +1,6 @@
-import type { Workspace } from "@shared/models/Workspace";
+/** Workspace labels and source paths with Windows-safe collision checks. */
+
+import type { LayerSelection, Workspace } from "@shared/models/Workspace";
 
 /** Return the final path segment of a `/`-separated workspace-relative path. */
 export function fileName(path: string): string
@@ -26,7 +28,7 @@ function renamedRulePath(path: string, name: string): string
 export function uniqueRulePath(currentPath: string, name: string, existingPaths: readonly string[]): string
 {
     const nextPath = renamedRulePath(currentPath, name);
-    if (nextPath !== currentPath && existingPaths.includes(nextPath)) throw new Error(`${nextPath}: rule already exists`);
+    if (nextPath !== currentPath && existingPaths.some((path) => path.toLowerCase() === nextPath.toLowerCase())) throw new Error(`${nextPath}: rule already exists`);
     return nextPath;
 }
 
@@ -37,7 +39,7 @@ export function uniqueAgentPath(currentPath: string | undefined, name: string, e
     if (!trimmed || trimmed.includes("/") || trimmed.includes("\\")) throw new Error(`Agent name must not contain path separators, got ${name}`);
     const stem = trimmed.toLowerCase().endsWith(".md") ? trimmed.slice(0, -3) : trimmed;
     const nextPath = `.harness-align/agents/${stem}.md`;
-    if (nextPath !== currentPath && existingPaths.includes(nextPath)) throw new Error(`${nextPath}: agent already exists`);
+    if (nextPath !== currentPath && existingPaths.some((path) => path.toLowerCase() === nextPath.toLowerCase())) throw new Error(`${nextPath}: agent already exists`);
     return nextPath;
 }
 
@@ -45,12 +47,6 @@ export function uniqueAgentPath(currentPath: string | undefined, name: string, e
 export function catalogLayerNames(workspace: Workspace): string[]
 {
     return Object.keys(workspace.layerOptions);
-}
-
-/** Return discovered Layers that currently have at least one selectable option. */
-export function selectableLayerNames(workspace: Workspace): string[]
-{
-    return catalogLayerNames(workspace).filter((name) => (workspace.layerOptions[name]?.length ?? 0) > 0);
 }
 
 /** Return the option a Project card should use when adding an existing Layer. */
@@ -61,4 +57,18 @@ export function defaultLayerOption(workspace: Workspace, name: string): string |
     const saved = workspace.config.layers.find((layer) => layer.name === name)?.selected;
     if (saved && options.some((option) => option.name === saved)) return saved;
     return options[0]?.name;
+}
+
+/** Move one enabled layer before or after its target in generation order. */
+export function moveLayerSelection(selection: readonly LayerSelection[], sourceName: string, targetName: string): LayerSelection[]
+{
+    const sourceIndex = selection.findIndex((item) => item.name === sourceName);
+    const targetIndex = selection.findIndex((item) => item.name === targetName);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return [...selection];
+    const next = [...selection];
+    const [source] = next.splice(sourceIndex, 1);
+    if (!source) return [...selection];
+    const nextTargetIndex = next.findIndex((item) => item.name === targetName);
+    next.splice(sourceIndex < targetIndex ? nextTargetIndex + 1 : nextTargetIndex, 0, source);
+    return next;
 }

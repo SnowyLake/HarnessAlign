@@ -22,6 +22,7 @@ export default defineConfig({
         },
     },
     renderer: {
+        build: { minify: "esbuild", cssMinify: true },
         resolve: {
             alias: {
                 "@": resolve("src/renderer/src"),

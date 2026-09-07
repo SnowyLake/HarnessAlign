@@ -48,29 +48,33 @@ Windows 安装包可用 `npm run build:win` 生成, 产物在 `release/`:
 2. 点击 Generate 校验配置并生成输出, 在 Generated 页查看结果.
 3. 点击 Setup 重新生成并部署到当前用户已经存在的 Harness 根目录, 以及共享规则和项目 Skills.
 
-Generate 和 Setup 使用当前 Layer 顺序与选项. 未保存的其他源文件草稿需先保存才参与生成.
+Generate 和 Setup 使用当前 Layer 顺序与选项. 有未保存的源文件草稿时, 先点击 Save 或按 Ctrl+S, 再生成或部署.
 
 ## 桌面应用
 
-桌面应用采用简洁一致的现代界面, 使用顶部工作区命令栏, 固定侧栏导航和业务页主从编辑布局. 蓝色仅用于关键动作, 选中状态和反馈; Markdown 与 JSON 编辑器适合处理长文本和结构化内容.
+桌面应用使用顶部命令栏和主从编辑布局. 窄窗口下侧栏自动收起为图标, 文件列表可调整宽度或折叠. Markdown 与 JSON 编辑器支持长文本和结构化内容.
 
 窗口可以:
 
 - 自动加载当前用户配置. 配置根目录固定, 界面不显示或提供修改入口.
 - 在 Harnesses 页通过紧凑列表查看名称, 配置路径和 Subagent 文件格式, 点击 Edit 在侧边面板中编辑单个 Harness, 或使用 Add harness 新建. 路径相对当前用户目录, Setup 跳过尚不存在的目标目录.
-- 在 Layers 的 Editor 子页面新建, 修改, 重命名或删除 Layer 及其选项. Add Layer 只创建空 Group, Option 通过 Group 操作单独添加; Setup 子页面管理生成顺序与选项.
+- 在 Layers 页按 Group 管理 Layer 及其选项. Group 开关控制是否参与生成, Generate option 选择生成时使用的选项, 拖动 Group 名称或点击上下箭头调整顺序. 启用的 Group 按生成顺序排列, 未启用的 Group 排在后面. Add layer 创建空 Group, 添加 Option 后才能启用.
 - 在 Rules 的 Inline 子页面编辑参与 `AGENTS.md` 的根规则, 在 Shared 子页面编辑独立部署的 shared-rules. Rule 和 Layer Option 的 Targets 都是严格白名单, 未选择任何 Harness 时不会对任何 Harness 生效.
-- 在 Agents 页编辑共享正文, 并在单一 metadata 编辑器中按 Harness 切换各自的原生 metadata.
+- 在 Agents 页编辑共享正文, 按 Harness 切换原生 metadata, 并通过 Enable 选择需要生成该 Agent 的 Harness.
 - 在 Skills 的 Registration 子页面注册 GitHub 仓库, 在 Library 子页面发现, 下载, 检查或应用更新, 从 `%USERPROFILE%\.agents\skills` 导入, 或移除已安装的项目 Skills.
 - 在 Generated 页查看最近一次生成结果. 不要手工改这些文件.
 - 使用当前未保存的 Layer 选择执行 Generate 和 Setup.
 - 在 Settings 页设置生成 `AGENTS.md` 的一级标题, 切换主题.
 
-Settings 页的 `AGENTS.md title` 只控制生成文档的一级标题. 点击顶部 Save 或按 Ctrl+S 后, 所有页面的草稿以及当前 Layer 顺序与选择会统一写回. 编辑树标签的右键 Save 仍只保存该标签, 不绑定 Ctrl+S.
+Settings 页的 `AGENTS.md title` 只控制生成文档的一级标题. 点击顶部 Save 或按 Ctrl+S 后, 所有页面的草稿以及当前 Layer 顺序与选择会统一写回. 文件行的操作菜单和右键菜单中的 Save 只保存当前文件. 切换页面会保留草稿, 关闭有未保存修改的窗口时会提示确认.
+
+关闭 Group 开关会立即移出当前生成序列, 保留源文件和编辑能力. 操作反馈统一显示在顶部; 点击生成或部署提示, 或顶部 Output 图标可查看完整输出. 工作区加载失败时可点击 Retry 重试.
 
 Harness 编辑面板的 Save harness 只保存当前项. 关闭面板会保留草稿, 列表用 Unsaved 标记未保存项; Discard changes 放弃当前草稿. 新建草稿关闭后可通过 Continue new harness 继续编辑. 删除操作位于编辑面板内, 并需要再次确认. 保存 Harness 后再运行 Generate 或 Setup.
 
 桌面应用不创建 `%USERPROFILE%` 下缺失的 Harness 根目录. Setup 只复制已经安装到 `.harness-align/skills/` 的 Skills.
+
+Setup 先准备完整的替换内容, 再更新部署目标. 替换失败时尝试恢复原文件, 错误输出会指出未能恢复的目标和备份位置.
 
 ## 配置目录
 
@@ -151,7 +155,7 @@ Layer 字段:
 | `name` | 匹配 `[a-z0-9][a-z0-9_-]*`, 忽略大小写后唯一 | `.harness-align/layers/<layer>/` 目录名 |
 | `selected` | 匹配 `[a-z0-9][a-z0-9_-]*`, 且必须存在对应 `.md` 文件 | 保存的默认选项 |
 
-`layers` 可以为空, 表示当前项目未选择任何 Layer. `.harness-align/layers/<layer>/` 目录构成 Layer 目录, 并允许暂时不包含 Option. 空 Layer 不能加入 Setup; 未写入 `config.json` 的 Layer 目录仍然有效, 只是不参与生成.
+`layers` 可以为空, 表示当前项目未选择任何 Layer. `.harness-align/layers/<layer>/` 目录构成 Layer 目录, 并允许暂时不包含 Option. 空 Layer 不能启用生成; 未写入 `config.json` 的 Layer 目录仍然有效, 只是不参与生成.
 
 Harness 字段:
 

@@ -192,6 +192,10 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
                 [...workspace.rootRules, ...workspace.sharedRules].map((item) => item.path),
             );
             const body = snapshotText(snapshot, "body");
+            if (!original && [...workspace.rootRules, ...workspace.sharedRules].some((item) => item.path.toLowerCase() === path.toLowerCase()))
+            {
+                throw new Error(`${path}: rule already exists`);
+            }
             const save = async (savePath: string): Promise<void> =>
             {
                 if (isShared)
@@ -253,7 +257,10 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             }
             else
             {
-                await window.appApi.workspace.addLayerOption(layer, nextName);
+                if (workspace.layerOptions[layer]?.some((option) => option.name.toLowerCase() === nextName.toLowerCase()))
+                {
+                    throw new Error(`Layer ${layer}: option ${nextName} already exists`);
+                }
                 path = `.harness-align/layers/${layer}/${nextName}.md`;
                 await window.appApi.workspace.saveLayerOption({ path, targets, body });
             }
@@ -268,8 +275,10 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             const existing = selection.kind === "agent" ? workspace.agents.find((agent) => agent.path === selection.path) : undefined;
             if (selection.kind === "agent" && !existing) throw new Error(`Agent ${selection.path} no longer exists`);
             const harnesses: Record<string, Record<string, unknown>> = {};
+            const enabledHarnesses = snapshot.enabledHarnesses ?? (existing ? Object.keys(existing.harnesses) : workspace.config.harnesses.map((harness) => harness.name));
             for (const harness of workspace.config.harnesses)
             {
+                if (!enabledHarnesses.includes(harness.name)) continue;
                 const metadata = snapshotText(snapshot, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}));
                 harnesses[harness.name] = JSON.parse(metadata) as Record<string, unknown>;
             }
@@ -308,6 +317,7 @@ export async function saveWorkspaceChanges(): Promise<void>
     const pending = draftEntries
         .filter(({ draft }) => draft.selection.kind !== "config")
         .sort((left, right) => editorSavePriority(left.draft.selection) - editorSavePriority(right.draft.selection) || left.key.localeCompare(right.key));
+    if (!configDraft && !hasLocalLayerChanges && pending.length === 0) return;
 
     const { setIsBusy } = initial;
     let currentWorkspace = initial.workspace;
@@ -379,7 +389,8 @@ export async function refreshWorkspace(next?: Selection): Promise<void>
 /** Run Generate / Setup work while holding busy; errors open the output notification flow. */
 export async function runCommand(work: () => Promise<void>): Promise<void>
 {
-    const { setIsBusy, setOutput } = useAppStore.getState();
+    const { isBusy, setIsBusy, setOutput } = useAppStore.getState();
+    if (isBusy) return;
     setIsBusy(true);
     try
     {
@@ -398,7 +409,8 @@ export async function runCommand(work: () => Promise<void>): Promise<void>
 /** Run a form save/delete while holding busy; failures toast briefly and return the full message. */
 export async function runMutation(work: () => Promise<void>): Promise<{ ok: true } | { ok: false; message: string }>
 {
-    const { setIsBusy } = useAppStore.getState();
+    const { isBusy, setIsBusy } = useAppStore.getState();
+    if (isBusy) return { ok: false, message: "Another operation is still running." };
     setIsBusy(true);
     try
     {
@@ -420,36 +432,18 @@ export async function runMutation(work: () => Promise<void>): Promise<{ ok: true
 /** Persist a Layer rename and rewrite matching editor drafts and Home selection. */
 export async function persistLayerRename(from: string, to: string): Promise<void>
 {
+    if (from === to) return;
     await window.appApi.workspace.renameLayer(from, to);
     const state = useAppStore.getState();
     const previousOptionPrefix = `layer-option:.harness-align/layers/${from}/`;
-    const nextOptionPrefix = `layer-option:.harness-align/layers/${to}/`;
     for (const [key, draft] of Object.entries(state.editorDrafts))
     {
         if (!key.startsWith(previousOptionPrefix)) continue;
         const nextPath = `.harness-align/layers/${to}/${key.slice(previousOptionPrefix.length)}`;
-        state.setEditorDraft(nextOptionPrefix + key.slice(previousOptionPrefix.length), {
-            ...draft,
-            selection: { kind: "layer-option", path: nextPath },
-        });
-        state.clearEditorDraft(key);
+        state.moveEditorDraft(draft.selection, { kind: "layer-option", path: nextPath });
     }
-    const previousNewOptionKey = selectionKey({ kind: "layer-option-new", layer: from });
-    const nextNewOptionKey = selectionKey({ kind: "layer-option-new", layer: to });
-    const newOptionDraft = state.editorDrafts[previousNewOptionKey];
-    if (newOptionDraft) state.setEditorDraft(nextNewOptionKey, {
-        ...newOptionDraft,
-        selection: { kind: "layer-option-new", layer: to },
-    });
-    state.clearEditorDraft(previousNewOptionKey);
-    const previousLayerKey = selectionKey({ kind: "layer", name: from });
-    const nextLayerKey = selectionKey({ kind: "layer", name: to });
-    const layerDraft = state.editorDrafts[previousLayerKey];
-    if (layerDraft) state.setEditorDraft(nextLayerKey, {
-        ...layerDraft,
-        selection: { kind: "layer", name: to },
-    });
-    state.clearEditorDraft(previousLayerKey);
+    state.moveEditorDraft({ kind: "layer-option-new", layer: from }, { kind: "layer-option-new", layer: to });
+    state.moveEditorDraft({ kind: "layer", name: from }, { kind: "layer", name: to }, to);
     if (state.selection.kind === "layer-option" && state.selection.path.startsWith(`.harness-align/layers/${from}/`))
     {
         state.setSelection({ kind: "layer-option", path: `.harness-align/layers/${to}/${state.selection.path.slice(`.harness-align/layers/${from}/`.length)}` });
@@ -468,19 +462,13 @@ export async function persistLayerRename(from: string, to: string): Promise<void
 /** Persist a Layer option rename and rewrite matching editor drafts and Home selection. */
 export async function persistLayerOptionRename(layer: string, from: string, to: string): Promise<string>
 {
-    await window.appApi.workspace.renameLayerOption(layer, from, to);
     const nextPath = `.harness-align/layers/${layer}/${to}.md`;
+    if (from === to) return nextPath;
+    await window.appApi.workspace.renameLayerOption(layer, from, to);
     const state = useAppStore.getState();
     state.setLayerSelection(state.layerSelection.map((selection) => selection.name === layer && selection.option === from
         ? { ...selection, option: to }
         : selection));
-    const previousKey = selectionKey({ kind: "layer-option", path: `.harness-align/layers/${layer}/${from}.md` });
-    const nextKey = selectionKey({ kind: "layer-option", path: nextPath });
-    const draft = state.editorDrafts[previousKey];
-    if (draft) state.setEditorDraft(nextKey, {
-        ...draft,
-        selection: { kind: "layer-option", path: nextPath },
-    });
-    state.clearEditorDraft(previousKey);
+    state.moveEditorDraft({ kind: "layer-option", path: `.harness-align/layers/${layer}/${from}.md` }, { kind: "layer-option", path: nextPath }, to);
     return nextPath;
 }

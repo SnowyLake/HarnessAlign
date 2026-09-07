@@ -19,7 +19,7 @@ import {
 import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, UserSkill, Workspace } from "@shared/models/Workspace";
 import { Alert, Avatar, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Listy, Modal, Select, Space, Tabs, Tag, Tooltip, Typography, type TabsProps } from "antd";
 import { useState, type ReactNode } from "react";
-import { showSuccess } from "@/components/common/Feedback";
+import { showError, showSuccess } from "@/components/common/Feedback";
 import { refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore } from "@/stores/AppStore";
 
@@ -48,7 +48,7 @@ function matchesQuery(haystacks: readonly string[], query: string): boolean
 /** Return the stable filter key for an installed skill origin. */
 function originFilterKey(origin: SkillOrigin): OriginFilter
 {
-    if (origin.kind === "github") return `github:${origin.owner}/${origin.name}`;
+    if (origin.kind === "github") return `github:${origin.owner.toLowerCase()}/${origin.name.toLowerCase()}`;
     if (origin.kind === "local") return "local";
     return "unknown";
 }
@@ -70,12 +70,14 @@ function remoteHaystacks(skill: RemoteSkill): string[]
 /** Build counted origin filters from registered sources and installed skills. */
 function originBuckets(skillSources: readonly { owner: string; name: string }[], installed: readonly ProjectSkill[]): OriginBucket[]
 {
-    const buckets: OriginBucket[] = skillSources.map((source) => ({
-        key: `github:${source.owner}/${source.name}`,
+    const sources = new Map([...skillSources, ...installed.flatMap((skill) => skill.origin.kind === "github" ? [skill.origin] : [])]
+        .map((source) => [`${source.owner.toLowerCase()}/${source.name.toLowerCase()}`, source]));
+    const buckets: OriginBucket[] = [...sources.values()].map((source) => ({
+        key: `github:${source.owner.toLowerCase()}/${source.name.toLowerCase()}`,
         label: `${source.owner}/${source.name}`,
         count: installed.filter((skill) => skill.origin.kind === "github"
-            && skill.origin.owner === source.owner
-            && skill.origin.name === source.name).length,
+            && skill.origin.owner.toLowerCase() === source.owner.toLowerCase()
+            && skill.origin.name.toLowerCase() === source.name.toLowerCase()).length,
     }));
     const localCount = installed.filter((skill) => skill.origin.kind === "local").length;
     const unknownCount = installed.filter((skill) => skill.origin.kind === "unknown").length;
@@ -111,7 +113,7 @@ function OriginMeta({ origin }: { origin: SkillOrigin })
                 type="link"
                 size="small"
                 icon={<ExportOutlined />}
-                onClick={() => void window.appApi.app.openExternal(`https://github.com/${repo}`).catch(() => undefined)}
+                onClick={() => void window.appApi.app.openExternal(`https://github.com/${repo}`).catch((error: unknown) => showError(String(error)))}
             >
                 {repo}
             </Button>
@@ -234,7 +236,6 @@ function SkillSourcesSection({ workspace }: { workspace: Workspace })
             <header className="skills-section-header">
                 <Space orientation="vertical" size={0}>
                     <Typography.Title level={5}>GitHub sources</Typography.Title>
-                    <Typography.Text type="secondary" className="card-subtitle">Repositories used for skill discovery and updates.</Typography.Text>
                 </Space>
                 <Button icon={<PlusOutlined />} disabled={isBusy || isAdding} onClick={() => setIsAdding(true)}>Add source</Button>
             </header>
@@ -259,7 +260,7 @@ function SkillSourcesSection({ workspace }: { workspace: Workspace })
                                             type="text"
                                             icon={<ExportOutlined />}
                                             aria-label={`Open ${source.owner}/${source.name}`}
-                                            onClick={() => void window.appApi.app.openExternal(`https://github.com/${source.owner}/${source.name}`).catch(() => undefined)}
+                                            onClick={() => void window.appApi.app.openExternal(`https://github.com/${source.owner}/${source.name}`).catch((error: unknown) => showError(String(error)))}
                                         />
                                     </Tooltip>
                                     <Tooltip title="Remove source">
@@ -338,7 +339,7 @@ export function SkillsPanel()
     const installed = workspace.skills;
     const buckets = originBuckets(workspace.config.skillSources, installed);
     const updateById = new Map(updates.map((item) => [item.id, item]));
-    const outdated = updates.filter(isOutdated);
+    const outdated = updates.filter((update) => isOutdated(update) && installed.some((skill) => skill.id === update.id));
     const filteredInstalled = installed.filter((skill) => (originFilter === "all" || originFilterKey(skill.origin) === originFilter)
         && matchesQuery(installedHaystacks(skill), filter));
     const filteredDiscovered = discovered.filter((skill) => matchesQuery(remoteHaystacks(skill), filter));
@@ -486,6 +487,7 @@ export function SkillsPanel()
                     <Flex align="center" gap={12} wrap className="skills-toolbar">
                         <Input
                             className="skills-filter-input"
+                            aria-label="Search skills"
                             allowClear
                             prefix={<SearchOutlined />}
                             value={filter}
@@ -494,7 +496,7 @@ export function SkillsPanel()
                             disabled={isBusy}
                         />
                         {listView === "installed" && buckets.length > 0
-                            ? <Select value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
+                            ? <Select aria-label="Filter by origin" value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
                             : null}
                         <Space wrap className="skills-toolbar-actions">
                             <Button icon={<ReloadOutlined />} disabled={isBusy} onClick={handleCheckUpdates}>Check updates</Button>
@@ -524,6 +526,9 @@ export function SkillsPanel()
                 open={isImportOpen}
                 title="Import user skills"
                 size={520}
+                closable={{ disabled: isBusy }}
+                mask={{ closable: !isBusy }}
+                keyboard={!isBusy}
                 onClose={() => setIsImportOpen(false)}
                 extra={(
                     <Button
@@ -540,7 +545,6 @@ export function SkillsPanel()
                     </Button>
                 )}
             >
-                <Typography.Paragraph type="secondary">Copy skills from ~/.agents/skills into this project.</Typography.Paragraph>
                 {userSkills.length === 0 ? <Empty description="No skills were found in ~/.agents/skills" /> : (
                     <Listy
                         items={userSkills}
@@ -551,6 +555,7 @@ export function SkillsPanel()
                                 title={skill.id}
                                 description={skill.description || skill.title}
                                 checked={selectedImport.includes(skill.id)}
+                                disabled={isBusy}
                                 onToggle={toggleImport}
                             />
                         )}

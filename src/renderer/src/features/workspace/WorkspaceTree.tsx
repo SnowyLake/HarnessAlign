@@ -1,17 +1,19 @@
+/** Source navigation and Layer groups sharing the current generation selection. */
+
 import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
-import { DeleteOutlined, EditOutlined, PlusOutlined, RightOutlined, SaveOutlined } from "@ant-design/icons";
-import { Badge, Button, Collapse, Divider, Dropdown, Empty, Input, Modal, Popover, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, PlusOutlined, RightOutlined, SaveOutlined } from "@ant-design/icons";
+import { Badge, Button, Collapse, Divider, Dropdown, Empty, Input, Modal, Popover, Select, Switch, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
 import { useEffect, useState } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation, saveRenamedSource } from "@/features/workspace/WorkspaceTasks";
-import { catalogLayerNames, fileName, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { catalogLayerNames, defaultLayerOption, fileName, moveLayerSelection, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 
 /** New-item actions exposed below workspace trees. */
 const NEW_ACTION_BY_VIEW: Partial<Record<WorkspaceView, { label: string; selection: Selection }>> = {
     rules: { label: "Add rule", selection: { kind: "rule-new", scope: "root" } },
     "shared-rules": { label: "Add shared rule", selection: { kind: "rule-new", scope: "shared" } },
-    "layer-editor": { label: "Add layer", selection: { kind: "layer-new" } },
+    layers: { label: "Add layer", selection: { kind: "layer-new" } },
     agents: { label: "Add agent", selection: { kind: "agent-new" } },
 };
 
@@ -79,11 +81,9 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
     if (onRename)
     {
         menuItems.push({ key: "rename", icon: <EditOutlined />, label: "Rename", disabled: Boolean(disabled) });
-        menuItems.push({ type: "divider" });
     }
-    menuItems.push({ key: "save", icon: <SaveOutlined />, label: "Save", disabled: Boolean(disabled) || !canSave });
-    menuItems.push({ type: "divider" });
-    menuItems.push({ key: "delete", icon: <DeleteOutlined />, label: "Delete", danger: true, disabled: Boolean(disabled) || !canDelete });
+    if (canSave) menuItems.push({ key: "save", icon: <SaveOutlined />, label: "Save", disabled: Boolean(disabled) });
+    if (canDelete) menuItems.push({ key: "delete", icon: <DeleteOutlined />, label: "Delete", danger: true, disabled: Boolean(disabled) });
 
     /** Dispatch one context menu command to the selected editor row. */
     const handleMenuClick: MenuProps["onClick"] = ({ key }) =>
@@ -168,6 +168,7 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                     type="text"
                     block
                     title={label}
+                    aria-current={active ? "page" : undefined}
                     disabled={Boolean(disabled)}
                     onClick={onClick}
                     className="workspace-tree-button"
@@ -182,6 +183,11 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
             {isDirty ? (
                 <Badge className="workspace-tree-dirty" status="processing" title="Unsaved changes" aria-label="Unsaved changes" />
             ) : null}
+            {selection && !isRenaming ? (
+                <Dropdown trigger={["click"]} menu={{ items: menuItems, onClick: handleMenuClick }}>
+                    <Button type="text" size="small" icon={<EllipsisOutlined />} disabled={Boolean(disabled)} aria-label={`Actions for ${label}`} />
+                </Dropdown>
+            ) : null}
         </div>
     );
 
@@ -189,12 +195,6 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
     return (
         <Dropdown trigger={["contextMenu"]} menu={{ items: menuItems, onClick: handleMenuClick }}>{row}</Dropdown>
     );
-}
-
-/** Return rule tabs in their persisted priority order. */
-function sortRuleTabs(rules: readonly RuleInput[]): RuleInput[]
-{
-    return [...rules].sort((left, right) => left.priority - right.priority || (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
 }
 
 /** Rename one rule immediately and preserve any unsaved editor draft under the new selection key. */
@@ -209,14 +209,7 @@ async function renameRuleFromTree(workspace: Workspace, rule: RuleInput | Shared
             await window.appApi.workspace.renameSource(rule.path, nextPath);
 
             const state = useAppStore.getState();
-            const previousKey = selectionKey({ kind: "rule", path: rule.path });
-            const nextKey = selectionKey({ kind: "rule", path: nextPath });
-            const draft = state.editorDrafts[previousKey];
-            if (draft) state.setEditorDraft(nextKey, {
-                ...draft,
-                selection: { kind: "rule", path: nextPath },
-            });
-            state.clearEditorDraft(previousKey);
+            state.moveEditorDraft({ kind: "rule", path: rule.path }, { kind: "rule", path: nextPath }, ruleDisplayName(nextPath));
         }
         await refreshWorkspace({ kind: "rule", path: nextPath });
     });
@@ -241,20 +234,19 @@ function moveRule(rules: readonly RuleInput[], sourcePath: string | undefined, t
 }
 
 /** Persist a drag result by assigning priorities from zero in visible row order. */
-async function persistRuleOrder(workspace: Workspace, rules: readonly RuleInput[], sourcePath: string | undefined, targetPath: string, position: RuleDropPosition, selection: Selection): Promise<void>
+async function persistRuleOrder(rules: readonly RuleInput[], sourcePath: string | undefined, targetPath: string, position: RuleDropPosition, selection: Selection): Promise<void>
 {
     const next = moveRule(rules, sourcePath, targetPath, position);
     if (!next) return;
     const ordered = next.map((rule, priority) => ({ ...rule, priority }));
     const updates = ordered.filter((rule) => rules.find((current) => current.path === rule.path)?.priority !== rule.priority);
-    useAppStore.getState().setWorkspace({ ...workspace, rootRules: ordered });
     const result = await runMutation(async () =>
     {
         for (const rule of updates) await window.appApi.workspace.saveRule(rule);
         await refreshWorkspace(selection.kind === "rule" ? selection : undefined);
     });
     if (result.ok) showSuccess("Rule order updated");
-    else useAppStore.getState().setWorkspace(workspace);
+    else await runMutation(() => refreshWorkspace());
 }
 
 /** Rename one layer option through the cascade-aware engine operation. */
@@ -284,14 +276,7 @@ async function renameAgentFromTree(workspace: Workspace, path: string, name: str
         {
             await saveRenamedSource(agent.path, nextPath, (savePath) => window.appApi.workspace.saveAgent({ ...agent, path: savePath, name: nextName }));
             const state = useAppStore.getState();
-            const previousKey = selectionKey({ kind: "agent", path: agent.path });
-            const nextKey = selectionKey({ kind: "agent", path: nextPath });
-            const draft = state.editorDrafts[previousKey];
-            if (draft) state.setEditorDraft(nextKey, {
-                ...draft,
-                selection: { kind: "agent", path: nextPath },
-            });
-            state.clearEditorDraft(previousKey);
+            state.moveEditorDraft({ kind: "agent", path: agent.path }, { kind: "agent", path: nextPath }, nextName);
         }
         await refreshWorkspace({ kind: "agent", path: nextPath });
     });
@@ -467,6 +452,9 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
     const setSelection = useAppStore((state) => state.setSelection);
     const isBusy = useAppStore((state) => state.isBusy);
     const editorDrafts = useAppStore((state) => state.editorDrafts);
+    const layerSelection = useAppStore((state) => state.layerSelection);
+    const setLayerSelection = useAppStore((state) => state.setLayerSelection);
+    const [draggedLayer, setDraggedLayer] = useState<string>();
     const [draggedRulePath, setDraggedRulePath] = useState<string>();
     const [ruleDropTarget, setRuleDropTarget] = useState<RuleDropTarget>();
     const selectedLayerName = selection.kind === "layer" ? selection.name
@@ -482,27 +470,68 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
     }, [selectedLayerName]);
 
     if (!workspace) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No project open" />;
-    const rootRuleTabs = sortRuleTabs(workspace.rootRules);
+    const rootRuleTabs = workspace.rootRules;
     const newAction = NEW_ACTION_BY_VIEW[view];
-    const layerItems: NonNullable<CollapseProps["items"]> = catalogLayerNames(workspace).map((layerName) =>
+    const layerNames = [...layerSelection.map((layer) => layer.name), ...catalogLayerNames(workspace).filter((name) => !layerSelection.some((layer) => layer.name === name))];
+    const layerItems: NonNullable<CollapseProps["items"]> = layerNames.map((layerName) =>
     {
         const options = workspace.layerOptions[layerName] ?? [];
         const selectedOption = workspace.config.layers.find((layer) => layer.name === layerName)?.selected;
-        const layerSelection: Selection = { kind: "layer", name: layerName };
+        const layerEditorSelection: Selection = { kind: "layer", name: layerName };
+        const generationIndex = layerSelection.findIndex((layer) => layer.name === layerName);
+        const isEnabled = generationIndex >= 0;
+        const generationOption = layerSelection[generationIndex]?.option ?? defaultLayerOption(workspace, layerName);
         const isLayerActive = selection.kind === "layer" && selection.name === layerName;
         const newOptionSelection: Selection = { kind: "layer-option-new", layer: layerName };
         const hasNewOptionDraft = Boolean(editorDrafts[selectionKey(newOptionSelection)]);
+
+        /** Move this enabled group by one position without writing source files. */
+        const moveGroup = (offset: -1 | 1): void =>
+        {
+            const current = useAppStore.getState().layerSelection;
+            const index = current.findIndex((layer) => layer.name === layerName);
+            const target = current[index + offset];
+            if (index >= 0 && target) setLayerSelection(moveLayerSelection(current, layerName, target.name));
+        };
+
         return {
             key: layerName,
             label: (
-                <span className="workspace-layer-group-title" data-active={isLayerActive || undefined}>
-                    <span>{layerName}</span>
-                    <Typography.Text type="secondary" className="workspace-layer-group-count">{options.length}</Typography.Text>
-                    {editorDrafts[selectionKey(layerSelection)] ? <Badge status="processing" title="Unsaved changes" aria-label="Unsaved changes" /> : null}
+                <span className="workspace-layer-group-title" data-layer={layerName} data-active={isLayerActive || undefined}
+                    data-dragging={draggedLayer === layerName || undefined} draggable={isEnabled && !isBusy}
+                    title={isEnabled ? "Drag to reorder generation" : layerName}
+                    onDragStart={(event) =>
+                    {
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", layerName);
+                        setDraggedLayer(layerName);
+                    }}
+                    onDragEnd={() => setDraggedLayer(undefined)}
+                    onDragOver={(event) =>
+                    {
+                        if (draggedLayer && isEnabled && !isBusy) event.preventDefault();
+                    }}
+                    onDrop={(event) =>
+                    {
+                        event.preventDefault();
+                        if (draggedLayer && isEnabled && !isBusy) setLayerSelection(moveLayerSelection(useAppStore.getState().layerSelection, draggedLayer, layerName));
+                        setDraggedLayer(undefined);
+                    }}>
+                    <Typography.Text type="secondary" className="workspace-layer-group-order">{isEnabled ? generationIndex + 1 : "-"}</Typography.Text>
+                    <span className="workspace-layer-group-name">{layerName}</span>
+                    {editorDrafts[selectionKey(layerEditorSelection)] ? <Badge status="processing" title="Unsaved changes" aria-label="Unsaved changes" /> : null}
                 </span>
             ),
             extra: (
-                <span className="workspace-layer-group-actions">
+                <span className="workspace-layer-group-actions" onClick={(event) => event.stopPropagation()}>
+                    <Tooltip title={options.length === 0 ? "Add an option before enabling" : "Include in generation"}>
+                        <Switch size="small" checked={isEnabled} disabled={isBusy || options.length === 0} aria-label={`Include ${layerName} in generation`}
+                            onChange={(checked) =>
+                            {
+                                const current = useAppStore.getState().layerSelection.filter((layer) => layer.name !== layerName);
+                                setLayerSelection(checked && generationOption ? [...current, { name: layerName, option: generationOption }] : current);
+                            }} />
+                    </Tooltip>
                     <Tooltip title="Add option">
                         <Button
                             type="text"
@@ -536,6 +565,23 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
             },
             children: (
                 <div className="workspace-layer-options">
+                    <div className="workspace-layer-generation">
+                        <div className="workspace-layer-choice">
+                            <Typography.Text type="secondary">Generate option</Typography.Text>
+                            <Select size="small" value={generationOption ?? null} disabled={isBusy || !isEnabled} placeholder="No options"
+                                aria-label={`Generate option for ${layerName}`} className="full-width"
+                                options={options.map((option) => ({ label: option.name, value: option.name }))}
+                                onChange={(option: string) => setLayerSelection(useAppStore.getState().layerSelection.map((layer) => layer.name === layerName ? { ...layer, option } : layer))} />
+                        </div>
+                        <Tooltip title="Move earlier">
+                            <Button size="small" type="text" icon={<ArrowUpOutlined />} aria-label={`Move ${layerName} earlier`}
+                                disabled={isBusy || generationIndex <= 0} onClick={() => moveGroup(-1)} />
+                        </Tooltip>
+                        <Tooltip title="Move later">
+                            <Button size="small" type="text" icon={<ArrowDownOutlined />} aria-label={`Move ${layerName} later`}
+                                disabled={isBusy || !isEnabled || generationIndex === layerSelection.length - 1} onClick={() => moveGroup(1)} />
+                        </Tooltip>
+                    </div>
                     {options.length === 0 && !hasNewOptionDraft ? (
                         <Typography.Text type="secondary" className="workspace-layer-empty">No options yet</Typography.Text>
                     ) : null}
@@ -645,7 +691,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                     const sourcePath = draggedRulePath;
                                     setDraggedRulePath(undefined);
                                     setRuleDropTarget(undefined);
-                                    void persistRuleOrder(workspace, rootRuleTabs, sourcePath, rule.path, position, selection);
+                                    void persistRuleOrder(rootRuleTabs, sourcePath, rule.path, position, selection);
                                 }}
                                 onClick={() => setSelection({ kind: "rule", path: rule.path })}
                             />
@@ -691,7 +737,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                     </>
                 ) : null}
 
-                {view === "layer-editor" ? (
+                {view === "layers" ? (
                     <>
                         <Collapse
                             ghost

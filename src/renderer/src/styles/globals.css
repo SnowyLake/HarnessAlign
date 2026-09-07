@@ -93,21 +93,10 @@ select {
     color: #17191d;
 }
 
-.app-brand-copy {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-}
-
 .app-brand-name {
     font-size: 14px;
     font-weight: 700;
     letter-spacing: -0.01em;
-}
-
-.app-brand-version {
-    color: var(--ant-color-text-secondary);
-    font-size: 11px;
 }
 
 .app-workbench,
@@ -131,6 +120,10 @@ select {
 }
 
 .app-sider-primary {
+    min-height: 0;
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: thin;
     padding-inline: 8px;
 }
 
@@ -159,7 +152,7 @@ select {
 .showcase-page {
     width: min(100% - 48px, 1240px);
     margin: 0 auto;
-    padding: 12px 0 32px;
+    padding: 24px 0 32px;
 }
 
 .settings-page {
@@ -176,7 +169,7 @@ select {
     width: 100%;
     height: 100%;
     min-height: 0;
-    padding: 12px 20px 24px;
+    padding: 20px;
 }
 
 .workspace-module-surface {
@@ -197,9 +190,17 @@ select {
 }
 
 .workspace-editor-page {
-    width: min(100% - 64px, 920px);
+    width: min(100% - 48px, 920px);
     margin: 0 auto;
-    padding: 32px 0 48px;
+    padding: 24px 0 32px;
+}
+
+.workspace-load-state {
+    display: grid;
+    height: 100%;
+    overflow: auto;
+    place-items: center;
+    padding: 24px;
 }
 
 .full-width {
@@ -208,11 +209,6 @@ select {
 
 .pre-wrap {
     white-space: pre-wrap;
-}
-
-.card-subtitle {
-    font-size: 12px;
-    font-weight: 400;
 }
 
 .editor-form {
@@ -243,49 +239,6 @@ select {
     background: var(--ant-color-bg-container);
 }
 
-.layer-selection-panel {
-    display: flex;
-    height: 100%;
-    min-height: 0;
-    flex-direction: column;
-    background: color-mix(in srgb, var(--ant-color-bg-layout) 24%, var(--ant-color-bg-container));
-}
-
-.layer-selection-header {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 20px 18px 16px;
-    border-bottom: 1px solid var(--ant-color-border-secondary);
-    background: var(--ant-color-bg-container);
-}
-
-.layer-selection-header h5 {
-    margin: 0;
-    font-size: 16px;
-}
-
-.layer-selection-header > div > :last-child {
-    display: block;
-    margin-top: 2px;
-    font-size: 12px;
-}
-
-.layer-selection-content {
-    min-height: 0;
-    flex: 1;
-    overflow: auto;
-    padding: 16px;
-}
-
-.project-layer-grid {
-    display: grid;
-    gap: 12px;
-    grid-template-columns: minmax(0, 1fr);
-}
-
 .harnesses-title {
     margin: 0 0 4px;
 }
@@ -299,22 +252,6 @@ select {
 
 .break-anywhere {
     overflow-wrap: anywhere;
-}
-
-.project-layer-grid > * {
-    min-width: 0;
-}
-
-.draggable-card {
-    cursor: grab;
-}
-
-.draggable-card:active {
-    cursor: grabbing;
-}
-
-.draggable-card[data-dragging="true"] {
-    opacity: 0.45;
 }
 
 .skills-section + .skills-section {
@@ -372,6 +309,7 @@ select {
 .app-list-copy {
     min-width: 0;
     flex: 1;
+    overflow-wrap: anywhere;
 }
 
 .app-list-copy > * {
@@ -510,6 +448,45 @@ select {
     align-items: center;
 }
 
+.workspace-layer-group-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workspace-layer-group-order {
+    min-width: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.workspace-layer-group-title[draggable="true"] {
+    cursor: grab;
+}
+
+.workspace-layer-group-title[data-dragging="true"] {
+    opacity: 0.45;
+}
+
+.workspace-layer-generation {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    padding: 6px 4px 12px;
+}
+
+.workspace-layer-choice {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.workspace-layer-choice > .ant-typography {
+    font-size: 12px;
+}
+
 .workspace-layer-popover {
     width: 260px;
 }
@@ -577,6 +554,19 @@ select {
     font-size: 12px;
     line-height: 1.6;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.app-brand:focus-visible {
+    outline: 2px solid var(--ant-color-primary);
+    outline-offset: 4px;
+    border-radius: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .source-editor {
+        transition: none;
+    }
 }
 
 @media (max-width: 900px) {

@@ -1,26 +1,17 @@
 /**
- * Ant Design command notification and full output modal.
+ * Top-positioned Ant Design command messages and the full output modal.
  */
 
-import { CheckCircleFilled, CloseCircleFilled } from "@ant-design/icons";
-import { App as AntApp, Button, Modal, theme as antTheme } from "antd";
+import { App as AntApp, Button, Modal } from "antd";
 import { useEffect, type ReactNode } from "react";
-import { useAppStore, type OutputTone } from "@/stores/AppStore";
+import { useAppStore } from "@/stores/AppStore";
 
-const OUTPUT_NOTIFICATION_KEY = "command-output";
+const OUTPUT_MESSAGE_KEY = "command-output";
 
-/** Return the themed Ant Design icon for one output tone. */
-function OutputIcon({ tone }: { tone: OutputTone })
-{
-    const { token } = antTheme.useToken();
-    if (tone === "error") return <CloseCircleFilled style={{ color: token.colorError }} />;
-    return <CheckCircleFilled style={{ color: token.colorSuccess }} />;
-}
-
-/** Render command feedback through Ant Design notification and Modal components. */
+/** Render command feedback through the existing top message system and output modal. */
 export function AppOutput()
 {
-    const { notification } = AntApp.useApp();
+    const { message } = AntApp.useApp();
     const output = useAppStore((state) => state.output);
     const outputTone = useAppStore((state) => state.outputTone);
     const outputTitle = useAppStore((state) => state.outputTitle);
@@ -29,30 +20,26 @@ export function AppOutput()
     const isOutputDialogOpen = useAppStore((state) => state.isOutputDialogOpen);
     const dismissOutputNotice = useAppStore((state) => state.dismissOutputNotice);
     const setOutputDialogOpen = useAppStore((state) => state.setOutputDialogOpen);
-    const summary = output.split("\n", 1)[0] || "View command output";
 
     useEffect(() =>
     {
         if (!isOutputNoticeVisible)
         {
-            notification.destroy(OUTPUT_NOTIFICATION_KEY);
+            message.destroy(OUTPUT_MESSAGE_KEY);
             return;
         }
-        notification.open({
-            key: OUTPUT_NOTIFICATION_KEY,
-            placement: "bottomRight",
-            duration: 15,
-            message: outputTitle,
-            description: summary,
-            icon: <OutputIcon tone={outputTone} />,
-            onClick: () =>
-            {
-                dismissOutputNotice();
-                setOutputDialogOpen(true);
-            },
+        void message.open({
+            key: OUTPUT_MESSAGE_KEY,
+            type: outputTone,
+            duration: outputTone === "error" ? 6 : 3,
+            content: <Button type="text" size="small" aria-label={`${outputTitle}: view output`} onClick={() =>
+                {
+                    dismissOutputNotice();
+                    setOutputDialogOpen(true);
+                }}>{outputTitle}</Button>,
             onClose: dismissOutputNotice,
         });
-    }, [dismissOutputNotice, isOutputNoticeVisible, notification, outputNoticeId, outputTitle, outputTone, setOutputDialogOpen, summary]);
+    }, [dismissOutputNotice, isOutputNoticeVisible, message, outputNoticeId, outputTitle, outputTone, setOutputDialogOpen]);
 
     const footer: ReactNode = <Button onClick={() => setOutputDialogOpen(false)}>Close</Button>;
     return (

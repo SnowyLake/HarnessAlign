@@ -7,7 +7,7 @@ import type { ThemeMode } from "@shared/models/AppSettings";
 import type { LayerSelection, Workspace } from "@shared/models/Workspace";
 
 /** Workspace modules available from the primary navigation. */
-export type WorkspaceView = "project" | "rules" | "shared-rules" | "layer-registration" | "layer-editor" | "skills" | "skill-registration" | "agents" | "generated";
+export type WorkspaceView = "project" | "rules" | "shared-rules" | "layers" | "skills" | "skill-registration" | "agents" | "generated";
 
 /** Top-level desktop shell view. */
 export type AppView = WorkspaceView | "settings" | "showcase";
@@ -101,9 +101,7 @@ function selectionMatchesView(view: WorkspaceView, selection: Selection, workspa
         case "shared-rules":
             return (selection.kind === "rule-new" && selection.scope === "shared")
                 || (selection.kind === "rule" && workspace.sharedRules.some((item) => item.path === selection.path));
-        case "layer-registration":
-            return true;
-        case "layer-editor":
+        case "layers":
             return selection.kind === "layer-new"
                 || (selection.kind === "layer" && Object.hasOwn(workspace.layerOptions, selection.name))
                 || (selection.kind === "layer-option-new" && Object.hasOwn(workspace.layerOptions, selection.layer))
@@ -142,9 +140,7 @@ function selectionForView(view: WorkspaceView, selection: Selection, workspace: 
             const rule = workspace.sharedRules[0];
             return rule ? { kind: "rule", path: rule.path } : { kind: "rule-new", scope: "shared" };
         }
-        case "layer-registration":
-            return selection;
-        case "layer-editor":
+        case "layers":
         {
             const layer = Object.keys(workspace.layerOptions)[0];
             if (!layer) return { kind: "layer-new" };
@@ -221,8 +217,18 @@ interface AppState
     setTheme: (theme: ThemeMode) => void;
     setEditorDraft: (key: string, draft: EditorDraft | undefined) => void;
     clearEditorDraft: (key: string) => void;
+    moveEditorDraft: (from: Selection, to: Selection, name?: string) => void;
     requestEditorAction: (selection: Selection, action: EditorAction) => void;
     consumeEditorAction: (id: number) => void;
+}
+
+/** Count retained source drafts and an unsaved layer sequence as workspace changes. */
+export function workspaceChangeCount(state: Pick<AppState, "workspace" | "layerSelection" | "editorDrafts">): number
+{
+    const saved = state.workspace?.config.layers ?? [];
+    const hasLayerChanges = saved.length !== state.layerSelection.length
+        || saved.some((item, index) => item.name !== state.layerSelection[index]?.name || item.selected !== state.layerSelection[index]?.option);
+    return Object.keys(state.editorDrafts).length + (hasLayerChanges ? 1 : 0);
 }
 
 /** Renderer UI state for workspace modules, settings, and command progress. */
@@ -231,7 +237,7 @@ export const useAppStore = create<AppState>((set) => ({
     workspace: undefined,
     selection: { kind: "config" },
     layerSelection: [],
-    output: "Loading the user workspace.",
+    output: "No command output yet.",
     outputTone: "success",
     outputTitle: "Output",
     outputNoticeId: 0,
@@ -290,6 +296,21 @@ export const useAppStore = create<AppState>((set) => ({
         if (!(key in state.editorDrafts)) return state;
         const editorDrafts = { ...state.editorDrafts };
         delete editorDrafts[key];
+        return { editorDrafts };
+    }),
+    moveEditorDraft: (from, to, name) => set((state) =>
+    {
+        const previousKey = selectionKey(from);
+        const nextKey = selectionKey(to);
+        const draft = state.editorDrafts[previousKey];
+        if (!draft || previousKey === nextKey) return state;
+        const editorDrafts = { ...state.editorDrafts };
+        editorDrafts[nextKey] = {
+            selection: to,
+            baseline: name === undefined ? draft.baseline : { ...draft.baseline, name: [name] },
+            current: name === undefined ? draft.current : { ...draft.current, name: [name] },
+        };
+        delete editorDrafts[previousKey];
         return { editorDrafts };
     }),
     requestEditorAction: (selection, action) => set((state) => ({

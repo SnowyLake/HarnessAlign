@@ -6,7 +6,7 @@ import { DesktopOutlined, FileTextOutlined, InfoCircleOutlined } from "@ant-desi
 import type { ThemeMode } from "@shared/models/AppSettings";
 import { Card, Col, Form, Row, Segmented, Space, Typography } from "antd";
 import { useEffect, useState } from "react";
-import { showError, showSuccess } from "@/components/common/Feedback";
+import { showError } from "@/components/common/Feedback";
 import { AgentDocumentTitleForm } from "@/features/workspace/WorkspaceEditor";
 import { useAppStore } from "@/stores/AppStore";
 
@@ -55,7 +55,6 @@ export function SettingsPage()
                                             {
                                                 setTheme(settings.theme);
                                                 applyTheme(settings.theme);
-                                                showSuccess("Theme saved");
                                             }).catch((error: unknown) => showError(error instanceof Error ? error.message : String(error)));
                                         }}
                                     />

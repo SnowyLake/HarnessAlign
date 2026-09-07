@@ -28,7 +28,7 @@ export function FeedbackBridge()
 /** Show a successful transient message through the mounted Ant Design app. */
 export function showSuccess(content: string): void
 {
-    void messageApi?.success(content);
+    void messageApi?.success({ content, key: "success", duration: 2 });
 }
 
 /** Show an error transient message through the mounted Ant Design app. */
