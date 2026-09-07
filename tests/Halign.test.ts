@@ -41,6 +41,12 @@ const config = {
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
 
+/** Small valid GitHub-shaped archive used by remote discovery checks. */
+const TEST_SKILL_ARCHIVE = Buffer.from(
+    "UEsDBBQAAAAIAFgSKF30xqGHCQAAAAcAAAAXAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRTVnBJzc3nAgBQSwECFAAUAAAACABYEihd9MahhwkAAAAHAAAAFwAAAAAAAAAAAAAAAAAAAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRQSwUGAAAAAAEAAQBFAAAAPgAAAAAA",
+    "base64",
+);
+
 /** Create a temporary `.harness-align` project, run the case, then delete the directory. */
 async function withProject(run: (root: string) => Promise<void>): Promise<void>
 {
@@ -1341,8 +1347,7 @@ test("discovery cache no longer installs skills after their source is removed", 
     await withProject(async (root) =>
     {
         await addSkillSource(root, { url: "https://github.com/example/repo" });
-        const archive = Buffer.from("UEsDBBQAAAAIAFgSKF30xqGHCQAAAAcAAAAXAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRTVnBJzc3nAgBQSwECFAAUAAAACABYEihd9MahhwkAAAAHAAAAFwAAAAAAAAAAAAAAAAAAAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRQSwUGAAAAAAEAAQBFAAAAPgAAAAAA", "base64");
-        const mocked = t.mock.method(globalThis, "fetch", async () => new Response(archive, { status: 200 }));
+        const mocked = t.mock.method(globalThis, "fetch", async () => new Response(TEST_SKILL_ARCHIVE, { status: 200 }));
         try
         {
             assert.equal((await discoverSkills(root))[0]?.id, "demo");
@@ -1352,6 +1357,70 @@ test("discovery cache no longer installs skills after their source is removed", 
         }
         finally
         {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("discovery preserves network errors and only falls back to another branch on HTTP 404", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await addSkillSource(root, { url: "https://github.com/example/repo" });
+        let mode = "network";
+        const requests: string[] = [];
+        const mocked = t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) =>
+        {
+            requests.push(String(url));
+            if (mode === "network") throw new TypeError("fetch failed", { cause: Object.assign(new Error("connection timed out"), { code: "ETIMEDOUT" }) });
+            if (mode === "unavailable") return new Response(null, { status: 503 });
+            return requests.length === 1 ? new Response(null, { status: 404 }) : new Response(TEST_SKILL_ARCHIVE);
+        });
+        try
+        {
+            await assert.rejects(discoverSkills(root), /example\/repo@main.*fetch failed: connection timed out \(ETIMEDOUT\)/u);
+            assert.equal(requests.length, 1);
+            mode = "unavailable";
+            requests.length = 0;
+            await assert.rejects(discoverSkills(root), /example\/repo@main.*HTTP 503/u);
+            assert.equal(requests.length, 1);
+            mode = "fallback";
+            requests.length = 0;
+            assert.equal((await discoverSkills(root))[0]?.branch, "master");
+            assert.deepEqual(requests.map((url) => new URL(url).pathname), ["/example/repo/archive/refs/heads/main.zip", "/example/repo/archive/refs/heads/master.zip"]);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("discovery times out once without retrying a different branch", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await addSkillSource(root, { url: "https://github.com/example/repo" });
+        let markStarted: () => void = () => undefined;
+        const started = new Promise<void>((resolveStarted) => { markStarted = resolveStarted; });
+        const mocked = t.mock.method(globalThis, "fetch", async (_url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => new Promise<Response>((_resolve, reject) =>
+        {
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+            markStarted();
+        }));
+        t.mock.timers.enable({ apis: ["setTimeout"] });
+        try
+        {
+            const discovery = discoverSkills(root);
+            const rejected = assert.rejects(discovery, /example\/repo@main.*timed out after 60s/u);
+            await started;
+            t.mock.timers.tick(60_000);
+            await rejected;
+            assert.equal(mocked.mock.callCount(), 1);
+        }
+        finally
+        {
+            t.mock.timers.reset();
             mocked.mock.restore();
         }
     });

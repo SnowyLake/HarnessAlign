@@ -3,8 +3,12 @@
  */
 
 import { app, BrowserWindow } from "electron";
+import * as http from "node:http";
 import { registerIpcHandlers } from "./ipc/RegisterIpcHandlers.js";
 import { createMainWindow, getMainWindow } from "./windows/MainWindow.js";
+
+// Enable environment proxies before the first Node fetch; older Node 24 runtimes lack this API.
+if ("setGlobalProxyFromEnv" in http && typeof http.setGlobalProxyFromEnv === "function") http.setGlobalProxyFromEnv();
 
 /** Focus an existing main window, or create one when the previous instance has none. */
 function focusMainWindow(): void

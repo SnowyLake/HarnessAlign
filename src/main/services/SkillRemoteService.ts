@@ -28,6 +28,16 @@ const MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
 /** Fetch timeout for GitHub archive downloads. */
 const FETCH_TIMEOUT_MS = 60_000;
 
+/** HTTP download failure whose status determines whether a branch fallback is appropriate. */
+class ArchiveHttpError extends HalignError
+{
+    /** Retain the response status without parsing user-facing error text. */
+    constructor(readonly status: number, location: string)
+    {
+        super(`failed to download ${location}: HTTP ${status}`);
+    }
+}
+
 /** One discovered skill held in the session unzip cache. */
 interface CachedSkill
 {
@@ -63,18 +73,21 @@ function archiveUrl(owner: string, name: string, branch: string): string
 /** Download a GitHub branch zip with size and timeout limits. */
 async function fetchZip(owner: string, name: string, branch: string): Promise<Uint8Array>
 {
+    const url = archiveUrl(owner, name, branch);
+    const location = `${owner}/${name}@${branch} (${url})`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try
     {
-        const response = await fetch(archiveUrl(owner, name, branch), {
+        const response = await fetch(url, {
             signal: controller.signal,
             headers: { "User-Agent": "HarnessAlign/1.0", Accept: "application/zip" },
             redirect: "follow",
         });
         if (!response.ok)
         {
-            throw new HalignError(`failed to download ${owner}/${name}@${branch}: HTTP ${response.status}`);
+            await response.body?.cancel();
+            throw new ArchiveHttpError(response.status, location);
         }
         const lengthHeader = response.headers.get("content-length");
         if (lengthHeader && Number(lengthHeader) > MAX_COMPRESSED_BYTES)
@@ -112,7 +125,10 @@ async function fetchZip(owner: string, name: string, branch: string): Promise<Ui
     catch (error)
     {
         if (error instanceof HalignError) throw error;
-        throw new HalignError(`failed to download ${owner}/${name}@${branch}: ${errorText(error)}`);
+        if (controller.signal.aborted) throw new HalignError(`failed to download ${location}: timed out after ${FETCH_TIMEOUT_MS / 1000}s; check GitHub connectivity and proxy settings`);
+        const cause = error instanceof Error ? error.cause : undefined;
+        const detail = cause instanceof Error ? `: ${cause.message}${"code" in cause ? ` (${String(cause.code)})` : ""}` : "";
+        throw new HalignError(`failed to download ${location}: ${errorText(error)}${detail}`);
     }
     finally
     {
@@ -295,7 +311,7 @@ export async function discoverSkills(root: string): Promise<RemoteSkill[]>
         }
         catch (error)
         {
-            const canFallback = branch === "main" || branch === "master";
+            const canFallback = error instanceof ArchiveHttpError && error.status === 404 && (branch === "main" || branch === "master");
             if (!canFallback) throw error;
             const fallback = branch === "main" ? "master" : "main";
             bytes = await fetchZip(source.owner, source.name, fallback);
