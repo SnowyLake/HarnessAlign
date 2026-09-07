@@ -183,9 +183,13 @@ export function isWindowsReservedName(name: string): boolean
 /** Throw if `name` cannot be used as a Windows directory or file stem. */
 export function assertWindowsSafeName(name: string, context: string): void
 {
-    if (isWindowsReservedName(name))
+    if (isWindowsReservedName(name.split(".")[0] ?? name))
     {
         throw new HalignError(`${context}: name must not be a Windows reserved device name, got ${valueText(name)}`);
+    }
+    if (!name || /[<>:"/\\|?*]/u.test(name) || /[. ]$/u.test(name) || [...name].some((character) => character.charCodeAt(0) < 32))
+    {
+        throw new HalignError(`${context}: name must be a Windows-safe path segment without trailing dots or spaces, got ${valueText(name)}`);
     }
 }
 

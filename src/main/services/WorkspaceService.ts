@@ -44,14 +44,16 @@ import type {
 } from "../../shared/models/Workspace.js";
 import * as skillRemote from "./SkillRemoteService.js";
 
-/** Initialization shared by overlapping IPC requests, released after completion or failure. */
-let initializingWorkspace: Promise<string> | undefined;
+/** Tail of the single-user workspace queue, including reads that must see complete writes. */
+let workspaceQueue: Promise<unknown> = Promise.resolve();
 
-/** Resolve the fixed user workspace without running concurrent migrations. */
-function userRoot(): Promise<string>
+/** Serialize workspace operations and release the queue even when an operation fails. */
+function withWorkspace<T>(work: (root: string) => Promise<T>): Promise<T>
 {
-    initializingWorkspace ??= ensureUserWorkspace().finally(() => { initializingWorkspace = undefined; });
-    return initializingWorkspace;
+    // ponytail: one workspace queue; split remote downloads only if UI latency becomes a measured problem.
+    const operation = workspaceQueue.then(async () => work(await ensureUserWorkspace()));
+    workspaceQueue = operation.catch(() => undefined);
+    return operation;
 }
 
 /** Privileged workspace operations that wrap the engine. */
@@ -60,179 +62,176 @@ export class WorkspaceService
     /** Load and validate the user `.harness-align` workspace. */
     async load(): Promise<Workspace>
     {
-        const root = await userRoot();
-        const [workspace, generatedFiles] = await Promise.all([
-            loadWorkspace(root),
-            readGeneratedFiles(root),
-        ]);
-        return {
-            ...workspace,
-            generatedFiles: [...generatedFiles].map(([path, content]) => ({ path, content: content.toString("utf8") })),
-        };
+        return withWorkspace(async (root) =>
+        {
+            const [workspace, generatedFiles] = await Promise.all([loadWorkspace(root), readGeneratedFiles(root)]);
+            return {
+                ...workspace,
+                generatedFiles: [...generatedFiles].map(([path, content]) => ({ path, content: content.toString("utf8") })),
+            };
+        });
     }
 
     /** Validate and write `config.json`. */
     async saveConfig(config: Config): Promise<Config>
     {
-        return saveConfig(await userRoot(), config);
+        return withWorkspace((root) => saveConfig(root, config));
     }
 
     /** Validate and write a root rule. */
     async saveRule(input: RuleInput): Promise<void>
     {
-        return saveRule(await userRoot(), input);
+        return withWorkspace((root) => saveRule(root, input));
     }
 
     /** Validate and write a layer option. */
     async saveLayerOption(input: LayerOptionInput): Promise<void>
     {
-        return saveLayerOption(await userRoot(), input);
+        return withWorkspace((root) => saveLayerOption(root, input));
     }
 
     /** Validate and write a shared-rule markdown file. */
     async saveSharedRule(path: string, body: string): Promise<void>
     {
-        return saveSharedRule(await userRoot(), path, body);
+        return withWorkspace((root) => saveSharedRule(root, path, body));
     }
 
     /** Validate and write a subagent source file. */
     async saveAgent(agent: Agent): Promise<void>
     {
-        return saveAgent(await userRoot(), agent);
+        return withWorkspace((root) => saveAgent(root, agent));
     }
 
     /** Delete a `.harness-align` source file after containment checks. */
     async deleteSource(path: string): Promise<void>
     {
-        return deleteSource(await userRoot(), path);
+        return withWorkspace((root) => deleteSource(root, path));
     }
 
     /** Atomically rename a rule or agent source within its source kind. */
     async renameSource(from: string, to: string): Promise<void>
     {
-        return renameSource(await userRoot(), from, to);
+        return withWorkspace((root) => renameSource(root, from, to));
     }
 
     /** Create an empty catalog layer directory. */
     async addLayer(name: string): Promise<Config>
     {
-        return addLayer(await userRoot(), name);
+        return withWorkspace((root) => addLayer(root, name));
     }
 
     /** Remove a layer directory and drop it from the project selection when present. */
     async removeLayer(name: string): Promise<Config>
     {
-        return removeLayer(await userRoot(), name);
+        return withWorkspace((root) => removeLayer(root, name));
     }
 
     /** Rename a layer directory and cascade its project selection when present. */
     async renameLayer(from: string, to: string): Promise<Config>
     {
-        return renameLayer(await userRoot(), from, to);
+        return withWorkspace((root) => renameLayer(root, from, to));
     }
 
     /** Create an empty option under an existing layer. */
     async addLayerOption(layer: string, option: string): Promise<void>
     {
-        return addLayerOption(await userRoot(), layer, option);
+        return withWorkspace((root) => addLayerOption(root, layer, option));
     }
 
     /** Remove a non-selected option from a layer. */
     async removeLayerOption(layer: string, option: string): Promise<void>
     {
-        return removeLayerOption(await userRoot(), layer, option);
+        return withWorkspace((root) => removeLayerOption(root, layer, option));
     }
 
     /** Rename an option and cascade a saved selection. */
     async renameLayerOption(layer: string, from: string, to: string): Promise<Config>
     {
-        return renameLayerOption(await userRoot(), layer, from, to);
+        return withWorkspace((root) => renameLayerOption(root, layer, from, to));
     }
 
     /** Add a harness declaration to config. */
     async addHarness(harness: HarnessConfig): Promise<Config>
     {
-        return addHarness(await userRoot(), harness);
+        return withWorkspace((root) => addHarness(root, harness));
     }
 
     /** Remove a harness declaration and its generated references. */
     async removeHarness(name: string): Promise<void>
     {
-        return removeHarness(await userRoot(), name);
+        return withWorkspace((root) => removeHarness(root, name));
     }
 
     /** Update a harness and cascade its name when necessary. */
     async updateHarness(from: string, harness: HarnessConfig): Promise<Config>
     {
-        return updateHarness(await userRoot(), from, harness);
+        return withWorkspace((root) => updateHarness(root, from, harness));
     }
 
     /** Register a GitHub skill source URL. */
     async addSkillSource(input: { url: string; branch?: string }): Promise<Config>
     {
-        return addSkillSource(await userRoot(), input);
+        return withWorkspace((root) => addSkillSource(root, input));
     }
 
     /** Remove a registered GitHub skill source. */
     async removeSkillSource(owner: string, name: string): Promise<Config>
     {
-        return removeSkillSource(await userRoot(), owner, name);
+        return withWorkspace((root) => removeSkillSource(root, owner, name));
     }
 
     /** Discover remote skills from configured GitHub sources. */
     async discoverSkills(): Promise<RemoteSkill[]>
     {
-        return skillRemote.discoverSkills(await userRoot());
+        return withWorkspace((root) => skillRemote.discoverSkills(root));
     }
 
     /** Install selected discovered skills into the project. */
     async installSkills(ids: string[]): Promise<string>
     {
-        return skillRemote.installSkills(await userRoot(), ids);
+        return withWorkspace((root) => skillRemote.installSkills(root, ids));
     }
 
     /** Compare installed GitHub skills with remote content hashes. */
     async checkSkillUpdates(): Promise<SkillUpdate[]>
     {
-        return skillRemote.checkSkillUpdates(await userRoot());
+        return withWorkspace((root) => skillRemote.checkSkillUpdates(root));
     }
 
     /** Apply remote updates for selected installed skills. */
     async applySkillUpdates(ids: string[]): Promise<string>
     {
-        return skillRemote.applySkillUpdates(await userRoot(), ids);
+        return withWorkspace((root) => skillRemote.applySkillUpdates(root, ids));
     }
 
     /** List skills under the current user profile. */
     listUserSkills(): Promise<UserSkill[]>
     {
-        return listUserSkills();
+        return withWorkspace(() => listUserSkills());
     }
 
     /** Import selected user-profile skills into the project. */
     async importUserSkills(ids: string[], overwrite: boolean): Promise<string>
     {
-        return importUserSkills(await userRoot(), ids, overwrite);
+        return withWorkspace((root) => importUserSkills(root, ids, overwrite));
     }
 
     /** Remove one installed project skill. */
     async removeSkill(id: string): Promise<void>
     {
-        return removeSkill(await userRoot(), id);
+        return withWorkspace((root) => removeSkill(root, id));
     }
 
     /** Generate outputs and return the report string. */
     async generate(selection?: LayerSelection[]): Promise<string>
     {
-        const root = await userRoot();
-        const outputs = await generate(root, selection);
-        return reportGenerate(outputs);
+        return withWorkspace(async (root) => reportGenerate(await generate(root, selection)));
     }
 
     /** Generate then deploy into existing user harness roots. */
     async setup(selection?: LayerSelection[]): Promise<string>
     {
-        return reportSetup(await setup(await userRoot(), selection));
+        return withWorkspace(async (root) => reportSetup(await setup(root, selection)));
     }
 }
 

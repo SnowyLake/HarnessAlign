@@ -4,11 +4,12 @@
  */
 
 import { promises as fs } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { atomicWrite, lstatIfExists, resolveUserHome } from "./FsSafe.js";
+import { randomUUID } from "node:crypto";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstatIfExists, resolveUserHome } from "./FsSafe.js";
 import { generate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
-import { type Harness, type LayerSelection, type OutputMap, codePointCompare, HalignError, valueText } from "./Model.js";
+import { type Harness, type LayerSelection, type OutputMap, codePointCompare, errorText, HalignError, valueText } from "./Model.js";
 import { hasHiddenSegment, loadSkills } from "./Skills.js";
 
 /** Resolve `path` and throw if it escapes `root`. */
@@ -90,15 +91,77 @@ async function assertNoReparseTree(path: string, label: string): Promise<void>
     }
 }
 
-/** Delete a deploy directory after containment and reparse checks. */
-async function removeDeploymentDirectory(userProfile: string, path: string, label: string): Promise<void>
+/** Delete a staged deployment path only after containment and reparse checks. */
+async function removeDeploymentPath(userProfile: string, path: string): Promise<void>
 {
-    const target = await assertNoReparseComponents(userProfile, path, label);
+    const target = await assertNoReparseComponents(userProfile, path, "deployment cleanup");
     const stats = await lstatIfExists(target);
     if (!stats) return;
-    if (!stats.isDirectory()) throw new HalignError(`${label}: expected a directory: ${target}`);
-    await assertNoReparseTree(target, label);
+    await assertNoReparseTree(target, "deployment cleanup");
     await fs.rm(target, { recursive: true, force: true });
+}
+
+/** Stage all replacements before swapping targets, restoring backups if a swap fails. */
+async function deployReplacements(userProfile: string, replacements: Array<{ target: string; populate: (path: string) => Promise<void> }>): Promise<void>
+{
+    const staged: Array<{ target: string; temporary: string; backup: string; hasBackup: boolean; installed: boolean }> = [];
+    try
+    {
+        for (const replacement of replacements)
+        {
+            const target = await assertNoReparseComponents(userProfile, replacement.target, "deployment target");
+            const parent = dirname(target);
+            await fs.mkdir(parent, { recursive: true });
+            const entry = { target, temporary: join(parent, `.harness-align-stage-${randomUUID()}`),
+                backup: join(parent, `.harness-align-backup-${randomUUID()}`), hasBackup: false, installed: false };
+            staged.push(entry);
+            await replacement.populate(entry.temporary);
+            await assertNoReparseTree(entry.temporary, "staged deployment");
+        }
+        for (const entry of staged)
+        {
+            await assertNoReparseComponents(userProfile, entry.target, "deployment target");
+            if (await lstatIfExists(entry.target))
+            {
+                await assertNoReparseTree(entry.target, "deployment target");
+                await fs.rename(entry.target, entry.backup);
+                entry.hasBackup = true;
+            }
+            await fs.rename(entry.temporary, entry.target);
+            entry.installed = true;
+        }
+    }
+    catch (error)
+    {
+        const failures: string[] = [];
+        for (const entry of [...staged].reverse())
+        {
+            try
+            {
+                if (entry.installed) await removeDeploymentPath(userProfile, entry.target);
+                if (entry.hasBackup)
+                {
+                    await assertNoReparseComponents(userProfile, entry.backup, "deployment backup");
+                    await assertNoReparseTree(entry.backup, "deployment backup");
+                    await fs.rename(entry.backup, entry.target);
+                }
+            }
+            catch (rollbackError)
+            {
+                failures.push(`${entry.target} (backup: ${entry.backup}): ${errorText(rollbackError)}`);
+            }
+        }
+        if (failures.length > 0) throw new HalignError(`Setup failed: ${errorText(error)}; rollback failed: ${failures.join("; ")}`);
+        throw error;
+    }
+    finally
+    {
+        for (const entry of staged) await removeDeploymentPath(userProfile, entry.temporary);
+    }
+    for (const entry of staged)
+    {
+        if (entry.hasBackup) await removeDeploymentPath(userProfile, entry.backup);
+    }
 }
 
 /** Resolved source and target paths for one harness deploy. */
@@ -311,34 +374,19 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
     }
     const skillsSkipped = skillInstallations.length === 0;
 
-    for (const installation of installations)
-    {
-        await removeDeploymentDirectory(deploymentRoot, installation.targetAgents, `${installation.harness} target agents`);
-        await atomicWrite(installation.targetRules, await fs.readFile(installation.sourceRules));
-        if (installation.sourceAgents !== undefined)
-        {
-            await fs.cp(installation.sourceAgents, installation.targetAgents, { recursive: true, force: false, errorOnExist: true });
-        }
-        else
-        {
-            await fs.mkdir(installation.targetAgents, { recursive: true });
-        }
-    }
-
     const sharedFiles = await listRelativeFiles(sourceSharedRules);
-    await fs.mkdir(targetAgentsRoot, { recursive: true });
-    await removeDeploymentDirectory(deploymentRoot, targetSharedRules, "shared rules target");
-    await fs.cp(sourceSharedRules, targetSharedRules, { recursive: true, force: false, errorOnExist: true });
-
-    if (!skillsSkipped)
-    {
-        await fs.mkdir(targetSkillsRoot, { recursive: true });
-        for (const skill of skillInstallations)
-        {
-            await removeDeploymentDirectory(deploymentRoot, skill.target, `skill ${skill.id} target`);
-            await copySkillDirectory(skill.source, skill.target);
-        }
-    }
+    await deployReplacements(deploymentRoot, [
+        ...installations.flatMap((installation) => [
+            { target: installation.targetAgents, populate: async (path: string): Promise<void> =>
+            {
+                if (installation.sourceAgents) await fs.cp(installation.sourceAgents, path, { recursive: true, force: false, errorOnExist: true });
+                else await fs.mkdir(path);
+            } },
+            { target: installation.targetRules, populate: (path: string) => fs.copyFile(installation.sourceRules, path) },
+        ]),
+        { target: targetSharedRules, populate: (path: string) => fs.cp(sourceSharedRules, path, { recursive: true, force: false, errorOnExist: true }) },
+        ...skillInstallations.map((skill) => ({ target: skill.target, populate: (path: string) => copySkillDirectory(skill.source, path) })),
+    ]);
 
     return {
         outputs,

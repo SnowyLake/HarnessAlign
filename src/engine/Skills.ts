@@ -10,6 +10,7 @@ import { parse as parseYaml } from "yaml";
 import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError, resolveUserHome } from "./FsSafe.js";
 import {
     codePointCompare,
+    assertWindowsSafeName,
     errorText,
     FRONTMATTER,
     HalignError,
@@ -55,6 +56,7 @@ export function assertSafeZipEntry(path: string): string
     {
         throw new HalignError(`zip entry path is unsafe, got ${valueText(path)}`);
     }
+    for (const part of parts) assertWindowsSafeName(part, `zip entry ${path}`);
     return parts.join("/");
 }
 
@@ -65,10 +67,7 @@ export function assertSkillName(id: string, context: string): string
     {
         throw new HalignError(`${context}: skill id must match ${SKILL_NAME.source} and be at most ${SKILL_NAME_MAX} characters, got ${valueText(id)}`);
     }
-    if (WINDOWS_RESERVED_NAMES.has(id.toUpperCase()))
-    {
-        throw new HalignError(`${context}: skill id must not be a Windows reserved name, got ${valueText(id)}`);
-    }
+    assertWindowsSafeName(id, context);
     return id;
 }
 
@@ -412,6 +411,7 @@ export async function installSkillFromDirectory(
     await fs.mkdir(join(root, ".harness-align"), { recursive: true });
     await fs.mkdir(temporary);
     let replaced = false;
+    let installed = false;
     try
     {
         await copySkillTree(sourceDir, temporary);
@@ -427,6 +427,7 @@ export async function installSkillFromDirectory(
             replaced = true;
         }
         await fs.rename(temporary, destination);
+        installed = true;
         index[skillId] = origin.kind === "github"
             ? {
                 origin: "github",
@@ -442,6 +443,7 @@ export async function installSkillFromDirectory(
     catch (error)
     {
         const destinationStats = await lstatIfExists(destination);
+        if (installed) await assertNoReparseTree(root, destination);
         if (replaced && destinationStats && await lstatIfExists(backup))
         {
             const failed = join(root, ".harness-align", `.skill-failed-${skillId}-${randomUUID()}`);
@@ -452,6 +454,10 @@ export async function installSkillFromDirectory(
         else if (replaced && !destinationStats && await lstatIfExists(backup))
         {
             await fs.rename(backup, destination);
+        }
+        else if (installed && !replaced)
+        {
+            await fs.rm(destination, { recursive: true, force: true });
         }
         await fs.rm(temporary, { recursive: true, force: true }).catch(() => undefined);
         throw error;
@@ -524,6 +530,8 @@ export async function importUserSkills(
     userProfile = process.env.USERPROFILE,
 ): Promise<string>
 {
+    if (typeof overwrite !== "boolean") throw new HalignError(`import overwrite must be a boolean, got ${valueText(overwrite)}`);
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) throw new HalignError(`import ids must be a string array, got ${valueText(ids)}`);
     const root = resolve(rootPath);
     userProfile = resolveUserHome(userProfile);
     if (ids.length === 0) throw new HalignError("import requires at least one skill id");
@@ -537,11 +545,12 @@ export async function importUserSkills(
     }
     const existing = await loadSkills(root);
     const profileRoot = join(resolve(userProfile), ".agents", "skills");
-    const installed: string[] = [];
+    const selected: Array<{ id: string; source: string; contentHash: string }> = [];
     for (const id of ids)
     {
         const skillId = assertSkillName(id, id);
         const source = join(profileRoot, skillId);
+        await ensureRegularSource(userProfile, source);
         const sourceStats = await lstatIfExists(source);
         if (!sourceStats?.isDirectory()) throw new HalignError(`${source}: skill does not exist`);
         const collision = existing.find((skill) => skill.id.toLowerCase() === skillId.toLowerCase());
@@ -549,8 +558,14 @@ export async function importUserSkills(
         {
             throw new HalignError(`.harness-align/skills/${collision.id}: skill already exists; pass overwrite to replace it`);
         }
-        await installSkillFromDirectory(root, skillId, source, { kind: "local", contentHash: await hashSkillDirectory(source) }, overwrite);
-        installed.push(skillId);
+        if (!(await lstatIfExists(join(source, "SKILL.md")))?.isFile()) throw new HalignError(`${source}: SKILL.md is required`);
+        selected.push({ id: skillId, source, contentHash: await hashSkillDirectory(source) });
+    }
+    const installed: string[] = [];
+    for (const skill of selected)
+    {
+        await installSkillFromDirectory(root, skill.id, skill.source, { kind: "local", contentHash: skill.contentHash }, overwrite);
+        installed.push(skill.id);
     }
     return `Imported ${installed.length} skill(s):\n${installed.map((id) => `  ${id}`).join("\n")}\n`;
 }

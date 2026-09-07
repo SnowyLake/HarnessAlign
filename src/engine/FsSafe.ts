@@ -40,6 +40,13 @@ export function assertContained(root: string, path: string, label: string): void
     }
 }
 
+/** Compare resolved paths using the platform's default filesystem casing rules. */
+export function pathKey(path: string): string
+{
+    const full = resolve(path);
+    return process.platform === "win32" ? full.toLowerCase() : full;
+}
+
 /** `lstat` a path, returning `undefined` when it does not exist. */
 export async function lstatIfExists(path: string): Promise<Stats | undefined>
 {

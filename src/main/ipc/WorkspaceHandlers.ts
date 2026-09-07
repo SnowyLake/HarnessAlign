@@ -5,7 +5,8 @@
 
 import { ipcMain } from "electron";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
-import type { Agent, Config, HarnessConfig, LayerOptionInput, LayerSelection, RuleInput } from "../../shared/models/Workspace.js";
+import { z } from "zod";
+import { AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA } from "../../shared/models/Schemas.js";
 import { workspaceService } from "../services/WorkspaceService.js";
 import { assertTrusted, runIpc } from "../utils/Ipc.js";
 
@@ -18,112 +19,112 @@ export function registerWorkspaceHandlers(): void
         return workspaceService.load();
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveConfig, (event, config: Config) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveConfig, (event, config: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.saveConfig(config);
+        return workspaceService.saveConfig(CONFIG_SCHEMA.parse(config));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveRule, (event, input: RuleInput) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveRule, (event, input: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        await workspaceService.saveRule(input);
+        await workspaceService.saveRule(RULE_INPUT_SCHEMA.parse(input));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveLayerOption, (event, input: LayerOptionInput) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveLayerOption, (event, input: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        await workspaceService.saveLayerOption(input);
+        await workspaceService.saveLayerOption(LAYER_OPTION_INPUT_SCHEMA.parse(input));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveSharedRule, (event, path: string, body: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveSharedRule, (event, path: unknown, body: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        await workspaceService.saveSharedRule(path, body);
+        await workspaceService.saveSharedRule(z.string().parse(path), z.string().parse(body));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveAgent, (event, agent: Agent) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveAgent, (event, agent: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        await workspaceService.saveAgent(agent);
+        await workspaceService.saveAgent(AGENT_SCHEMA.parse(agent));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceDeleteSource, (event, path: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceDeleteSource, (event, path: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        await workspaceService.deleteSource(path);
+        await workspaceService.deleteSource(z.string().parse(path));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceRenameSource, (event, from: string, to: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceRenameSource, (event, from: unknown, to: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        await workspaceService.renameSource(from, to);
+        await workspaceService.renameSource(z.string().parse(from), z.string().parse(to));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceAddLayer, (event, name: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceAddLayer, (event, name: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.addLayer(name);
+        return workspaceService.addLayer(z.string().parse(name));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceRemoveLayer, (event, name: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceRemoveLayer, (event, name: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.removeLayer(name);
+        return workspaceService.removeLayer(z.string().parse(name));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceRenameLayer, (event, from: string, to: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceRenameLayer, (event, from: unknown, to: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.renameLayer(from, to);
+        return workspaceService.renameLayer(z.string().parse(from), z.string().parse(to));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceAddLayerOption, (event, layer: string, option: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceAddLayerOption, (event, layer: unknown, option: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        await workspaceService.addLayerOption(layer, option);
+        await workspaceService.addLayerOption(z.string().parse(layer), z.string().parse(option));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceRemoveLayerOption, (event, layer: string, option: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceRemoveLayerOption, (event, layer: unknown, option: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        await workspaceService.removeLayerOption(layer, option);
+        await workspaceService.removeLayerOption(z.string().parse(layer), z.string().parse(option));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceRenameLayerOption, (event, layer: string, from: string, to: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceRenameLayerOption, (event, layer: unknown, from: unknown, to: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.renameLayerOption(layer, from, to);
+        return workspaceService.renameLayerOption(z.string().parse(layer), z.string().parse(from), z.string().parse(to));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceAddHarness, (event, harness: HarnessConfig) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceAddHarness, (event, harness: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.addHarness(harness);
+        return workspaceService.addHarness(HARNESS_SCHEMA.parse(harness));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceRemoveHarness, (event, name: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceRemoveHarness, (event, name: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        await workspaceService.removeHarness(name);
+        await workspaceService.removeHarness(z.string().parse(name));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceUpdateHarness, (event, from: string, harness: HarnessConfig) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceUpdateHarness, (event, from: unknown, harness: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.updateHarness(from, harness);
+        return workspaceService.updateHarness(z.string().parse(from), HARNESS_SCHEMA.parse(harness));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceAddSkillSource, (event, input: { url: string; branch?: string }) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceAddSkillSource, (event, input: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.addSkillSource(input);
+        return workspaceService.addSkillSource(SKILL_SOURCE_INPUT_SCHEMA.parse(input));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceRemoveSkillSource, (event, owner: string, name: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceRemoveSkillSource, (event, owner: unknown, name: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.removeSkillSource(owner, name);
+        return workspaceService.removeSkillSource(z.string().parse(owner), z.string().parse(name));
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceDiscoverSkills, (event) => runIpc(async () =>
@@ -132,10 +133,10 @@ export function registerWorkspaceHandlers(): void
         return workspaceService.discoverSkills();
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceInstallSkills, (event, ids: string[]) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceInstallSkills, (event, ids: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.installSkills(ids);
+        return workspaceService.installSkills(SKILL_IDS_SCHEMA.parse(ids));
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceCheckSkillUpdates, (event) => runIpc(async () =>
@@ -144,10 +145,10 @@ export function registerWorkspaceHandlers(): void
         return workspaceService.checkSkillUpdates();
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceApplySkillUpdates, (event, ids: string[]) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceApplySkillUpdates, (event, ids: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.applySkillUpdates(ids);
+        return workspaceService.applySkillUpdates(SKILL_IDS_SCHEMA.parse(ids));
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceListUserSkills, (event) => runIpc(async () =>
@@ -156,27 +157,27 @@ export function registerWorkspaceHandlers(): void
         return workspaceService.listUserSkills();
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceImportUserSkills, (event, ids: string[], overwrite: boolean) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceImportUserSkills, (event, ids: unknown, overwrite: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.importUserSkills(ids, overwrite);
+        return workspaceService.importUserSkills(SKILL_IDS_SCHEMA.parse(ids), z.boolean().parse(overwrite));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceRemoveSkill, (event, id: string) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceRemoveSkill, (event, id: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        await workspaceService.removeSkill(id);
+        await workspaceService.removeSkill(z.string().parse(id));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceGenerate, (event, selection?: LayerSelection[]) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceGenerate, (event, selection?: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.generate(selection);
+        return workspaceService.generate(LAYER_SELECTION_SCHEMA.parse(selection));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSetup, (event, selection?: LayerSelection[]) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSetup, (event, selection?: unknown) => runIpc(async () =>
     {
         assertTrusted(event);
-        return workspaceService.setup(selection);
+        return workspaceService.setup(LAYER_SELECTION_SCHEMA.parse(selection));
     }));
 }

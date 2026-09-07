@@ -4,6 +4,7 @@
  */
 
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,6 +12,8 @@ import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { workspaceService } from "../src/main/services/WorkspaceService.js";
+import { discoverSkills, installSkills } from "../src/main/services/SkillRemoteService.js";
+import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
 import { buildOutputs, generate, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
 import { loadConfig, validateConfig } from "../src/engine/Load.js";
@@ -1092,4 +1095,264 @@ test("setup on a fresh user workspace deploys empty agents and skips missing har
     {
         await rm(home, { recursive: true, force: true });
     }
+});
+
+test("manifest aliases cannot delete current outputs or manage the manifest itself", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await generate(root);
+        const directory = join(root, ".harness-align", "generated");
+        const manifest = join(directory, ".manifest.json");
+        const rules = await readFile(join(directory, "codex", "AGENTS.md"));
+        for (const path of ["codex//AGENTS.md", "codex/AGENTS.md/", "codex/AGENTS.md.", "codex/AGENTS.md:stream", "codex/NUL.md"])
+        {
+            await writeFile(manifest, JSON.stringify({ version: 1, files: [path] }));
+            await assert.rejects(generate(root), HalignError);
+            assert.deepEqual(await readFile(join(directory, "codex", "AGENTS.md")), rules);
+        }
+        if (process.platform === "win32")
+        {
+            await writeFile(manifest, JSON.stringify({ version: 1, files: ["CODEX/AGENTS.MD"] }));
+            await generate(root);
+            assert.deepEqual(await readFile(join(directory, "codex", "AGENTS.md")), rules);
+            for (const files of [[".MANIFEST.JSON"], ["codex/AGENTS.md", "CODEX/AGENTS.MD"]])
+            {
+                await writeFile(manifest, JSON.stringify({ version: 1, files }));
+                await assert.rejects(generate(root), HalignError);
+            }
+        }
+    });
+});
+
+test("Windows path aliases cannot cross source or deployment boundaries", async () =>
+{
+    await withProject(async (root) =>
+    {
+        for (const configPath of [".harness-align.", ".agents/shared-rules ", ".codex:stream", "con.txt"])
+        {
+            const next = structuredClone(config);
+            next.harnesses[0]!.config_path = configPath;
+            assert.throws(() => validateConfig(next), HalignError);
+        }
+        for (const path of [".harness-align/rules/shared./x.md", ".harness-align/rules/NUL.md", ".harness-align/rules/x:stream.md"])
+        {
+            await assert.rejects(saveRule(root, { path, priority: 1, targets: [], body: "# Rule" }), HalignError);
+        }
+        for (const path of ["skill/file:stream", "skill/CON.txt", "skill/trailing."])
+        {
+            assert.throws(() => assertSafeZipEntry(path), HalignError);
+        }
+        if (process.platform === "win32")
+        {
+            await mkdir(join(root, ".harness-align", "rules", "Shared"));
+            await writeFile(join(root, ".harness-align", "rules", "Shared", "shared.md"), "# Shared body\n");
+            const workspace = await loadWorkspace(root);
+            assert.equal(workspace.rootRules.length, 1);
+            assert.equal(workspace.sharedRules.length, 1);
+            await assert.rejects(saveRule(root, { path: ".harness-align/rules/SHARED/shared.md", priority: 0, targets: [], body: "# Wrong" }), /shared rules/u);
+            await assert.rejects(renameSource(root, ".harness-align/rules/base.md", ".harness-align/rules/SHARED/moved.md"), /one root-rule/u);
+        }
+    });
+});
+
+test("config writes reject broken source references before changing the file", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const before = await snapshot(join(root, ".harness-align"));
+        const loaded = await loadConfig(root);
+        await assert.rejects(saveConfig(root, { ...loaded, harnesses: loaded.harnesses.filter((harness) => harness.name !== "codex") }), HalignError);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+    });
+});
+
+test("harness removal restores every completed source write after a later failure", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const before = await snapshot(join(root, ".harness-align"));
+        const originalRename = fs.rename;
+        let failed = false;
+        const mocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            if (!failed && String(args[1]) === join(root, ".harness-align", "agents", "explorer.md"))
+            {
+                failed = true;
+                throw new Error("Injected source write failure");
+            }
+            return originalRename(...args);
+        });
+        try
+        {
+            await assert.rejects(removeHarness(root, "codex"), /Injected source write failure/u);
+            assert.equal(failed, true);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+            await loadWorkspace(root);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("setup staging and swap failures preserve previously deployed files", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "test-home");
+        await mkdir(join(home, ".codex", "agents"), { recursive: true });
+        await mkdir(join(home, ".agents", "shared-rules"), { recursive: true });
+        await mkdir(join(root, ".harness-align", "rules", "shared"));
+        await writeFile(join(root, ".harness-align", "rules", "shared", "new.md"), "# New shared\n");
+        await writeFile(join(home, ".codex", "agents", "old.toml"), "old agent");
+        await writeFile(join(home, ".codex", "AGENTS.md"), "old rules");
+        await writeFile(join(home, ".agents", "shared-rules", "old.md"), "old shared");
+        const before = await snapshot(home);
+        const originalCopy = fs.cp;
+        const copying = t.mock.method(fs, "cp", async (...args: Parameters<typeof fs.cp>) =>
+        {
+            if (String(args[0]) === join(root, ".harness-align", "rules", "shared")) throw new Error("Injected copy failure");
+            return originalCopy(...args);
+        });
+        try
+        {
+            await assert.rejects(setup(root, undefined, home), /Injected copy failure/u);
+            assert.deepEqual(await snapshot(home), before);
+        }
+        finally
+        {
+            copying.mock.restore();
+        }
+        const originalRename = fs.rename;
+        let failed = false;
+        const swapping = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            if (!failed && String(args[0]).includes(".harness-align-stage-") && String(args[1]) === join(home, ".agents", "shared-rules"))
+            {
+                failed = true;
+                throw new Error("Injected swap failure");
+            }
+            return originalRename(...args);
+        });
+        try
+        {
+            await assert.rejects(setup(root, undefined, home), /Injected swap failure/u);
+            assert.equal(failed, true);
+            assert.deepEqual(await snapshot(home), before);
+        }
+        finally
+        {
+            swapping.mock.restore();
+        }
+    });
+});
+
+test("failed skill index writes roll back both first installs and replacements", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const source = join(root, "incoming-skill");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Original\n");
+        for (const replacing of [false, true])
+        {
+            if (replacing) await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" });
+            await writeFile(join(source, "SKILL.md"), "# Updated\n");
+            const before = await snapshot(join(root, ".harness-align"));
+            const originalRename = fs.rename;
+            const mocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+            {
+                if (String(args[1]) === join(root, ".harness-align", "skills", "index.json")) throw new Error("Injected index failure");
+                return originalRename(...args);
+            });
+            try
+            {
+                await assert.rejects(installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" }), /Injected index failure/u);
+                assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+            }
+            finally
+            {
+                mocked.mock.restore();
+            }
+            await writeFile(join(source, "SKILL.md"), "# Original\n");
+        }
+    });
+});
+
+test("skill import validates the complete request before installing any item", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "test-home");
+        await mkdir(join(home, ".agents", "skills", "demo"), { recursive: true });
+        await writeFile(join(home, ".agents", "skills", "demo", "SKILL.md"), "# Demo\n");
+        const before = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(importUserSkills(root, ["demo"], "false" as never, home), /boolean/u);
+        await assert.rejects(importUserSkills(root, ["demo", "missing"], false, home), /does not exist/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+    });
+});
+
+test("workspace operations serialize writes and reads and recover after rejection", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const previousHome = process.env.USERPROFILE;
+        process.env.USERPROFILE = root;
+        try
+        {
+            const [first, second, loaded] = await Promise.all([
+                workspaceService.addHarness({ name: "alpha", configPath: ".alpha", agentFormat: "yaml", agentExtension: "md" }),
+                workspaceService.addHarness({ name: "beta", configPath: ".beta", agentFormat: "yaml", agentExtension: "md" }),
+                workspaceService.load(),
+            ]);
+            assert.equal(first.harnesses.length, 4);
+            assert.equal(second.harnesses.length, 5);
+            assert.equal(loaded.config.harnesses.length, 5);
+            const outcomes = await Promise.allSettled([workspaceService.removeHarness("missing"), workspaceService.load()]);
+            assert.equal(outcomes[0]?.status, "rejected");
+            assert.equal(outcomes[1]?.status, "fulfilled");
+        }
+        finally
+        {
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+        }
+    });
+});
+
+test("IPC payload schemas reject coercion and incomplete editor shapes", () =>
+{
+    for (const value of [null, {}, { path: "rule.md", priority: 1, body: "# Rule" }, { path: "rule.md", priority: "1", targets: [], body: "# Rule" }])
+    {
+        assert.equal(RULE_INPUT_SCHEMA.safeParse(value).success, false);
+    }
+    assert.equal(CONFIG_SCHEMA.safeParse({}).success, false);
+    assert.equal(AGENT_SCHEMA.safeParse({ path: "agent.md", name: "agent", description: "Agent", body: "# Agent", harnesses: { codex: [] } }).success, false);
+    assert.equal(LAYER_SELECTION_SCHEMA.safeParse([{ name: "layer" }]).success, false);
+    assert.equal(SKILL_IDS_SCHEMA.safeParse(["Demo", "demo"]).success, false);
+    assert.equal(SKILL_IDS_SCHEMA.safeParse("demo").success, false);
+});
+
+test("discovery cache no longer installs skills after their source is removed", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await addSkillSource(root, { url: "https://github.com/example/repo" });
+        const archive = Buffer.from("UEsDBBQAAAAIAFgSKF30xqGHCQAAAAcAAAAXAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRTVnBJzc3nAgBQSwECFAAUAAAACABYEihd9MahhwkAAAAHAAAAFwAAAAAAAAAAAAAAAAAAAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRQSwUGAAAAAAEAAQBFAAAAPgAAAAAA", "base64");
+        const mocked = t.mock.method(globalThis, "fetch", async () => new Response(archive, { status: 200 }));
+        try
+        {
+            assert.equal((await discoverSkills(root))[0]?.id, "demo");
+            await removeSkillSource(root, "example", "repo");
+            await assert.rejects(installSkills(root, ["demo"]), /latest discover results/u);
+            assert.deepEqual(await loadSkills(root), []);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
 });

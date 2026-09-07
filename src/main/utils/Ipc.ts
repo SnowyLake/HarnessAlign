@@ -17,7 +17,7 @@ export function fail(error: unknown): never
 /** Reject IPC from any WebContents other than the main window. */
 export function assertTrusted(event: IpcMainInvokeEvent): void
 {
-    if (!isTrustedSender(event.sender)) fail(new Error("Invalid IPC sender"));
+    if (!isTrustedSender(event)) fail(new Error("Invalid IPC sender"));
 }
 
 /** Run privileged work and convert domain failures into IPC errors. */

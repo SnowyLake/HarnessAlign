@@ -4,9 +4,9 @@
  */
 
 import { promises as fs } from "node:fs";
-import { join, posix, resolve } from "node:path";
+import { join, posix } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { display, ensureRegularSource, lstatIfExists, readUtf8, reparseError } from "./FsSafe.js";
+import { display, ensureRegularSource, lstatIfExists, pathKey, readUtf8, reparseError } from "./FsSafe.js";
 import {
     AGENT_EXTENSION,
     AGENT_FIELDS,
@@ -55,7 +55,7 @@ async function markdownFiles(
         throw new HalignError(`${display(root, directory)}: expected a directory`);
     }
 
-    const excluded = new Set(excludedDirectories.map((path) => resolve(path)));
+    const excluded = new Set(excludedDirectories.map(pathKey));
     const files: string[] = [];
 
     const visit = async (current: string): Promise<void> =>
@@ -66,7 +66,7 @@ async function markdownFiles(
         for (const entry of entries)
         {
             const path = join(current, entry.name);
-            if (excluded.has(resolve(path))) continue;
+            if (excluded.has(pathKey(path))) continue;
             await ensureRegularSource(root, path);
             const stats = await lstatIfExists(path);
             if (!stats) continue;
@@ -140,6 +140,7 @@ function relativeConfigPath(value: unknown, path: string, field: string): string
     {
         throw new HalignError(`${path}: ${field} must be a normalized relative path, got ${valueText(value)}`);
     }
+    for (const part of parts) assertWindowsSafeName(part, `${path}: ${field}`);
     return configPath;
 }
 

@@ -122,6 +122,7 @@ function managedRelative(value: string, label: string): string
     {
         throw new HalignError(`${label}: path must stay inside .harness-align, got ${valueText(value)}`);
     }
+    for (const part of parts) assertWindowsSafeName(part, label);
     if (value === ".harness-align/generated" || value.startsWith(".harness-align/generated/"))
     {
         throw new HalignError(`${label}: path must stay inside managed .harness-align sources, got ${valueText(value)}`);
@@ -153,6 +154,41 @@ async function writeManaged(root: string, relativePath: string, content: Buffer)
     await atomicWrite(path, content);
 }
 
+/** Preflight a source batch and restore completed writes if a later write fails. */
+async function writeManagedBatch(root: string, writes: Array<{ path: string; content: Buffer }>): Promise<void>
+{
+    const prepared = await Promise.all(writes.map(async (write) => ({
+        ...write,
+        original: await fs.readFile(await resolveManaged(root, write.path, write.path)),
+    })));
+    const written: typeof prepared = [];
+    try
+    {
+        for (const write of prepared)
+        {
+            await writeManaged(root, write.path, write.content);
+            written.push(write);
+        }
+    }
+    catch (error)
+    {
+        const failures: string[] = [];
+        for (const write of written.reverse())
+        {
+            try
+            {
+                await writeManaged(root, write.path, write.original);
+            }
+            catch (rollbackError)
+            {
+                failures.push(`${write.path}: ${errorText(rollbackError)}`);
+            }
+        }
+        if (failures.length > 0) throw new HalignError(`Source update failed: ${errorText(error)}; rollback failed: ${failures.join("; ")}`);
+        throw error;
+    }
+}
+
 /** Serialize YAML frontmatter plus a markdown body. */
 function serializeFrontmatter(metadata: Record<string, unknown>, body: string, path: string): Buffer
 {
@@ -174,11 +210,12 @@ function serializeLayerOption(targets: string[], body: string): Buffer
 function assertRulePath(path: string, kind: "root" | "shared"): void
 {
     if (!path.endsWith(".md")) throw new HalignError(`${path}: rule path must end with .md`);
-    if (kind === "root" && (path.startsWith(".harness-align/rules/shared/") || !path.startsWith(".harness-align/rules/")))
+    const comparison = process.platform === "win32" ? path.toLowerCase() : path;
+    if (kind === "root" && (comparison.startsWith(".harness-align/rules/shared/") || !comparison.startsWith(".harness-align/rules/")))
     {
         throw new HalignError(`${path}: root rule path must stay under .harness-align/rules and outside shared`);
     }
-    if (kind === "shared" && !path.startsWith(".harness-align/rules/shared/"))
+    if (kind === "shared" && !comparison.startsWith(".harness-align/rules/shared/"))
     {
         throw new HalignError(`${path}: shared rule path must stay under .harness-align/rules/shared`);
     }
@@ -187,7 +224,8 @@ function assertRulePath(path: string, kind: "root" | "shared"): void
 /** Classify a root or shared rule path. */
 function ruleKind(path: string): "root" | "shared"
 {
-    if (path.startsWith(".harness-align/rules/shared/")) return "shared";
+    const comparison = process.platform === "win32" ? path.toLowerCase() : path;
+    if (comparison.startsWith(".harness-align/rules/shared/")) return "shared";
     return "root";
 }
 
@@ -195,7 +233,7 @@ function ruleKind(path: string): "root" | "shared"
 function editableSourceKind(path: string): "root-rule" | "shared-rule" | "agent" | undefined
 {
     if (path.startsWith(".harness-align/agents/")) return "agent";
-    if (path.startsWith(".harness-align/rules/shared/")) return "shared-rule";
+    if (ruleKind(path) === "shared") return "shared-rule";
     if (path.startsWith(".harness-align/rules/")) return "root-rule";
     return undefined;
 }
@@ -354,7 +392,7 @@ export async function saveConfig(rootPath: string, config: Config): Promise<Conf
 {
     const root = resolve(rootPath);
     const validated = validateConfig(configDocument(config));
-    await loadLayerOptions(root, validated);
+    await Promise.all([loadLayerOptions(root, validated), loadRules(root, validated.harnesses), loadAgents(root, validated.harnesses)]);
     await writeConfig(root, validated);
     return validated;
 }
@@ -663,7 +701,7 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
         }
         return { ...agent, harnesses };
     });
-    const writes: Array<{ path: string; content: Buffer; original?: Buffer }> = [{
+    const writes: Array<{ path: string; content: Buffer }> = [{
         path: ".harness-align/config.json",
         content: Buffer.from(`${JSON.stringify(configDocument(nextConfig), null, 2)}\n`, "utf8"),
     }];
@@ -688,41 +726,8 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
             });
         }
     }
-    for (const write of writes)
-    {
-        const path = await resolveManaged(root, write.path, write.path);
-        write.original = await fs.readFile(path);
-    }
-    const written: typeof writes = [];
-    try
-    {
-        for (const write of writes)
-        {
-            await writeManaged(root, write.path, write.content);
-            written.push(write);
-        }
-        return nextConfig;
-    }
-    catch (error)
-    {
-        const rollbackFailures: string[] = [];
-        for (const write of written.reverse())
-        {
-            try
-            {
-                await writeManaged(root, write.path, write.original!);
-            }
-            catch (rollbackError)
-            {
-                rollbackFailures.push(`${write.path}: ${errorText(rollbackError)}`);
-            }
-        }
-        if (rollbackFailures.length > 0)
-        {
-            throw new HalignError(`Harness update failed: ${errorText(error)}; rollback failed: ${rollbackFailures.join("; ")}`);
-        }
-        throw error;
-    }
+    await writeManagedBatch(root, writes);
+    return nextConfig;
 }
 
 /** Remove a harness and cascade target allowlists plus agent metadata. */
@@ -768,10 +773,14 @@ export async function removeHarness(rootPath: string, name: string): Promise<voi
         }
         nextAgents.push({ ...agent, harnesses });
     }
-    await writeConfig(root, nextConfig);
-    for (const rule of nextRules) await saveRule(root, rule);
-    for (const option of nextLayerOptions) await saveLayerOption(root, option);
-    for (const agent of nextAgents) await saveAgent(root, agent);
+    for (const agent of nextAgents) assertAgentInput(agent, nextConfig.harnesses);
+    await writeManagedBatch(root, [
+        { path: ".harness-align/config.json", content: Buffer.from(`${JSON.stringify(configDocument(nextConfig), null, 2)}\n`, "utf8") },
+        ...nextRules.map((rule) => ({ path: rule.path, content: serializeFrontmatter({ priority: rule.priority, targets: rule.targets }, rule.body, rule.path) })),
+        ...nextLayerOptions.map((option) => ({ path: option.path, content: serializeLayerOption(option.targets, option.body) })),
+        ...nextAgents.map((agent) => ({ path: agent.path,
+            content: serializeFrontmatter({ name: agent.name, description: agent.description, harnesses: agent.harnesses }, agent.body, agent.path) })),
+    ]);
 }
 
 /** Add a harness declaration to config. */

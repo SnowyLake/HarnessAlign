@@ -5,13 +5,14 @@
 
 import { promises as fs } from "node:fs";
 import { join, posix, resolve } from "node:path";
-import { assertContained, atomicWrite, display, lstatIfExists, readUtf8, reparseError } from "./FsSafe.js";
+import { assertContained, atomicWrite, display, lstatIfExists, pathKey, readUtf8, reparseError } from "./FsSafe.js";
 import { loadAgents, loadConfig, loadLayerOptions, loadRules } from "./Load.js";
 import {
     type Config,
     type LayerOption,
     type LayerSelection,
     type OutputMap,
+    assertWindowsSafeName,
     codePointCompare,
     errorText,
     HalignError,
@@ -39,11 +40,6 @@ function selectedLayerOptions(config: Config, options: Record<string, LayerOptio
             throw new HalignError(`layer ${valueText(selection.name)} option does not exist, got ${valueText(selection.option)}`);
         }
         selected.push(option);
-    }
-    if (!requested)
-    {
-        const missing = config.layers.find((layer) => !seen.has(layer.name));
-        if (missing) throw new HalignError(`layer selection is missing ${valueText(missing.name)}`);
     }
     return [selections, selected];
 }
@@ -98,10 +94,11 @@ export function safeOutputRelative(value: unknown): string
         throw new HalignError(`.harness-align/generated/.manifest.json: invalid managed path ${valueText(value)}`);
     }
     const parts = value.split("/");
-    if (parts.includes(".") || parts.includes(".."))
+    if (parts.some((part) => !part || part === "." || part === ".."))
     {
         throw new HalignError(`.harness-align/generated/.manifest.json: invalid managed path ${valueText(value)}`);
     }
+    for (const part of parts) assertWindowsSafeName(part, `.harness-align/generated/.manifest.json: ${value}`);
     return value;
 }
 
@@ -154,23 +151,25 @@ async function loadManifest(root: string): Promise<string[]>
     {
         throw new HalignError(".harness-align/generated/.manifest.json: files must be a string array");
     }
-    if (new Set(manifest.files).size !== manifest.files.length)
+    const files = manifest.files.map((file) => safeOutputRelative(file));
+    if (new Set(files.map((file) => pathKey(join(generated, file)))).size !== files.length)
     {
         throw new HalignError(".harness-align/generated/.manifest.json: files must not contain duplicates");
     }
-    if (manifest.files.includes(".manifest.json"))
+    if (files.some((file) => pathKey(join(generated, file)) === pathKey(path)))
     {
         throw new HalignError(".harness-align/generated/.manifest.json: files must not manage the manifest itself");
     }
-    return manifest.files.map((file) => safeOutputRelative(file));
+    return files;
 }
 
 /** Collect generated paths that will be written or deleted, after containment checks. */
 async function preflightOutputChanges(root: string, expected: OutputMap): Promise<{ stalePaths: string[]; resolved: Map<string, string> }>
 {
     const oldFiles = await loadManifest(root);
-    const currentFiles = new Set([...expected.keys()].filter((path) => path !== ".manifest.json"));
-    const stale = oldFiles.filter((path) => !currentFiles.has(path));
+    const generated = await outputRoot(root);
+    const currentFiles = new Set([...expected.keys()].map((path) => pathKey(join(generated, path))));
+    const stale = oldFiles.filter((path) => !currentFiles.has(pathKey(join(generated, path))));
     const resolved = new Map<string, string>();
     for (const path of expected.keys()) resolved.set(path, await destination(root, path));
     const stalePaths: string[] = [];

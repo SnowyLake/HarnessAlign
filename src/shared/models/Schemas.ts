@@ -22,3 +22,46 @@ export const SETTINGS_PATCH_SCHEMA = z.object({
 export const HTTPS_URL_SCHEMA = z.string().url().refine((value) => value.startsWith("https:"), {
     message: "only https URLs are allowed",
 });
+
+/** Shape of a harness declaration; the engine validates names and reserved deployment paths. */
+export const HARNESS_SCHEMA = z.strictObject({
+    name: z.string(),
+    configPath: z.string(),
+    agentFormat: z.enum(["toml", "yaml"]),
+    agentExtension: z.string(),
+    instructionsField: z.string().optional(),
+}).transform(({ instructionsField, ...harness }) => instructionsField === undefined ? harness : { ...harness, instructionsField });
+
+/** Complete editor config payload, validated before workspace initialization. */
+export const CONFIG_SCHEMA = z.strictObject({
+    version: z.literal(1),
+    name: z.string(),
+    layers: z.array(z.strictObject({ name: z.string(), selected: z.string() })),
+    harnesses: z.array(HARNESS_SCHEMA).min(1),
+    skillSources: z.array(z.strictObject({ owner: z.string(), name: z.string(), branch: z.string() })),
+});
+
+/** Root rule write shape with an explicit harness allowlist. */
+export const RULE_INPUT_SCHEMA = z.strictObject({
+    path: z.string(), priority: z.number().int().nonnegative(), targets: z.array(z.string()), body: z.string(),
+});
+
+/** Layer option write shape that permits an empty Markdown body. */
+export const LAYER_OPTION_INPUT_SCHEMA = z.strictObject({ path: z.string(), targets: z.array(z.string()), body: z.string() });
+
+/** Agent write shape retaining arbitrary per-harness metadata keys. */
+export const AGENT_SCHEMA = z.strictObject({
+    path: z.string(), name: z.string(), description: z.string(), body: z.string(),
+    harnesses: z.record(z.string(), z.record(z.string(), z.unknown())),
+});
+
+/** Ordered layer choices for Generate and Setup. */
+export const LAYER_SELECTION_SCHEMA = z.array(z.strictObject({ name: z.string(), option: z.string() })).optional();
+
+/** Skill source registration payload without implicit string coercion. */
+export const SKILL_SOURCE_INPUT_SCHEMA = z.strictObject({ url: z.string(), branch: z.string().optional() })
+    .transform(({ url, branch }) => branch === undefined ? { url } : { url, branch });
+
+/** Nonempty selection of unique skill identifiers. */
+export const SKILL_IDS_SCHEMA = z.array(z.string().min(1)).min(1)
+    .refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, "skill ids must be unique without case sensitivity");

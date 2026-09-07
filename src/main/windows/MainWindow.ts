@@ -3,8 +3,9 @@
  * Renderer has no Node integration; privileged work goes through `window.appApi`.
  */
 
-import { BrowserWindow } from "electron";
+import { BrowserWindow, dialog, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { loadWindowState, trackWindowState } from "./WindowState.js";
 
 let mainWindow: BrowserWindow | undefined;
@@ -13,13 +14,15 @@ let opening: Promise<BrowserWindow> | undefined;
 /** Return the current BrowserWindow, if it still exists. */
 export function getMainWindow(): BrowserWindow | undefined
 {
-    return mainWindow;
+    return mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
 }
 
 /** Return whether an IPC sender belongs to the main window. */
-export function isTrustedSender(sender: Electron.WebContents): boolean
+export function isTrustedSender(event: IpcMainInvokeEvent): boolean
 {
-    return mainWindow !== undefined && sender.id === mainWindow.webContents.id;
+    const window = getMainWindow();
+    return window !== undefined && event.sender === window.webContents && event.senderFrame === event.sender.mainFrame
+        && isAllowedRendererNavigation(event.senderFrame.url);
 }
 
 /** Return whether renderer navigation is allowed for the current runtime. */
@@ -34,14 +37,18 @@ function isAllowedRendererNavigation(url: string): boolean
     {
         return false;
     }
-    if (import.meta.env.DEV) return parsed.protocol === "http:" && parsed.hostname === "localhost";
-    return parsed.protocol === "file:";
+    const expected = new URL(import.meta.env.DEV && process.env.ELECTRON_RENDERER_URL
+        ? process.env.ELECTRON_RENDERER_URL : pathToFileURL(join(__dirname, "../renderer/index.html")).href);
+    parsed.hash = "";
+    expected.hash = "";
+    return parsed.href === expected.href;
 }
 
 /** Create the sandboxed main window and load the renderer. */
 export async function createMainWindow(): Promise<BrowserWindow>
 {
-    if (mainWindow) return mainWindow;
+    const existing = getMainWindow();
+    if (existing) return existing;
     if (opening) return opening;
     opening = openMainWindow();
     try
@@ -84,7 +91,20 @@ async function openMainWindow(): Promise<BrowserWindow>
     });
 
     mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    mainWindow.webContents.on("will-prevent-unload", (event) =>
+    {
+        const window = getMainWindow();
+        if (!window) return;
+        const choice = dialog.showMessageBoxSync(window, {
+            type: "warning", message: "Discard unsaved changes?", buttons: ["Keep editing", "Discard changes"], defaultId: 0, cancelId: 0,
+        });
+        if (choice === 1) event.preventDefault();
+    });
     mainWindow.webContents.on("will-navigate", (event, url) =>
+    {
+        if (!isAllowedRendererNavigation(url)) event.preventDefault();
+    });
+    mainWindow.webContents.on("will-redirect", (event, url) =>
     {
         if (!isAllowedRendererNavigation(url)) event.preventDefault();
     });

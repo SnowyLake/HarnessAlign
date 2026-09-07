@@ -47,6 +47,7 @@ interface CachedSkill
 interface DiscoverCache
 {
     root: string;
+    sources: string;
     skills: CachedSkill[];
 }
 
@@ -253,20 +254,29 @@ function withConflicts(skills: Array<Omit<CachedSkill, "conflict">>): CachedSkil
 async function materializeSkill(skill: CachedSkill): Promise<string>
 {
     const directory = join(tmpdir(), `halign-skill-${skill.id}-${randomUUID()}`);
-    await fs.mkdir(directory, { recursive: true });
-    for (const [relative, data] of skill.files)
+    await fs.mkdir(directory);
+    try
     {
-        const target = join(directory, ...relative.split("/"));
-        await fs.mkdir(join(target, ".."), { recursive: true });
-        await fs.writeFile(target, data);
+        for (const [relative, data] of skill.files)
+        {
+            const target = join(directory, ...relative.split("/"));
+            await fs.mkdir(join(target, ".."), { recursive: true });
+            await fs.writeFile(target, data);
+        }
+        return directory;
     }
-    return directory;
+    catch (error)
+    {
+        await fs.rm(directory, { recursive: true, force: true });
+        throw error;
+    }
 }
 
 /** Resolve cached skills for a root, discovering first when the cache is cold. */
 async function cachedSkills(root: string): Promise<CachedSkill[]>
 {
-    if (!discoverCache || discoverCache.root !== root) await discoverSkills(root);
+    const sources = JSON.stringify((await loadConfig(root)).skillSources);
+    if (!discoverCache || discoverCache.root !== root || discoverCache.sources !== sources) await discoverSkills(root);
     return discoverCache?.root === root ? discoverCache.skills : [];
 }
 
@@ -294,7 +304,7 @@ export async function discoverSkills(root: string): Promise<RemoteSkill[]>
         discovered.push(...discoverInArchive(unzipSkillArchive(bytes), source.owner, source.name, branch));
     }
     const skills = withConflicts(discovered);
-    discoverCache = { root, skills };
+    discoverCache = { root, sources: JSON.stringify(config.skillSources), skills };
     return skills
         .map((skill) => ({
             id: skill.id,
