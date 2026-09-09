@@ -4,7 +4,7 @@
 
 import { Splitter } from "antd";
 import { HarnessesPanel, WorkspaceEditor } from "@/features/workspace/WorkspaceEditor";
-import { SkillRegistrationPanel, SkillsPanel } from "@/features/workspace/SkillsPanel";
+import { SkillsPanel } from "@/features/workspace/SkillsPanel";
 import { WorkspaceTree } from "@/features/workspace/WorkspaceTree";
 import { selectionKey, useAppStore, type WorkspaceView } from "@/stores/AppStore";
 
@@ -19,11 +19,11 @@ export function WorkspacePage({ view }: WorkspacePageProps)
 {
     const selection = useAppStore((state) => state.selection);
 
-    if (view === "project" || view === "skills" || view === "skill-registration")
+    if (view === "project" || view === "skills")
     {
         return (
             <div className="workspace-scroll" key={view}>
-                <div className="workspace-wide-page">{view === "project" ? <HarnessesPanel /> : view === "skills" ? <SkillsPanel /> : <SkillRegistrationPanel />}</div>
+                <div className="workspace-wide-page">{view === "project" ? <HarnessesPanel /> : <SkillsPanel />}</div>
             </div>
         );
     }
@@ -32,7 +32,7 @@ export function WorkspacePage({ view }: WorkspacePageProps)
         <div className="workspace-module-page">
             <div className="workspace-module-surface">
                 <Splitter key={view} className="workspace-splitter">
-                    <Splitter.Panel defaultSize={view === "layers" ? "36%" : "28%"} min={view === "layers" ? 280 : "20%"} max="45%" collapsible>
+                    <Splitter.Panel defaultSize="28%" min="20%" max="45%" collapsible>
                         <WorkspaceTree view={view} />
                     </Splitter.Panel>
                     <Splitter.Panel min="55%">

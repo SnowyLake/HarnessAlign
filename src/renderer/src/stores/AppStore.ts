@@ -8,7 +8,7 @@ import type { LayerSelection, Workspace } from "@shared/models/Workspace";
 import type { SyncPreview, SyncStatus } from "@shared/models/Sync";
 
 /** Workspace modules available from the primary navigation. */
-export type WorkspaceView = "project" | "rules" | "shared-rules" | "layers" | "skills" | "skill-registration" | "agents" | "generated";
+export type WorkspaceView = "project" | "rules" | "shared-rules" | "layers" | "skills" | "agents" | "generated";
 
 /** Top-level desktop shell view. */
 export type AppView = WorkspaceView | "settings" | "showcase";
@@ -108,7 +108,6 @@ function selectionMatchesView(view: WorkspaceView, selection: Selection, workspa
                 || (selection.kind === "layer-option-new" && Object.hasOwn(workspace.layerOptions, selection.layer))
                 || (selection.kind === "layer-option" && Object.values(workspace.layerOptions).flat().some((item) => item.path === selection.path));
         case "skills":
-        case "skill-registration":
             return true;
         case "agents":
             return selection.kind === "agent-new"
@@ -149,7 +148,6 @@ function selectionForView(view: WorkspaceView, selection: Selection, workspace: 
             return option ? { kind: "layer-option", path: option.path } : { kind: "layer", name: layer };
         }
         case "skills":
-        case "skill-registration":
             return selection;
         case "agents":
         {

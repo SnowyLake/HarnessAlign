@@ -38,7 +38,6 @@ const WORKSPACE_NAV_ITEMS: Readonly<Record<WorkspaceView, NavItem>> = {
     layers: { label: "Layers", icon: <AppstoreOutlined /> },
     agents: { label: "Agents", icon: <RobotOutlined /> },
     skills: { label: "Skills", icon: <ThunderboltOutlined /> },
-    "skill-registration": { label: "Skill registration", icon: <ThunderboltOutlined /> },
     generated: { label: "Generated", icon: <FileDoneOutlined /> },
 };
 
@@ -78,15 +77,7 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
         },
         { key: "layers", icon: WORKSPACE_NAV_ITEMS.layers.icon, label: WORKSPACE_NAV_ITEMS.layers.label },
         { key: "agents", icon: WORKSPACE_NAV_ITEMS.agents.icon, label: WORKSPACE_NAV_ITEMS.agents.label },
-        {
-            key: "skills-group",
-            icon: WORKSPACE_NAV_ITEMS.skills.icon,
-            label: "Skills",
-            children: [
-                { key: "skills", label: "Library" },
-                { key: "skill-registration", label: "Registration" },
-            ],
-        },
+        { key: "skills", icon: WORKSPACE_NAV_ITEMS.skills.icon, label: WORKSPACE_NAV_ITEMS.skills.label },
         { key: "generated", icon: WORKSPACE_NAV_ITEMS.generated.icon, label: WORKSPACE_NAV_ITEMS.generated.label },
     ];
     const utilityItems: MenuProps["items"] = [

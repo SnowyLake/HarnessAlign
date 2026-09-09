@@ -53,7 +53,7 @@ Generate 和 Setup 使用当前 Layer 顺序与选项. 有未保存的源文件�
 
 ## 桌面应用
 
-桌面应用使用顶部命令栏和主从编辑布局. 窄窗口下侧栏自动收起为图标, 文件列表可调整宽度或折叠. Markdown 与 JSON 编辑器支持长文本和结构化内容.
+桌面应用使用顶部命令栏和主从编辑布局. 窄窗口下侧栏自动收起为图标, 文件列表可调整宽度或折叠. Layers, Rules 和 Agents 的列表默认宽度统一为 28%, 可在 20% 到 45% 之间调整. Markdown 与 JSON 编辑器支持长文本和结构化内容.
 
 窗口可以:
 
@@ -62,7 +62,7 @@ Generate 和 Setup 使用当前 Layer 顺序与选项. 有未保存的源文件�
 - 在 Layers 页按 Group 管理 Layer 及其选项. Group 开关控制是否参与生成, Generate option 选择生成时使用的选项, 拖动 Group 名称或点击上下箭头调整顺序. 启用的 Group 按生成顺序排列, 未启用的 Group 排在后面. Add layer 创建空 Group, 添加 Option 后才能启用.
 - 在 Rules 的 Inline 子页面编辑参与 `AGENTS.md` 的根规则, 在 Shared 子页面编辑独立部署的 shared-rules. Rule 和 Layer Option 的 Targets 都是严格白名单, 未选择任何 Harness 时不会对任何 Harness 生效.
 - 在 Agents 页编辑共享正文, 按 Harness 切换原生 metadata, 并通过 Enable 选择需要生成该 Agent 的 Harness.
-- 在 Skills 的 Registration 子页面注册 GitHub 仓库, 在 Library 子页面发现, 下载, 检查或应用更新, 从 `%USERPROFILE%\.agents\skills` 导入, 或移除已安装的项目 Skills.
+- 在 Skills 页面点击 Registration, 通过弹窗注册和管理 GitHub 仓库; 在同一页面发现, 下载, 检查或应用更新, 从 `%USERPROFILE%\.agents\skills` 导入, 或移除已安装的项目 Skills.
 - 在 Generated 页查看最近一次生成结果. 不要手工改这些文件.
 - 使用当前未保存的 Layer 选择执行 Generate 和 Setup.
 - 在 Settings 页设置生成 `AGENTS.md` 的一级标题, 切换主题.
@@ -200,7 +200,7 @@ Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正�
 
 项目 Skills 放在 `.harness-align/skills/` 下, 每个 skill 一个目录, 并带 `SKILL.md`. `index.json` 记录来源, 不要手工编辑.
 
-桌面应用可以从 Skills 的 Registration 子页面登记 GitHub 仓库, 再从 Library 子页面发现并安装 skill, 也可以从 `%USERPROFILE%\.agents\skills` 导入已有目录. Setup 把已经安装到项目里的 skill 覆盖部署到用户目录.
+桌面应用可以从 Skills 页面的 Registration 弹窗登记 GitHub 仓库, 关闭弹窗后在同一页面发现并安装 skill, 也可以从 `%USERPROFILE%\.agents\skills` 导入已有目录. Setup 把已经安装到项目里的 skill 覆盖部署到用户目录.
 
 没有项目 Skills, 或 `.harness-align/skills/` 里只有 `index.json` 时, skills 部署会跳过并视为成功. shared-rules 仍然必需.
 

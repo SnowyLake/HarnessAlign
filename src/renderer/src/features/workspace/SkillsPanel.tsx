@@ -308,14 +308,6 @@ function SkillSourcesSection({ workspace }: { workspace: Workspace })
     );
 }
 
-/** Render GitHub source registration as its own Skills subpage. */
-export function SkillRegistrationPanel()
-{
-    const workspace = useAppStore((state) => state.workspace);
-    if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
-    return <div className="skills-page"><SkillSourcesSection workspace={workspace} /></div>;
-}
-
 /** Render the complete Ant Design Skills management page. */
 export function SkillsPanel()
 {
@@ -330,6 +322,7 @@ export function SkillsPanel()
     const [selectedRemote, setSelectedRemote] = useState<string[]>([]);
     const [selectedImport, setSelectedImport] = useState<string[]>([]);
     const [isImportOpen, setIsImportOpen] = useState(false);
+    const [isRegistrationOpen, setIsRegistrationOpen] = useState(false);
     const [isOverwriteOpen, setIsOverwriteOpen] = useState(false);
     const [removeId, setRemoveId] = useState<string>();
     const [filter, setFilter] = useState("");
@@ -499,13 +492,14 @@ export function SkillsPanel()
                             ? <Select aria-label="Filter by origin" value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
                             : null}
                         <Space wrap className="skills-toolbar-actions">
+                            <Button icon={<GithubOutlined />} disabled={isBusy} onClick={() => setIsRegistrationOpen(true)}>Registration</Button>
                             <Button icon={<ReloadOutlined />} disabled={isBusy} onClick={handleCheckUpdates}>Check updates</Button>
                             {outdated.length > 0 ? <Button type="primary" disabled={isBusy} onClick={() => handleApplyUpdates(outdated.map((item) => item.id))}>Apply {outdated.length}</Button> : null}
                             <Button icon={<FolderAddOutlined />} disabled={isBusy} onClick={handleImport}>Import</Button>
                             <Button
                                 icon={<SearchOutlined />}
                                 disabled={isBusy || workspace.config.skillSources.length === 0}
-                                title={workspace.config.skillSources.length === 0 ? "Register a GitHub source from Skills > Registration" : undefined}
+                                title={workspace.config.skillSources.length === 0 ? "Use Registration to add a GitHub source" : undefined}
                                 onClick={handleDiscover}
                             >
                                 Discover
@@ -521,6 +515,20 @@ export function SkillsPanel()
                     }} />
                 </div>
             </section>
+
+            <Modal
+                open={isRegistrationOpen}
+                title="Skill registration"
+                width={720}
+                footer={null}
+                destroyOnHidden
+                closable={{ disabled: isBusy }}
+                mask={{ closable: false }}
+                keyboard={!isBusy}
+                onCancel={() => setIsRegistrationOpen(false)}
+            >
+                <SkillSourcesSection workspace={workspace} />
+            </Modal>
 
             <Drawer
                 open={isImportOpen}
