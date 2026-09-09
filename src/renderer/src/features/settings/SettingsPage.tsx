@@ -2,16 +2,15 @@
  * Ant Design desktop preferences page.
  */
 
-import { DesktopOutlined, FileTextOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { DesktopOutlined, FileTextOutlined, GithubOutlined } from "@ant-design/icons";
 import type { ThemeMode } from "@shared/models/AppSettings";
-import { Card, Col, Form, Row, Segmented, Space, Typography } from "antd";
+import { Button, Card, Flex, Segmented, Space, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { showError } from "@/components/common/Feedback";
 import { AgentDocumentTitleForm } from "@/features/workspace/WorkspaceEditor";
 import { useAppStore } from "@/stores/AppStore";
-import { SyncPanel } from "./SyncPanel";
 
-/** Theme choices rendered by the Ant Design select. */
+/** Theme choices rendered by the Ant Design segmented control. */
 const THEME_ITEMS: readonly { label: string; value: ThemeMode }[] = [
     { label: "System", value: "system" },
     { label: "Light", value: "light" },
@@ -31,6 +30,8 @@ export function SettingsPage()
     const theme = useAppStore((state) => state.theme);
     const setTheme = useAppStore((state) => state.setTheme);
     const workspace = useAppStore((state) => state.workspace);
+    const syncStatus = useAppStore((state) => state.syncStatus);
+    const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const [version, setVersion] = useState("");
 
     useEffect(() =>
@@ -41,44 +42,50 @@ export function SettingsPage()
     return (
         <div className="workspace-scroll">
             <div className="settings-page">
-                <Row gutter={[16, 16]}>
-                    <Col span={24}><SyncPanel /></Col>
-                    <Col xs={24} lg={16}>
-                        <Card title="Appearance" extra={<DesktopOutlined />} className="settings-card">
-                            <Form layout="vertical" requiredMark={false}>
-                                <Form.Item label="Theme" extra="System automatically follows the Windows light or dark setting.">
-                                    <Segmented<ThemeMode>
-                                        block
-                                        value={theme}
-                                        options={[...THEME_ITEMS]}
-                                        onChange={(next) =>
-                                        {
-                                            void window.appApi.settings.update({ theme: next }).then((settings) =>
-                                            {
-                                                setTheme(settings.theme);
-                                                applyTheme(settings.theme);
-                                            }).catch((error: unknown) => showError(error instanceof Error ? error.message : String(error)));
-                                        }}
-                                    />
-                                </Form.Item>
-                            </Form>
-                        </Card>
-                    </Col>
-                    <Col xs={24} lg={8}>
-                        <Card title="About" extra={<InfoCircleOutlined />} className="settings-card">
-                            <Space orientation="vertical" size={4}>
-                                <Typography.Text strong>Harness Align Desktop</Typography.Text>
-                                <Typography.Text type="secondary">Version</Typography.Text>
-                                <Typography.Text code>{version || "-"}</Typography.Text>
-                            </Space>
-                        </Card>
-                    </Col>
-                    <Col xs={24} lg={12}>
-                        <Card title="Generated instructions" extra={<FileTextOutlined />} className="settings-card">
-                            {workspace ? <AgentDocumentTitleForm workspace={workspace} /> : <Typography.Text type="secondary">The user workspace is not loaded yet.</Typography.Text>}
-                        </Card>
-                    </Col>
-                </Row>
+                <div>
+                    <Typography.Title level={3} style={{ margin: 0 }}>Settings</Typography.Title>
+                    <Typography.Text type="secondary">Workspace preferences and device connections.</Typography.Text>
+                </div>
+                <Card title={<Space><DesktopOutlined />Appearance</Space>}>
+                    <Flex align="center" justify="space-between" gap={24} wrap>
+                        <div>
+                            <Typography.Text strong>Theme</Typography.Text>
+                            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>Choose a look, or follow your system.</Typography.Paragraph>
+                        </div>
+                        <Segmented<ThemeMode>
+                            aria-label="Theme"
+                            value={theme}
+                            options={[...THEME_ITEMS]}
+                            onChange={(next) =>
+                            {
+                                void window.appApi.settings.update({ theme: next }).then((settings) =>
+                                {
+                                    setTheme(settings.theme);
+                                    applyTheme(settings.theme);
+                                }).catch((error: unknown) => showError(error instanceof Error ? error.message : String(error)));
+                            }}
+                        />
+                    </Flex>
+                </Card>
+                <Card title={<Space><FileTextOutlined />Generated instructions</Space>}>
+                    {workspace ? <AgentDocumentTitleForm workspace={workspace} /> : <Typography.Text type="secondary">The user workspace is not loaded yet.</Typography.Text>}
+                </Card>
+                <Card title={<Space><GithubOutlined />GitHub connection</Space>}>
+                    <Flex align="center" justify="space-between" gap={24} wrap>
+                        <Space orientation="vertical" size={4} style={{ minWidth: 0, flex: "1 1 280px" }}>
+                            <Typography.Text strong style={{ overflowWrap: "anywhere" }}>
+                                {syncStatus?.connected ? `${syncStatus.owner}/${syncStatus.repository}` : "No repository connected"}
+                            </Typography.Text>
+                            <Typography.Text type="secondary">
+                                {syncStatus?.connected ? `Branch: ${syncStatus.branch} · Last synced: ${syncStatus.lastSyncedAt ? new Date(syncStatus.lastSyncedAt).toLocaleString() : "Not yet"}`
+                                    : "Connect a private repository to sync configuration across devices."}
+                            </Typography.Text>
+                            <Typography.Text type="secondary">Use Sync in the top bar to review and sync changes.</Typography.Text>
+                        </Space>
+                        <Button onClick={() => setSyncDialog("connection")}>{syncStatus?.connected ? "Manage connection" : "Connect GitHub"}</Button>
+                    </Flex>
+                </Card>
+                <Typography.Text type="secondary" className="settings-about">Harness Align Desktop · Version {version || "-"}</Typography.Text>
             </div>
         </div>
     );

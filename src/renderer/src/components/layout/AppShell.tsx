@@ -13,11 +13,13 @@ import {
     RocketOutlined,
     SaveOutlined,
     SettingOutlined,
+    SyncOutlined,
     ThunderboltOutlined,
 } from "@ant-design/icons";
 import { Badge, Button, Flex, Layout, Menu, Modal, Space, Spin, Tooltip, Typography, type MenuProps } from "antd";
 import { useState, type ReactNode } from "react";
 import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
+import { SyncPanel } from "@/features/settings/SyncPanel";
 
 const { Header, Sider, Content } = Layout;
 
@@ -58,6 +60,7 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
     const isBusy = useAppStore((state) => state.isBusy);
     const hasSourceDrafts = useAppStore((state) => Object.keys(state.editorDrafts).length > 0);
     const setOutputDialogOpen = useAppStore((state) => state.setOutputDialogOpen);
+    const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const dirtyCount = useAppStore(workspaceChangeCount);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
     const currentNav = view === "settings" || view === "showcase" ? undefined : WORKSPACE_NAV_ITEMS[view];
@@ -109,6 +112,10 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
                     <Tooltip title="Save all changes (Ctrl+S)">
                         <Button classNames={topbarButtonClassNames} icon={<SaveOutlined />} disabled={!workspace || isBusy || dirtyCount === 0} aria-label="Save all changes" aria-keyshortcuts="Control+S" onClick={onSave}>Save</Button>
                     </Tooltip>
+                    <Tooltip title={dirtyCount > 0 ? "Save all changes before syncing" : "Preview and sync configuration"}>
+                        <Button classNames={topbarButtonClassNames} icon={<SyncOutlined />} disabled={!workspace || isBusy || dirtyCount > 0}
+                                aria-label="Sync configuration" onClick={() => setSyncDialog("review")}>Sync</Button>
+                    </Tooltip>
                     <Space.Compact>
                         <Tooltip title={hasSourceDrafts ? "Save source changes before generating" : "Generate"}>
                             <Button classNames={topbarButtonClassNames} type="primary" icon={<BuildOutlined />} disabled={!workspace || isBusy || hasSourceDrafts} aria-label="Generate" onClick={onGenerate}>Generate</Button>
@@ -142,6 +149,7 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
                     <Content className="app-content" inert={isBusy} aria-busy={isBusy} aria-label={pageLabel}>{children}</Content>
                 </Layout>
             </Layout>
+            <SyncPanel />
             <Modal
                 open={isSetupOpen}
                 title="Run Setup?"

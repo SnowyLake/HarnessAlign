@@ -1,10 +1,10 @@
 /** Manual private-repository sync with reviewed first-use adoption and explicit conflict choices. */
 
-import { GithubOutlined, SyncOutlined } from "@ant-design/icons";
+import { SyncOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Col, Form, Input, Modal, Row, Select, Space, Table, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
-import type { SyncApplyInput, SyncChange, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileView, SyncStatus } from "@shared/models/Sync";
+import type { SyncApplyInput, SyncChange, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileView } from "@shared/models/Sync";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 
 /** Render bounded text and binary metadata without interpreting remote content as HTML. */
@@ -34,11 +34,14 @@ async function reloadSyncedWorkspace(): Promise<void>
     state.setWorkspace(workspace);
 }
 
-/** Configure GitHub sync and review changes through the typed Main capability. */
+/** Keep one sync controller mounted across navigation and workspace refreshes. */
 export function SyncPanel()
 {
     const [form] = Form.useForm<SyncConnectionInput>();
-    const [status, setStatus] = useState<SyncStatus>();
+    const status = useAppStore((state) => state.syncStatus);
+    const setStatus = useAppStore((state) => state.setSyncStatus);
+    const dialog = useAppStore((state) => state.syncDialog);
+    const setDialog = useAppStore((state) => state.setSyncDialog);
     const preview = useAppStore((state) => state.syncPreview);
     const setPreview = useAppStore((state) => state.setSyncPreview);
     const [choices, setChoices] = useState<Record<string, SyncChoice>>({});
@@ -49,6 +52,7 @@ export function SyncPanel()
     const isBusy = useAppStore((state) => state.isBusy);
     const dirtyCount = useAppStore(workspaceChangeCount);
     const unresolved = preview?.changes.filter((change) => change.direction === "conflict" && !choices[change.key]).length ?? 0;
+    const isConnection = dialog === "connection" || !status?.connected;
 
     useEffect(() =>
     {
@@ -57,7 +61,23 @@ export function SyncPanel()
             setStatus(next);
             if (next.connected) form.setFieldsValue({ owner: next.owner, repository: next.repository, branch: next.branch });
         }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
-    }, [form]);
+    }, [form, setStatus]);
+
+    useEffect(() =>
+    {
+        if (dialog === "review" && status?.connected) void run(handlePreview);
+    }, [dialog, status?.connected]);
+
+    /** Close the dialog without retaining a credential typed into an unfinished form. */
+    function handleClose(): void
+    {
+        if (useAppStore.getState().isBusy) return;
+        form.setFieldValue("token", "");
+        setIsConnecting(false);
+        setDetail(undefined);
+        setError("");
+        setDialog(undefined);
+    }
 
     /** Share the existing busy boundary so editors cannot mutate files during a sync operation. */
     async function run(work: () => Promise<void>): Promise<void>
@@ -106,6 +126,7 @@ export function SyncPanel()
             await reloadSyncedWorkspace();
             setStatus(result.status);
             useAppStore.getState().setOutput(result.message, "success", "GitHub Sync complete");
+            setDialog(undefined);
         }
         finally
         {
@@ -114,103 +135,111 @@ export function SyncPanel()
     }
 
     return (
-        <Card title="GitHub Sync" extra={<GithubOutlined />} className="settings-card">
-            <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-                <Typography.Paragraph style={{ marginBottom: 0 }}>
-                    Sync saved configuration and installed Skills between devices using a private GitHub repository. Each device runs Setup separately.
-                </Typography.Paragraph>
-                {error ? <Alert type="error" showIcon title={error} /> : null}
-                {status?.connected ? (
-                    <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-                        <Typography.Text strong>{status.owner}/{status.repository} · {status.branch}</Typography.Text>
-                        <Typography.Text type="secondary">Last synced: {status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString() : "Not yet synced"}</Typography.Text>
-                        <Space wrap>
-                            <Button icon={<SyncOutlined />} disabled={isBusy || dirtyCount > 0} onClick={() => void run(handlePreview)}>Preview changes</Button>
-                            <Button disabled={isBusy} onClick={() => setIsConnecting(!isConnecting)}>Update connection</Button>
-                            <Button disabled={isBusy} onClick={() => void run(async () =>
-                            {
-                                setStatus(await window.appApi.sync.disconnect());
-                                setPreview(undefined);
-                                setIsConnecting(false);
-                                form.setFieldValue("token", "");
-                            })}>Disconnect</Button>
-                        </Space>
-                    </Space>
-                ) : null}
-                {!status?.connected || isConnecting ? (
-                    <Form form={form} layout="vertical" initialValues={{ branch: "main" }} requiredMark={false} disabled={isBusy} onFinish={(values) => void run(async () =>
-                    {
-                        try
-                        {
-                            setStatus(await window.appApi.sync.connect(values));
-                            setPreview(undefined);
-                            setIsConnecting(false);
-                        }
-                        finally
-                        {
-                            form.setFieldValue("token", "");
-                        }
-                    })}>
-                        <Row gutter={16}>
-                            <Col xs={24} md={8}><Form.Item name="owner" label="Owner" rules={[{ required: true }]}><Input autoComplete="off" placeholder="GitHub username" /></Form.Item></Col>
-                            <Col xs={24} md={8}>
-                                <Form.Item name="repository" label="Private repository" rules={[{ required: true }]}><Input autoComplete="off" placeholder="harness-align-config" /></Form.Item>
-                            </Col>
-                            <Col xs={24} md={8}><Form.Item name="branch" label="Existing branch" rules={[{ required: true }]}><Input autoComplete="off" /></Form.Item></Col>
-                        </Row>
-                        <Form.Item name="token" label="Fine-grained personal access token" rules={[{ required: true }]}
-                                   extra="Select only this repository with Contents: Read and write. The token is encrypted on this device and is never synced.">
-                            <Input.Password autoComplete="new-password" />
-                        </Form.Item>
-                        <Typography.Paragraph type="secondary">
-                            Create a private repository with a README first. Sync uses its harness-align/ directory and preserves other repository files.
-                        </Typography.Paragraph>
-                        <Button type="primary" htmlType="submit" loading={isBusy}>{status?.connected ? "Save connection" : "Connect"}</Button>
-                    </Form>
-                ) : null}
-                {dirtyCount > 0 ? <Alert type="warning" showIcon title="Save or discard workspace drafts before previewing or applying sync." /> : null}
-                {status?.hasPendingUpload ? <Alert type="warning" showIcon title="An earlier sync needs recovery. Preview changes to check its remote result before retrying." /> : null}
-                {preview ? (
+        <>
+            <Modal open={dialog !== undefined} title={isConnection ? "GitHub connection" : "Sync configuration"} width={isConnection ? 680 : 1000}
+                   forceRender onCancel={handleClose} closable={!isBusy} styles={{ body: { maxHeight: "65vh", overflowY: "auto" } }}
+                   footer={!isConnection && status?.connected ? (
+                       <Space wrap>
+                           <Button disabled={isBusy} onClick={handleClose}>Close</Button>
+                           <Button disabled={isBusy || dirtyCount > 0} loading={isBusy} onClick={() => void run(handlePreview)}>Refresh preview</Button>
+                           <Button type="primary" icon={<SyncOutlined />} disabled={!preview || isBusy || dirtyCount > 0 || mode === "merge" && unresolved > 0}
+                                   onClick={() => void run(handleApply)}>Sync now</Button>
+                       </Space>
+                   ) : null}>
+                <div inert={isBusy} aria-busy={isBusy}>
                     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-                        {preview.notice ? <Alert type="info" showIcon title={preview.notice} /> : null}
-                        {preview.firstSync && !preview.remoteEmpty ? (
-                            <Form layout="vertical" requiredMark={false}>
-                                <Form.Item label="First sync" extra="Merge combines independent changes. Adopting one side also applies its deletions after you click Sync now.">
-                                    <Select value={mode} onChange={setMode} aria-label="First sync strategy" options={[
-                                        { value: "merge", label: "Merge local and remote" },
-                                        { value: "local", label: "Use this device's complete configuration" },
-                                        { value: "remote", label: "Use the remote's complete configuration" },
-                                    ]} />
+                        <Typography.Paragraph style={{ marginBottom: 0 }}>
+                            Sync saved configuration and installed Skills between devices using a private GitHub repository. Each device runs Setup separately.
+                        </Typography.Paragraph>
+                        {error ? <Alert type="error" showIcon title={error} /> : null}
+                        {status?.connected ? (
+                            <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                                <Typography.Text strong>{status.owner}/{status.repository} · {status.branch}</Typography.Text>
+                                <Typography.Text type="secondary">Last synced: {status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString() : "Not yet synced"}</Typography.Text>
+                                {isConnection ? <Space wrap>
+                                    <Button disabled={isBusy} onClick={() => setIsConnecting(!isConnecting)}>Update connection</Button>
+                                    <Button danger disabled={isBusy} onClick={() => void run(async () =>
+                                    {
+                                        setStatus(await window.appApi.sync.disconnect());
+                                        setPreview(undefined);
+                                        setIsConnecting(false);
+                                        form.setFieldValue("token", "");
+                                    })}>Disconnect</Button>
+                                </Space> : null}
+                            </Space>
+                        ) : null}
+                        {isConnection && (!status?.connected || isConnecting) ? (
+                            <Form form={form} layout="vertical" initialValues={{ branch: "main" }} requiredMark={false} disabled={isBusy} onFinish={(values) => void run(async () =>
+                            {
+                                try
+                                {
+                                    setStatus(await window.appApi.sync.connect(values));
+                                    setPreview(undefined);
+                                    setIsConnecting(false);
+                                    setDialog(undefined);
+                                }
+                                finally
+                                {
+                                    form.setFieldValue("token", "");
+                                }
+                            })}>
+                                <Row gutter={16}>
+                                    <Col xs={24} md={8}><Form.Item name="owner" label="Owner" rules={[{ required: true }]}><Input autoComplete="off" placeholder="GitHub username" /></Form.Item></Col>
+                                    <Col xs={24} md={8}>
+                                        <Form.Item name="repository" label="Private repository" rules={[{ required: true }]}><Input autoComplete="off" placeholder="harness-align-config" /></Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={8}><Form.Item name="branch" label="Existing branch" rules={[{ required: true }]}><Input autoComplete="off" /></Form.Item></Col>
+                                </Row>
+                                <Form.Item name="token" label="Fine-grained personal access token" rules={[{ required: true }]}
+                                           extra="Select only this repository with Contents: Read and write. The token is encrypted on this device and is never synced.">
+                                    <Input.Password autoComplete="new-password" />
                                 </Form.Item>
+                                <Typography.Paragraph type="secondary">
+                                    Create a private repository with a README first. Sync uses its harness-align/ directory and preserves other repository files.
+                                </Typography.Paragraph>
+                                <Button type="primary" htmlType="submit" loading={isBusy}>{status?.connected ? "Save connection" : "Connect"}</Button>
                             </Form>
                         ) : null}
-                        <Typography.Text>{preview.uploadCount} pending upload groups · {preview.downloadCount} pending download groups · {unresolved} unresolved conflicts</Typography.Text>
-                        {mode !== "merge" ? <Alert type="warning" showIcon title={mode === "local"
-                            ? "The remote configuration will be replaced by this device's configuration."
-                            : "This device's configuration will be replaced by the remote configuration. A local backup is kept."} /> : null}
-                        <Table<SyncChange> size="small" rowKey="key" dataSource={preview.changes} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 620 }} columns={[
-                            { title: "Source", dataIndex: "key", render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
-                            { title: "Change", dataIndex: "direction" },
-                            { title: "Decision", render: (_, change) => change.direction === "conflict" ? (
-                                <Select<SyncChoice> aria-label={`Resolve ${change.key}`} placeholder="Choose a version" value={choices[change.key] ?? null} disabled={mode !== "merge"}
-                                                    style={{ minWidth: 170 }} onChange={(value) => setChoices((current) => ({ ...current, [change.key]: value }))}
-                                                    options={[{ value: "local", label: "Keep local" }, { value: "remote", label: "Keep remote" }]} />
-                            ) : <Typography.Text type="secondary">Automatic</Typography.Text> },
-                            { title: "Compare", render: (_, change) => (
-                                <Button type="link" onClick={() => void run(async () => setDetail({ key: change.key, content: await window.appApi.sync.inspect(preview.id, change.key) }))}>
-                                    View versions
-                                </Button>
-                            ) },
-                        ]} />
-                        <Space wrap>
-                            <Button type="primary" icon={<SyncOutlined />} disabled={isBusy || dirtyCount > 0 || mode === "merge" && unresolved > 0} onClick={() => void run(handleApply)}>
-                                Sync now
-                            </Button>
-                            <Button disabled={isBusy} onClick={() => setPreview(undefined)}>Cancel preview</Button>
-                        </Space>
+                        {dirtyCount > 0 ? <Alert type="warning" showIcon title="Save or discard workspace drafts before previewing or applying sync." /> : null}
+                        {status?.hasPendingUpload ? <Alert type="warning" showIcon title="An earlier sync needs recovery. Open Sync from the top bar to check its remote result before retrying." /> : null}
+                        {!isConnection && preview ? (
+                            <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                                {preview.notice ? <Alert type="info" showIcon title={preview.notice} /> : null}
+                                {preview.firstSync && !preview.remoteEmpty ? (
+                                    <Form layout="vertical" requiredMark={false}>
+                                        <Form.Item label="First sync" extra="Merge combines independent changes. Adopting one side also applies its deletions after you click Sync now.">
+                                            <Select value={mode} onChange={setMode} aria-label="First sync strategy" options={[
+                                                { value: "merge", label: "Merge local and remote" },
+                                                { value: "local", label: "Use this device's complete configuration" },
+                                                { value: "remote", label: "Use the remote's complete configuration" },
+                                            ]} />
+                                        </Form.Item>
+                                    </Form>
+                                ) : null}
+                                <Typography.Text>{preview.uploadCount} pending upload groups · {preview.downloadCount} pending download groups · {unresolved} unresolved conflicts</Typography.Text>
+                                {mode !== "merge" ? <Alert type="warning" showIcon title={mode === "local"
+                                    ? "The remote configuration will be replaced by this device's configuration."
+                                    : "This device's configuration will be replaced by the remote configuration. A local backup is kept."} /> : null}
+                                <Table<SyncChange> size="small" rowKey="key" dataSource={preview.changes.filter((change) => change.direction !== "same")}
+                                                   locale={{ emptyText: "Configuration is up to date" }} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 620 }} columns={[
+                                    { title: "Source", dataIndex: "key", render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
+                                    { title: "Change", dataIndex: "direction" },
+                                    { title: "Decision", render: (_, change) => change.direction === "conflict" ? (
+                                        <Select<SyncChoice> aria-label={`Resolve ${change.key}`} placeholder="Choose a version" value={choices[change.key] ?? null} disabled={mode !== "merge"}
+                                                            style={{ minWidth: 170 }} onChange={(value) => setChoices((current) => ({ ...current, [change.key]: value }))}
+                                                            options={[{ value: "local", label: "Keep local" }, { value: "remote", label: "Keep remote" }]} />
+                                    ) : <Typography.Text type="secondary">Automatic</Typography.Text> },
+                                    { title: "Compare", render: (_, change) => (
+                                        <Button type="link" onClick={() => void run(async () => setDetail({ key: change.key, content: await window.appApi.sync.inspect(preview.id, change.key) }))}>
+                                            View versions
+                                        </Button>
+                                    ) },
+                                ]} />
+                            </Space>
+                        ) : null}
                     </Space>
-                ) : null}
-            </Space>
+                </div>
+            </Modal>
             <Modal open={Boolean(detail)} title={`Compare: ${detail?.key ?? ""}`} width={1000} footer={null} onCancel={() => setDetail(undefined)} destroyOnHidden>
                 <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
                     {detail?.content.files.length === 0 ? <Typography.Text>This change adds or removes an empty directory.</Typography.Text> : null}
@@ -228,6 +257,6 @@ export function SyncPanel()
                     ) : null}
                 </Space>
             </Modal>
-        </Card>
+        </>
     );
 }

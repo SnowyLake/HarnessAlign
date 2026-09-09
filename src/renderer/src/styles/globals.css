@@ -156,7 +156,18 @@ select {
 }
 
 .settings-page {
-    width: min(100% - 48px, 1040px);
+    display: flex;
+    width: min(100% - 48px, 860px);
+    flex-direction: column;
+    gap: 20px;
+}
+
+.settings-page .ant-form-item:last-child {
+    margin-bottom: 0;
+}
+
+.settings-about {
+    text-align: center;
 }
 
 .showcase-page {
@@ -323,10 +334,6 @@ select {
 
 .skill-source-form {
     margin-top: 16px;
-}
-
-.settings-card {
-    height: 100%;
 }
 
 .workspace-tree {

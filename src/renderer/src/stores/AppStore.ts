@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import type { ThemeMode } from "@shared/models/AppSettings";
 import type { LayerSelection, Workspace } from "@shared/models/Workspace";
-import type { SyncPreview } from "@shared/models/Sync";
+import type { SyncPreview, SyncStatus } from "@shared/models/Sync";
 
 /** Workspace modules available from the primary navigation. */
 export type WorkspaceView = "project" | "rules" | "shared-rules" | "layers" | "skills" | "skill-registration" | "agents" | "generated";
@@ -195,6 +195,8 @@ interface AppState
     view: AppView;
     workspace: Workspace | undefined;
     syncPreview: SyncPreview | undefined;
+    syncStatus: SyncStatus | undefined;
+    syncDialog: "review" | "connection" | undefined;
     selection: Selection;
     layerSelection: LayerSelection[];
     output: string;
@@ -211,6 +213,8 @@ interface AppState
     setView: (view: AppView) => void;
     setWorkspace: (workspace: Workspace | undefined) => void;
     setSyncPreview: (preview: SyncPreview | undefined) => void;
+    setSyncStatus: (status: SyncStatus) => void;
+    setSyncDialog: (dialog: "review" | "connection" | undefined) => void;
     setSelection: (selection: Selection) => void;
     setLayerSelection: (selection: LayerSelection[]) => void;
     setOutput: (output: string, tone: OutputTone, title: string) => void;
@@ -239,6 +243,8 @@ export const useAppStore = create<AppState>((set) => ({
     view: "project",
     workspace: undefined,
     syncPreview: undefined,
+    syncStatus: undefined,
+    syncDialog: undefined,
     selection: { kind: "config" },
     layerSelection: [],
     output: "No command output yet.",
@@ -289,6 +295,8 @@ export const useAppStore = create<AppState>((set) => ({
     setIsBusy: (isBusy) => set({ isBusy }),
     setTheme: (theme) => set({ theme }),
     setSyncPreview: (syncPreview) => set({ syncPreview }),
+    setSyncStatus: (syncStatus) => set({ syncStatus }),
+    setSyncDialog: (syncDialog) => set({ syncDialog }),
     setEditorDraft: (key, draft) => set((state) =>
     {
         const editorDrafts = { ...state.editorDrafts };
