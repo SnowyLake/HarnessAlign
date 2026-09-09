@@ -15,6 +15,7 @@ import {
     SYNC_MAX_ENTRIES, SYNC_MAX_FILE_BYTES, SYNC_MAX_TOTAL_BYTES, type SyncSnapshot,
 } from "../../engine/Sync.js";
 import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncFileView, SyncPreview, SyncResult, SyncStatus } from "../../shared/models/Sync.js";
+import { fetchRemote } from "./RemoteFetch.js";
 
 /** Stored connection includes only an OS-encrypted token. */
 interface SyncConnection
@@ -164,9 +165,10 @@ async function github(connection: SyncConnection, token: string, path: string, m
 {
     if (!token || token.length > 1024 || /\s/u.test(token)) throw new HalignError("GitHub token: expected a non-empty personal access token without whitespace");
     const url = `https://api.github.com/repos/${encodeURIComponent(connection.owner)}/${encodeURIComponent(connection.repository)}${path}`;
+    const signal = AbortSignal.timeout(60_000);
     try
     {
-        const response = await fetch(url, {
+        const response = await fetchRemote(url, {
             method,
             headers: {
                 Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2026-03-10",
@@ -174,7 +176,7 @@ async function github(connection: SyncConnection, token: string, path: string, m
             },
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
             redirect: "error",
-            signal: AbortSignal.timeout(60_000),
+            signal,
         });
         if (!response.ok)
         {
@@ -207,7 +209,13 @@ async function github(connection: SyncConnection, token: string, path: string, m
     catch (error)
     {
         if (error instanceof HalignError) throw error;
-        throw new HalignError(`GitHub ${method} ${path || "/"}: network, timeout, redirect, or response failure; check connectivity and proxy settings, then preview again`);
+        const cause = error instanceof Error ? error.cause : undefined;
+        const code = cause instanceof Error && "code" in cause && typeof cause.code === "string" ? cause.code
+            : error instanceof Error ? error.message.match(/\bnet::ERR_[A-Z_]+\b/u)?.[0] : undefined;
+        const safeCode = code && code.length <= 80 && /^(?:E[A-Z_]+|UND_ERR_[A-Z_]+|net::ERR_[A-Z_]+)$/u.test(code) ? code.replaceAll(token, "[redacted]") : undefined;
+        const detail = signal.aborted ? "request timed out after 60s" : error instanceof SyntaxError ? "invalid JSON response"
+            : `network failure${safeCode ? ` (${safeCode})` : ""}`;
+        throw new HalignError(`GitHub ${method} ${path || "/"}: ${detail}; check connectivity and proxy settings, then preview again`);
     }
 }
 

@@ -18,6 +18,7 @@ import {
     readSkillFrontmatter,
 } from "../../engine/Skills.js";
 import type { RemoteSkill, SkillUpdate } from "../../shared/models/Workspace.js";
+import { fetchRemote } from "./RemoteFetch.js";
 
 /** Compressed zip size limit (128 MiB). */
 const MAX_COMPRESSED_BYTES = 128 * 1024 * 1024;
@@ -79,7 +80,7 @@ async function fetchZip(owner: string, name: string, branch: string): Promise<Ui
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try
     {
-        const response = await fetch(url, {
+        const response = await fetchRemote(url, {
             signal: controller.signal,
             headers: { "User-Agent": "HarnessAlign/1.0", Accept: "application/zip" },
             redirect: "follow",

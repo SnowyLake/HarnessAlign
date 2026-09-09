@@ -75,7 +75,7 @@ Harness 编辑面板的 Save harness 只保存当前项. 关闭面板会保留�
 
 桌面应用不创建 `%USERPROFILE%` 下缺失的 Harness 根目录. Setup 只复制已经安装到 `.harness-align/skills/` 的 Skills.
 
-Skills 下载使用启动时的 `HTTP_PROXY`, `HTTPS_PROXY` 和 `NO_PROXY` 环境变量. 网络失败会报告原分支和底层连接原因, 单次下载超过 60 秒会超时; 只有 `main` 或 `master` 返回 HTTP 404 时才尝试另一个分支. 修改代理环境变量后需重新启动应用.
+Skills 下载和 GitHub 同步默认使用 Windows 系统代理, 包括自动代理配置. 启动时显式设置 `HTTP_PROXY` 或 `HTTPS_PROXY` 时, 优先使用环境变量代理, 并遵守 `NO_PROXY`. 网络失败会报告连接错误码, 单次请求超过 60 秒会超时; Skills 下载只有在 `main` 或 `master` 返回 HTTP 404 时才尝试另一个分支. 修改代理环境变量后需重新启动应用.
 
 Setup 先准备完整的替换内容, 再更新部署目标. 替换失败时尝试恢复原文件, 错误输出会指出未能恢复的目标和备份位置.
 

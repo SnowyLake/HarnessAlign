@@ -416,6 +416,49 @@ test("sync rejects a linked source scope without touching its target", async () 
     });
 });
 
+test("GitHub sync reports transport codes without exposing credentials or response bodies", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const directory = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-secret-token" };
+        const failures = [
+            { error: new TypeError(input.token, { cause: Object.assign(new Error("proxy credentials"), { code: "UND_ERR_CONNECT_TIMEOUT" }) }), expected: /network failure \(UND_ERR_CONNECT_TIMEOUT\)/u },
+            { error: new Error(`net::ERR_PROXY_CONNECTION_FAILED ${input.token}`), expected: /network failure \(net::ERR_PROXY_CONNECTION_FAILED\)/u },
+            { error: null, expected: /invalid JSON response/u },
+        ];
+        let current = failures[0]!;
+        const mocked = t.mock.method(globalThis, "fetch", async (_url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) =>
+        {
+            assert.equal(init?.redirect, "error");
+            assert.ok(init?.signal);
+            if (current.error) throw current.error;
+            return new Response(input.token);
+        });
+        try
+        {
+            for (const failure of failures)
+            {
+                current = failure;
+                await assert.rejects(connectSync(directory, input, "encrypted-test-credential"), (error: unknown) =>
+                {
+                    assert.ok(error instanceof Error);
+                    assert.match(error.message, failure.expected);
+                    assert.ok(!error.message.includes(input.token));
+                    assert.ok(!error.message.includes("proxy credentials"));
+                    return true;
+                });
+            }
+            assert.equal(mocked.mock.callCount(), failures.length);
+            assert.equal((await getSyncStatus(directory)).connected, false);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
 test("GitHub sync round-trips two devices, binary skills, empty layers, and independent edits", async (t) =>
 {
     await withProject(async (first) => withProject(async (second) =>
