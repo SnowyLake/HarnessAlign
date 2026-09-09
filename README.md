@@ -58,7 +58,7 @@ Generate 和 Setup 使用当前 Layer 顺序与选项. 有未保存的源文件�
 窗口可以:
 
 - 自动加载当前用户配置. 配置根目录固定, 界面不显示或提供修改入口.
-- 在 Harnesses 页通过紧凑列表查看名称, 配置路径和 Subagent 文件格式, 点击 Edit 在侧边面板中编辑单个 Harness, 或使用 Add harness 新建. 路径相对当前用户目录, Setup 跳过尚不存在的目标目录.
+- 在 Harnesses 页通过居中单列卡片查看名称和配置路径, 点击 Edit 在侧边面板中编辑单个 Harness, 或使用 Add harness 新建. 路径相对当前用户目录, Setup 跳过尚不存在的目标目录.
 - 在 Layers 页按 Group 管理 Layer 及其选项. Group 开关控制是否参与生成, Generate option 选择生成时使用的选项, 拖动 Group 名称或点击上下箭头调整顺序. 启用的 Group 按生成顺序排列, 未启用的 Group 排在后面. Add layer 创建空 Group, 添加 Option 后才能启用.
 - 在 Rules 的 Inline 子页面编辑参与 `AGENTS.md` 的根规则, 在 Shared 子页面编辑独立部署的 shared-rules. Rule 和 Layer Option 的 Targets 都是严格白名单, 未选择任何 Harness 时不会对任何 Harness 生效.
 - 在 Agents 页编辑共享正文, 按 Harness 切换原生 metadata, 并通过 Enable 选择需要生成该 Agent 的 Harness.
@@ -71,7 +71,7 @@ Settings 页的 `AGENTS.md title` 只控制生成文档的一级标题. 点击�
 
 关闭 Group 开关会立即移出当前生成序列, 保留源文件和编辑能力. 操作反馈统一显示在顶部; 点击生成或部署提示, 或顶部 Output 图标可查看完整输出. 工作区加载失败时可点击 Retry 重试.
 
-Harness 编辑面板的 Save harness 只保存当前项. 关闭面板会保留草稿, 列表用 Unsaved 标记未保存项; Discard changes 放弃当前草稿. 新建草稿关闭后可通过 Continue new harness 继续编辑. 删除操作位于编辑面板内, 并需要再次确认. 保存 Harness 后再运行 Generate 或 Setup.
+Harness 编辑面板的 Save harness 只保存当前项. 关闭面板会保留草稿, 卡片用 Unsaved 标记未保存项; Discard changes 放弃当前草稿. 新建草稿关闭后可通过 Continue new harness 继续编辑. 删除操作位于编辑面板内, 并需要再次确认. 保存 Harness 后再运行 Generate 或 Setup.
 
 桌面应用不创建 `%USERPROFILE%` 下缺失的 Harness 根目录. Setup 只复制已经安装到 `.harness-align/skills/` 的 Skills.
 

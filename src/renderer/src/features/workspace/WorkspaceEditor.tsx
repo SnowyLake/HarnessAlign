@@ -2,9 +2,9 @@
  * Ant Design workspace editors that preserve native FormData drafts and Main-process path validation.
  */
 
-import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, FolderOutlined, InfoCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import type { HarnessConfig, Workspace } from "@shared/models/Workspace";
-import { Alert, Button, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Tabs, Tag, Typography } from "antd";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
@@ -735,61 +735,35 @@ export function HarnessesPanel()
             <Flex align="center" justify="space-between" gap={16} wrap>
                 <div>
                     <Typography.Title level={3} className="harnesses-title">Harnesses <Typography.Text type="secondary">({workspace.config.harnesses.length})</Typography.Text></Typography.Title>
+                    <Typography.Text type="secondary">Manage where your assistants receive rules and agent files.</Typography.Text>
                 </div>
                 <Button type="primary" icon={<PlusOutlined />} disabled={isBusy} onClick={() => openEditor({ kind: "harness-new" })}>
                     {drafts["harness-new"] ? "Continue new harness" : "Add harness"}
                 </Button>
             </Flex>
-            <div className="harnesses-table">
-                <Table<HarnessConfig>
-                    rowKey="name"
-                    size="middle"
-                    pagination={false}
-                    dataSource={workspace.config.harnesses}
-                    scroll={{ x: 640 }}
-                    columns={[
-                        {
-                            title: "Harness",
-                            key: "name",
-                            width: "24%",
-                            render: (_, harness) => (
-                                <Space wrap>
-                                    <Typography.Text strong className="break-anywhere">{harness.name}</Typography.Text>
-                                    {drafts[selectionKey({ kind: "harness", name: harness.name })] ? <Tag color="gold">Unsaved</Tag> : null}
-                                </Space>
-                            ),
-                        },
-                        {
-                            title: "Config path",
-                            key: "path",
-                            render: (_, harness) => <Typography.Text className="break-anywhere">{harness.configPath}</Typography.Text>,
-                        },
-                        {
-                            title: "Agent files",
-                            key: "format",
-                            width: 230,
-                            render: (_, harness) => (
-                                <Space><Tag>.{harness.agentExtension}</Tag><Typography.Text type="secondary">{harness.agentFormat === "toml" ? "TOML" : "YAML metadata"}</Typography.Text></Space>
-                            ),
-                        },
-                        {
-                            title: "Action",
-                            key: "edit",
-                            width: 100,
-                            fixed: "right",
-                            render: (_, harness) => (
-                                <Button
-                                    type="text"
-                                    icon={<EditOutlined />}
-                                    disabled={isBusy}
-                                    aria-label={`Edit ${harness.name}`}
-                                    onClick={() => openEditor({ kind: "harness", name: harness.name })}
-                                >Edit</Button>
-                            ),
-                        },
-                    ]}
-                />
+            <div className="harnesses-grid">
+                {workspace.config.harnesses.map((harness) => (
+                    <Card key={harness.name} className="harness-card" classNames={{ body: "harness-card-body" }}>
+                        <div className="harness-card-header">
+                            <span className="harness-card-mark" aria-hidden="true">{harness.name.slice(0, 2).toUpperCase()}</span>
+                            <div className="harness-card-heading">
+                                <Typography.Title level={4} className="harness-card-name">{harness.name}</Typography.Title>
+                                {drafts[selectionKey({ kind: "harness", name: harness.name })] ? <Tag color="gold">Unsaved</Tag> : null}
+                            </div>
+                            <Button icon={<EditOutlined />} disabled={isBusy} aria-label={`Edit ${harness.name}`} onClick={() => openEditor({ kind: "harness", name: harness.name })}>
+                                Edit
+                            </Button>
+                        </div>
+                        <dl className="harness-card-details">
+                            <dt>Config path</dt>
+                            <dd className="harness-card-path"><FolderOutlined aria-hidden="true" /><code>{harness.configPath}</code></dd>
+                        </dl>
+                    </Card>
+                ))}
             </div>
+            <Typography.Text type="secondary" className="harnesses-note">
+                <InfoCircleOutlined aria-hidden="true" /> Paths are relative to your user home. Setup skips directories that do not exist yet.
+            </Typography.Text>
             <Drawer
                 title={selectedHarness ? `Edit ${selectedHarness.name}` : "New harness"}
                 open={isEditorOpen}
