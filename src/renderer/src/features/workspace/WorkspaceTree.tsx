@@ -2,7 +2,7 @@
 
 import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
 import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, PlusOutlined, RightOutlined, SaveOutlined } from "@ant-design/icons";
-import { Badge, Button, Collapse, Divider, Dropdown, Empty, Input, Modal, Popover, Select, Switch, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
+import { Badge, Button, Collapse, Dropdown, Empty, Input, Modal, Popover, Select, Switch, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
 import { useEffect, useState } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation, saveRenamedSource } from "@/features/workspace/WorkspaceTasks";
@@ -295,11 +295,10 @@ interface LayerGroupEditorProps
 {
     name: string;
     isBusy: boolean;
-    onAddOption: () => void;
 }
 
 /** Edit one Layer group without replacing the option editor. */
-function LayerGroupEditor({ name, isBusy, onAddOption }: LayerGroupEditorProps)
+function LayerGroupEditor({ name, isBusy }: LayerGroupEditorProps)
 {
     const [isOpen, setIsOpen] = useState(false);
     const [isDeleteOpen, setIsDeleteOpen] = useState(false);
@@ -368,21 +367,6 @@ function LayerGroupEditor({ name, isBusy, onAddOption }: LayerGroupEditorProps)
                 <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={isRenaming} disabled={isBusy || !nextName.trim()} aria-label="Save layer name" />
             </form>
             <div className="workspace-layer-popover-actions">
-                <Button
-                    type="text"
-                    block
-                    icon={<PlusOutlined />}
-                    disabled={isBusy}
-                    styles={{ root: { justifyContent: "flex-start" } }}
-                    onClick={() =>
-                    {
-                        setIsOpen(false);
-                        onAddOption();
-                    }}
-                >
-                    Add option
-                </Button>
-                <Divider styles={{ root: { margin: "4px 0" } }} />
                 <Button
                     type="text"
                     danger
@@ -547,15 +531,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                             }}
                         />
                     </Tooltip>
-                    <LayerGroupEditor
-                        name={layerName}
-                        isBusy={isBusy}
-                        onAddOption={() =>
-                        {
-                            setOpenLayerNames((current) => current.includes(layerName) ? current : [...current, layerName]);
-                            setSelection(newOptionSelection);
-                        }}
-                    />
+                    <LayerGroupEditor name={layerName} isBusy={isBusy} />
                 </span>
             ),
             classNames: { header: "workspace-layer-group-header", body: "workspace-layer-group-body" },
@@ -649,6 +625,13 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
     return (
         <div className="workspace-tree">
+            <div className="workspace-tree-header">
+                <Typography.Text strong>{view === "shared-rules" ? "Shared rules" : view.charAt(0).toUpperCase() + view.slice(1)}</Typography.Text>
+                {newAction ? <Tooltip title={newAction.label}>
+                    <Button type="text" size="small" icon={<PlusOutlined />} disabled={isBusy} aria-label={newAction.label}
+                            onClick={() => setSelection(newAction.selection)}>Add</Button>
+                </Tooltip> : null}
+            </div>
             <div className="workspace-tree-content">
                 {view === "rules" ? (
                     <>
@@ -792,19 +775,6 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                             />
                         ))}
                     </>
-                ) : null}
-                {newAction ? (
-                    <div className="workspace-tree-create">
-                        <Button
-                            block
-                            type="dashed"
-                            disabled={isBusy}
-                            icon={<PlusOutlined />}
-                            onClick={() => setSelection(newAction.selection)}
-                        >
-                            {newAction.label}
-                        </Button>
-                    </div>
                 ) : null}
             </div>
         </div>

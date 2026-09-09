@@ -2,7 +2,7 @@
  * Ant Design workspace editors that preserve native FormData drafts and Main-process path validation.
  */
 
-import { DeleteOutlined, EditOutlined, FolderOutlined, InfoCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined, SaveOutlined, UndoOutlined } from "@ant-design/icons";
 import type { HarnessConfig, Workspace } from "@shared/models/Workspace";
 import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Tabs, Tag, Typography } from "antd";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
@@ -133,12 +133,16 @@ async function persistEditorForm(workspace: Workspace, selection: Selection, sna
 function TargetBoxes({ selected }: { selected: string[] | undefined })
 {
     const workspace = useAppStore((state) => state.workspace);
+    const [targets, setTargets] = useState(selected ?? []);
     return (
-        <Form.Item label="Targets">
+        <Form.Item label="Targets" tooltip="Only selected harnesses receive this content."
+                   extra={targets.length === 0 ? "No targets selected. This content will not be generated." : undefined}>
             <Checkbox.Group
                 name="targets"
+                aria-label="Targets"
                 options={(workspace?.config.harnesses ?? []).map((harness) => harness.name)}
-                {...(selected ? { defaultValue: selected } : {})}
+                value={targets}
+                onChange={setTargets}
             />
         </Form.Item>
     );
@@ -151,20 +155,15 @@ function FormError({ message }: { message: string | undefined })
     return <Alert className="editor-alert" type="error" title={<span className="pre-wrap">{message}</span>} showIcon />;
 }
 
-/** Render the standard editor name field and optional create button. */
-function EditorNameField({ value, isBusy, submitLabel, onChange }: {
+/** Render the standard editor name field. */
+function EditorNameField({ value, onChange }: {
     value: string;
-    isBusy: boolean;
-    submitLabel?: string | undefined;
     onChange: (value: string) => void;
 })
 {
     return (
         <Form.Item label="Name" htmlFor="editor-name">
-            <Flex gap={8}>
-                <Input id="editor-name" name="name" value={value} onChange={(event) => onChange(event.currentTarget.value)} />
-                {submitLabel ? <Button type="primary" htmlType="submit" loading={isBusy}>{submitLabel}</Button> : null}
-            </Flex>
+            <Input id="editor-name" name="name" value={value} onChange={(event) => onChange(event.currentTarget.value)} />
         </Form.Item>
     );
 }
@@ -180,6 +179,9 @@ function DeleteModal({ open, title, description, isBusy, onCancel, onConfirm }: 
             okButtonProps={{ danger: true }}
             cancelButtonProps={{ disabled: isBusy }}
             confirmLoading={isBusy}
+            closable={!isBusy}
+            mask={{ closable: !isBusy }}
+            keyboard={!isBusy}
             onCancel={onCancel}
             onOk={onConfirm}
         >
@@ -219,10 +221,13 @@ export function AgentDocumentTitleForm({ workspace }: { workspace: Workspace })
                 <FormError message={formError} />
                 <Form.Item
                     label="AGENTS.md title"
-                    extra="Used only as the level-one heading in every generated AGENTS.md file."
+                    htmlFor="document-title"
+                    tooltip="The main heading in each generated AGENTS.md file."
                 >
                     <Space.Compact block>
                         <Input
+                            id="document-title"
+                            aria-label="AGENTS.md title"
                             name="name"
                             value={configName}
                             disabled={isBusy}
@@ -233,7 +238,7 @@ export function AgentDocumentTitleForm({ workspace }: { workspace: Workspace })
                                 editor.handleValueChange("name", value);
                             }}
                         />
-                        <Button type="primary" htmlType="submit" loading={isBusy}>Save title</Button>
+                        <Button htmlType="submit" loading={isBusy} disabled={!editor.draft}>Save title</Button>
                     </Space.Compact>
                 </Form.Item>
             </Form>
@@ -358,7 +363,6 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
 /** Render the form for creating an empty catalog layer. */
 function LayerNewForm({ workspace }: { workspace: Workspace })
 {
-    const isBusy = useAppStore((state) => state.isBusy);
     const setSelection = useAppStore((state) => state.setSelection);
     const [formError, setFormError] = useState<string>();
     const selection: Selection = { kind: "layer-new" };
@@ -386,8 +390,6 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
                 <FormError message={formError} />
                 <EditorNameField
                     value={layerName}
-                    isBusy={isBusy}
-                    submitLabel="Create layer"
                     onChange={(value) =>
                     {
                         setLayerName(value);
@@ -440,8 +442,6 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     <FormError message={formError} />
                     <EditorNameField
                         value={ruleName}
-                        isBusy={isBusy}
-                        submitLabel={selection.kind === "rule-new" ? "Create rule" : undefined}
                         onChange={(value) =>
                         {
                             setRuleName(value);
@@ -526,8 +526,6 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                     <FormError message={formError} />
                     <EditorNameField
                         value={optionName}
-                        isBusy={isBusy}
-                        submitLabel={selection.kind === "layer-option-new" ? "Create option" : undefined}
                         onChange={(value) =>
                         {
                             setOptionName(value);
@@ -608,16 +606,14 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                     <FormError message={formError} />
                     <EditorNameField
                         value={agentName}
-                        isBusy={isBusy}
-                        submitLabel={selection.kind === "agent-new" ? "Create agent" : undefined}
                         onChange={(value) =>
                         {
                             setAgentName(value);
                             editor.handleValueChange("name", value);
                         }}
                     />
-                    <Form.Item label="Description">
-                        <Input name="description" defaultValue={draftText(editor.draft, "description", existing?.description ?? "")} />
+                    <Form.Item label="Description" htmlFor="agent-description">
+                        <Input id="agent-description" name="description" defaultValue={draftText(editor.draft, "description", existing?.description ?? "")} />
                     </Form.Item>
                     <Form.Item label="Metadata (JSON)">
                         <input type="hidden" name="enabledHarnesses" value="" />
@@ -685,16 +681,13 @@ function GeneratedFileView({ workspace, path }: { workspace: Workspace; path: st
     const file = workspace.generatedFiles.find((item) => item.path === path);
     if (!file) return <MissingEditorEmpty title="Generated file not found" description="Generate or reload the project to refresh output files." />;
     return (
-        <Space orientation="vertical" size="middle" className="full-width">
-            <Typography.Text type="secondary">{file.path}</Typography.Text>
-            <SourceEditor
-                key={file.content}
-                aria-label={file.path}
-                language={file.path.toLowerCase().endsWith(".md") ? "markdown" : "plain"}
-                defaultValue={file.content}
-                readOnly
-            />
-        </Space>
+        <SourceEditor
+            key={file.content}
+            aria-label={file.path}
+            language={file.path.toLowerCase().endsWith(".md") ? "markdown" : "plain"}
+            defaultValue={file.content}
+            readOnly
+        />
     );
 }
 
@@ -733,10 +726,7 @@ export function HarnessesPanel()
     return (
         <div className="project-page">
             <Flex align="center" justify="space-between" gap={16} wrap>
-                <div>
-                    <Typography.Title level={3} className="harnesses-title">Harnesses <Typography.Text type="secondary">({workspace.config.harnesses.length})</Typography.Text></Typography.Title>
-                    <Typography.Text type="secondary">Manage where your assistants receive rules and agent files.</Typography.Text>
-                </div>
+                <Typography.Title level={3} className="page-title">Harnesses <Typography.Text type="secondary">({workspace.config.harnesses.length})</Typography.Text></Typography.Title>
                 <Button type="primary" icon={<PlusOutlined />} disabled={isBusy} onClick={() => openEditor({ kind: "harness-new" })}>
                     {drafts["harness-new"] ? "Continue new harness" : "Add harness"}
                 </Button>
@@ -748,22 +738,16 @@ export function HarnessesPanel()
                             <span className="harness-card-mark" aria-hidden="true">{harness.name.slice(0, 2).toUpperCase()}</span>
                             <div className="harness-card-heading">
                                 <Typography.Title level={4} className="harness-card-name">{harness.name}</Typography.Title>
+                                <div className="harness-card-path"><FolderOutlined aria-hidden="true" /><code>~/{harness.configPath}</code></div>
                                 {drafts[selectionKey({ kind: "harness", name: harness.name })] ? <Tag color="gold">Unsaved</Tag> : null}
                             </div>
                             <Button icon={<EditOutlined />} disabled={isBusy} aria-label={`Edit ${harness.name}`} onClick={() => openEditor({ kind: "harness", name: harness.name })}>
                                 Edit
                             </Button>
                         </div>
-                        <dl className="harness-card-details">
-                            <dt>Config path</dt>
-                            <dd className="harness-card-path"><FolderOutlined aria-hidden="true" /><code>{harness.configPath}</code></dd>
-                        </dl>
                     </Card>
                 ))}
             </div>
-            <Typography.Text type="secondary" className="harnesses-note">
-                <InfoCircleOutlined aria-hidden="true" /> Paths are relative to your user home. Setup skips directories that do not exist yet.
-            </Typography.Text>
             <Drawer
                 title={selectedHarness ? `Edit ${selectedHarness.name}` : "New harness"}
                 open={isEditorOpen}
@@ -785,25 +769,57 @@ export function WorkspaceEditor()
 {
     const workspace = useAppStore((state) => state.workspace);
     const selection = useAppStore((state) => state.selection);
+    const isBusy = useAppStore((state) => state.isBusy);
+    const editorKey = selectionKey(selection);
+    const hasDraft = useAppStore((state) => Boolean(state.editorDrafts[editorKey]));
+    const [revision, setRevision] = useState(0);
 
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
-    if (selection.kind === "layer-new") return <LayerNewForm workspace={workspace} />;
-    if (selection.kind === "layer") return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Choose an option to edit, or use the Layer edit menu." />;
-    if (selection.kind === "layer-option" || selection.kind === "layer-option-new")
+    let editor: ReactNode = <GeneratedEmpty />;
+    if (selection.kind === "layer-new") editor = <LayerNewForm workspace={workspace} />;
+    else if (selection.kind === "layer") editor = (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Select an option to edit">
+            <Button icon={<PlusOutlined />} disabled={isBusy} onClick={() => useAppStore.getState().setSelection({ kind: "layer-option-new", layer: selection.name })}>Add option</Button>
+        </Empty>
+    );
+    else if (selection.kind === "layer-option" || selection.kind === "layer-option-new")
     {
         const source = selection.kind === "layer-option" ? Object.values(workspace.layerOptions).flat().find((item) => item.path === selection.path) : undefined;
-        return <LayerOptionForm key={JSON.stringify(source)} workspace={workspace} selection={selection} />;
+        editor = <LayerOptionForm key={JSON.stringify(source)} workspace={workspace} selection={selection} />;
     }
-    if (selection.kind === "rule" || selection.kind === "rule-new")
+    else if (selection.kind === "rule" || selection.kind === "rule-new")
     {
         const source = selection.kind === "rule" ? [...workspace.rootRules, ...workspace.sharedRules].find((item) => item.path === selection.path) : undefined;
-        return <RuleForm key={JSON.stringify(source)} workspace={workspace} selection={selection} />;
+        editor = <RuleForm key={JSON.stringify(source)} workspace={workspace} selection={selection} />;
     }
-    if (selection.kind === "agent" || selection.kind === "agent-new")
+    else if (selection.kind === "agent" || selection.kind === "agent-new")
     {
         const source = selection.kind === "agent" ? workspace.agents.find((item) => item.path === selection.path) : undefined;
-        return <AgentForm key={JSON.stringify(source)} workspace={workspace} selection={selection} />;
+        editor = <AgentForm key={JSON.stringify(source)} workspace={workspace} selection={selection} />;
     }
-    if (selection.kind === "generated-file") return <GeneratedFileView workspace={workspace} path={selection.path} />;
-    return <GeneratedEmpty />;
+    else if (selection.kind === "generated-file") editor = <GeneratedFileView workspace={workspace} path={selection.path} />;
+
+    const isNew = selection.kind.endsWith("-new");
+    const canSave = isNew || selection.kind === "rule" || selection.kind === "agent" || selection.kind === "layer-option";
+    const title = "path" in selection ? selection.kind === "generated-file" ? selection.path : fileName(selection.path)
+        : selection.kind === "layer" ? selection.name : isNew ? `New ${selection.kind.replace("-new", "").replace("-", " ")}` : "Generated files";
+    return (
+        <div className="workspace-editor">
+            <Flex className="workspace-editor-toolbar" align="center" justify="space-between" gap={12}>
+                <Typography.Text strong ellipsis={{ tooltip: title }} className="workspace-editor-title">{title}</Typography.Text>
+                {canSave ? <Space size={8}>
+                    {hasDraft ? <Button type="text" icon={<UndoOutlined />} disabled={isBusy} onClick={() =>
+                    {
+                        useAppStore.getState().clearEditorDraft(editorKey);
+                        setRevision((current) => current + 1);
+                    }}>Discard changes</Button> : null}
+                    <Button icon={isNew ? <PlusOutlined /> : <SaveOutlined />} disabled={isBusy || !isNew && !hasDraft}
+                            onClick={() => useAppStore.getState().requestEditorAction(selection, "save")}>{isNew ? "Create" : "Save file"}</Button>
+                </Space> : selection.kind !== "layer" ? <Typography.Text type="secondary">Read only</Typography.Text> : null}
+            </Flex>
+            <div className="workspace-scroll">
+                <div key={revision} className="workspace-editor-page">{editor}</div>
+            </div>
+        </div>
+    );
 }

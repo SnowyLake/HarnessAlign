@@ -55,6 +55,7 @@ const sourceEditorTheme = EditorView.theme({
     ".cm-content": {
         caretColor: "var(--source-text)",
         padding: "10px 0",
+        minHeight: "var(--source-min-height)",
     },
     ".cm-cursor, .cm-dropCursor": {
         borderLeftColor: "var(--source-text)",
@@ -153,6 +154,7 @@ export function SourceEditor({
         "--source-accent": token.colorPrimaryText,
         "--source-font-size": `${token.fontSizeSM}px`,
         "--source-font-family": '"Cascadia Mono", Consolas, monospace',
+        "--source-min-height": readOnly ? "120px" : language === "markdown" ? "240px" : "96px",
     };
 
     useEffect(() =>

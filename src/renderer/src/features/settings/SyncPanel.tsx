@@ -1,7 +1,7 @@
 /** Manual private-repository sync with reviewed first-use adoption and explicit conflict choices. */
 
 import { SyncOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Form, Input, Modal, Row, Select, Space, Table, Typography } from "antd";
+import { Alert, Button, Card, Col, Form, Input, Modal, Row, Select, Space, Spin, Table, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import type { SyncApplyInput, SyncChange, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileView } from "@shared/models/Sync";
@@ -148,9 +148,6 @@ export function SyncPanel()
                    ) : null}>
                 <div inert={isBusy} aria-busy={isBusy}>
                     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-                        <Typography.Paragraph style={{ marginBottom: 0 }}>
-                            Sync saved configuration and installed Skills between devices using a private GitHub repository. Each device runs Setup separately.
-                        </Typography.Paragraph>
                         {error ? <Alert type="error" showIcon title={error} /> : null}
                         {status?.connected ? (
                             <Space orientation="vertical" size="small" style={{ width: "100%" }}>
@@ -195,7 +192,7 @@ export function SyncPanel()
                                     <Input.Password autoComplete="new-password" />
                                 </Form.Item>
                                 <Typography.Paragraph type="secondary">
-                                    Create a private repository with a README first. Sync uses its harness-align/ directory and preserves other repository files.
+                                    Use a private repository with an existing branch, such as one initialized with a README.
                                 </Typography.Paragraph>
                                 <Button type="primary" htmlType="submit" loading={isBusy}>{status?.connected ? "Save connection" : "Connect"}</Button>
                             </Form>
@@ -216,7 +213,7 @@ export function SyncPanel()
                                         </Form.Item>
                                     </Form>
                                 ) : null}
-                                <Typography.Text>{preview.uploadCount} pending upload groups · {preview.downloadCount} pending download groups · {unresolved} unresolved conflicts</Typography.Text>
+                                <Typography.Text>{preview.uploadCount} to upload · {preview.downloadCount} to download · {unresolved} unresolved conflicts</Typography.Text>
                                 {mode !== "merge" ? <Alert type="warning" showIcon title={mode === "local"
                                     ? "The remote configuration will be replaced by this device's configuration."
                                     : "This device's configuration will be replaced by the remote configuration. A local backup is kept."} /> : null}
@@ -239,6 +236,9 @@ export function SyncPanel()
                         ) : null}
                     </Space>
                 </div>
+                {!isConnection && isBusy && !preview ? (
+                    <div className="sync-loading" role="status"><Spin /><Typography.Text type="secondary">Loading preview...</Typography.Text></div>
+                ) : null}
             </Modal>
             <Modal open={Boolean(detail)} title={`Compare: ${detail?.key ?? ""}`} width={1000} footer={null} onCancel={() => setDetail(undefined)} destroyOnHidden>
                 <Space orientation="vertical" size="middle" style={{ width: "100%" }}>

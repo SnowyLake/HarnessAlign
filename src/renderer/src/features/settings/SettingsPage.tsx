@@ -42,16 +42,10 @@ export function SettingsPage()
     return (
         <div className="workspace-scroll">
             <div className="settings-page">
-                <div>
-                    <Typography.Title level={3} style={{ margin: 0 }}>Settings</Typography.Title>
-                    <Typography.Text type="secondary">Workspace preferences and device connections.</Typography.Text>
-                </div>
+                <Typography.Title level={3} className="page-title">Settings</Typography.Title>
                 <Card title={<Space><DesktopOutlined />Appearance</Space>}>
                     <Flex align="center" justify="space-between" gap={24} wrap>
-                        <div>
-                            <Typography.Text strong>Theme</Typography.Text>
-                            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>Choose a look, or follow your system.</Typography.Paragraph>
-                        </div>
+                        <Typography.Text>Theme</Typography.Text>
                         <Segmented<ThemeMode>
                             aria-label="Theme"
                             value={theme}
@@ -80,12 +74,11 @@ export function SettingsPage()
                                 {syncStatus?.connected ? `Branch: ${syncStatus.branch} · Last synced: ${syncStatus.lastSyncedAt ? new Date(syncStatus.lastSyncedAt).toLocaleString() : "Not yet"}`
                                     : "Connect a private repository to sync configuration across devices."}
                             </Typography.Text>
-                            <Typography.Text type="secondary">Use Sync in the top bar to review and sync changes.</Typography.Text>
                         </Space>
                         <Button onClick={() => setSyncDialog("connection")}>{syncStatus?.connected ? "Manage connection" : "Connect GitHub"}</Button>
                     </Flex>
                 </Card>
-                <Typography.Text type="secondary" className="settings-about">Harness Align Desktop · Version {version || "-"}</Typography.Text>
+                <Typography.Text type="secondary" className="settings-about">Harness Align {version}</Typography.Text>
             </div>
         </div>
     );

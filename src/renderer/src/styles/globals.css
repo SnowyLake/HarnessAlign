@@ -1,11 +1,9 @@
 :root {
     color-scheme: light;
-    --app-shadow: 0 8px 28px rgba(31, 35, 41, 0.06);
 }
 
 .dark {
     color-scheme: dark;
-    --app-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
 }
 
 * {
@@ -83,9 +81,8 @@ select {
     background: #1f2329;
     color: #ffffff;
     font-size: 12px;
-    font-weight: 750;
+    font-weight: 600;
     letter-spacing: 0.05em;
-    box-shadow: 0 4px 12px rgba(31, 35, 41, 0.16);
 }
 
 .dark .app-brand-mark {
@@ -95,7 +92,7 @@ select {
 
 .app-brand-name {
     font-size: 14px;
-    font-weight: 700;
+    font-weight: 600;
     letter-spacing: -0.01em;
 }
 
@@ -130,6 +127,7 @@ select {
 .app-sider-footer {
     margin-top: auto;
     padding: 8px 8px 0;
+    border-top: 1px solid var(--ant-color-border-secondary);
 }
 
 .app-content {
@@ -157,9 +155,9 @@ select {
 
 .settings-page {
     display: flex;
-    width: min(100% - 48px, 860px);
+    width: min(100% - 48px, 1040px);
     flex-direction: column;
-    gap: 20px;
+    gap: 16px;
 }
 
 .settings-page .ant-form-item:last-child {
@@ -180,7 +178,7 @@ select {
     width: 100%;
     height: 100%;
     min-height: 0;
-    padding: 20px;
+    padding: 24px;
 }
 
 .workspace-module-surface {
@@ -190,9 +188,8 @@ select {
     margin: 0 auto;
     overflow: hidden;
     border: 1px solid var(--ant-color-border-secondary);
-    border-radius: 12px;
+    border-radius: var(--ant-border-radius-lg);
     background: var(--ant-color-bg-container);
-    box-shadow: var(--app-shadow);
 }
 
 .workspace-splitter {
@@ -204,6 +201,38 @@ select {
     width: min(100% - 48px, 920px);
     margin: 0 auto;
     padding: 24px 0 32px;
+}
+
+.workspace-editor {
+    display: flex;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+}
+
+.workspace-editor-toolbar,
+.workspace-tree-header {
+    min-height: 60px;
+    flex: 0 0 60px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--ant-color-border-secondary);
+}
+
+.workspace-editor-title {
+    min-width: 0;
+}
+
+.workspace-editor-toolbar > .ant-space {
+    flex-shrink: 0;
+}
+
+.workspace-tree-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-inline: 16px;
 }
 
 .workspace-load-state {
@@ -237,22 +266,30 @@ select {
 
 .project-page {
     display: flex;
-    width: min(100%, 860px);
+    width: min(100%, 1040px);
     margin: 0 auto;
     flex-direction: column;
     gap: 16px;
 }
 
 .skills-page {
+    display: flex;
     width: 100%;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.skills-library {
     overflow: hidden;
     border: 1px solid var(--ant-color-border-secondary);
-    border-radius: 12px;
+    border-radius: var(--ant-border-radius-lg);
     background: var(--ant-color-bg-container);
 }
 
-.harnesses-title.ant-typography {
-    margin: 0 0 4px;
+.page-title.ant-typography {
+    margin: 0;
+    font-size: 20px;
+    line-height: 36px;
 }
 
 .harnesses-grid {
@@ -285,7 +322,7 @@ select {
     border-radius: var(--ant-border-radius-lg);
     background: var(--ant-color-primary-bg);
     color: var(--ant-color-primary-text);
-    font-weight: 650;
+    font-weight: 600;
     font-size: 15px;
 }
 
@@ -296,32 +333,17 @@ select {
 
 .harness-card-name.ant-typography {
     margin: 0;
-    font-size: 18px;
+    font-size: 16px;
     overflow-wrap: anywhere;
 }
 
-.harness-card-details {
-    margin: 12px 0 0;
-}
-
-.harness-card-details dt {
-    margin: 0 0 4px;
-    color: var(--ant-color-text-secondary);
-    font-size: 12px;
-}
-
-.harness-card-details dd {
-    min-width: 0;
-    margin: 0;
-}
-
-.harness-card-details .harness-card-path {
+.harness-card-path {
     display: flex;
-    align-items: baseline;
-    gap: 10px;
-    padding: 6px 10px;
-    border-radius: var(--ant-border-radius);
-    background: var(--ant-color-fill-quaternary);
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--ant-color-text-secondary);
 }
 
 .harness-card-path code {
@@ -330,37 +352,25 @@ select {
     overflow-wrap: anywhere;
 }
 
-.harnesses-note {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    font-size: 12px;
-}
-
 .break-anywhere {
     overflow-wrap: anywhere;
 }
 
-.skills-section + .skills-section {
-    border-top: 1px solid var(--ant-color-border-secondary);
-}
-
 .skills-section-header {
     display: flex;
-    min-height: 64px;
+    min-height: 56px;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 16px;
-    padding: 12px 22px;
-}
-
-.skills-section-header h5 {
-    margin: 0;
-    font-size: 15px;
+    padding: 8px 0 16px;
 }
 
 .skills-section-body {
-    padding: 0 22px 16px;
+    padding: 0 20px 16px;
+}
+
+.skills-section > .skills-section-body {
+    padding: 0;
 }
 
 .skills-library-body {
@@ -368,16 +378,16 @@ select {
 }
 
 .skills-toolbar {
-    margin-bottom: 4px;
+    margin-bottom: 8px;
 }
 
 .skills-filter-input {
-    min-width: 260px;
+    min-width: 200px;
     flex: 1;
 }
 
 .skills-origin-select {
-    width: 240px;
+    width: 200px;
     max-width: 100%;
 }
 
@@ -399,33 +409,36 @@ select {
     overflow-wrap: anywhere;
 }
 
-.app-list-copy > * {
+.app-list-copy > .ant-typography {
     display: block;
     margin: 0;
+}
+
+.skill-avatar {
+    flex-shrink: 0;
+    background: var(--ant-color-primary-bg);
+    color: var(--ant-color-primary);
 }
 
 .skills-selectable-row {
     width: 100%;
 }
 
-.skill-source-form {
-    margin-top: 16px;
-}
-
 .workspace-tree {
+    display: flex;
     height: 100%;
     min-height: 0;
-    overflow: auto;
+    flex-direction: column;
+    overflow: hidden;
     border-right: 1px solid var(--ant-color-border-secondary);
     background: color-mix(in srgb, var(--ant-color-bg-layout) 40%, var(--ant-color-bg-container));
 }
 
 .workspace-tree-content {
+    min-height: 0;
+    overflow: auto;
+    scrollbar-width: thin;
     padding: 10px 10px 20px;
-}
-
-.workspace-tree-create {
-    margin-top: 8px;
 }
 
 .workspace-tree-row {
@@ -615,7 +628,7 @@ select {
     min-width: 0;
     overflow: hidden;
     border: 1px solid var(--source-border);
-    border-radius: 10px;
+    border-radius: var(--ant-border-radius);
     background: var(--source-bg);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
@@ -646,13 +659,26 @@ select {
     border-radius: 6px;
 }
 
+.app-command-status {
+    white-space: nowrap;
+}
+
+.sync-loading {
+    display: flex;
+    min-height: 180px;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .source-editor {
         transition: none;
     }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1199px) {
     .showcase-page {
         grid-template-columns: 1fr;
     }
@@ -661,16 +687,18 @@ select {
         padding-inline: 16px;
     }
 
-    .app-topbar-button-label {
-        display: none;
+    .workspace-module-page {
+        padding: 16px;
     }
 
-    .workspace-module-page {
-        padding: 12px;
+    .workspace-wide-page,
+    .settings-page {
+        width: calc(100% - 32px);
+        padding-top: 16px;
     }
 
     .workspace-editor-page {
-        width: min(100% - 40px, 920px);
-        padding-top: 24px;
+        width: calc(100% - 32px);
+        padding-top: 20px;
     }
 }

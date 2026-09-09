@@ -36,9 +36,7 @@ export function WorkspacePage({ view }: WorkspacePageProps)
                         <WorkspaceTree view={view} />
                     </Splitter.Panel>
                     <Splitter.Panel min="55%">
-                        <div className="workspace-scroll" key={selectionKey(selection)}>
-                            <div className="workspace-editor-page"><WorkspaceEditor /></div>
-                        </div>
+                        <WorkspaceEditor key={selectionKey(selection)} />
                     </Splitter.Panel>
                 </Splitter>
             </div>

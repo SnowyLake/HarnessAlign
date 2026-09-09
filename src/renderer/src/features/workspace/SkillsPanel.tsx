@@ -134,7 +134,7 @@ function InstalledSkillRow({ skill, update, isBusy, onUpdate, onRemove }: {
     const actions: ReactNode[] = [];
     if (update?.error)
     {
-        actions.push(<IconAction key="error" label={update.error} danger icon={<WarningOutlined />} />);
+        actions.push(<Tooltip key="error" title={update.error}><Typography.Text type="danger" tabIndex={0} aria-label={update.error}><WarningOutlined /></Typography.Text></Tooltip>);
     }
     else if (update && isOutdated(update))
     {
@@ -144,9 +144,9 @@ function InstalledSkillRow({ skill, update, isBusy, onUpdate, onRemove }: {
 
     return (
         <div className="app-list-row">
-            <Avatar shape="square" icon={<ThunderboltOutlined />} />
+            <Avatar className="skill-avatar" shape="square" icon={<ThunderboltOutlined />} />
             <div className="app-list-copy">
-                <Space size={8}><Typography.Text strong>{skill.id}</Typography.Text><OriginMeta origin={skill.origin} /></Space>
+                <Space size={8} wrap><Typography.Text strong>{skill.id}</Typography.Text><OriginMeta origin={skill.origin} /></Space>
                 {skill.description ? <Typography.Text type="secondary">{skill.description}</Typography.Text> : null}
             </div>
             <Space size={4}>{actions}</Space>
@@ -168,7 +168,7 @@ function SelectableSkillRow({ id, title, description, detail, checked, disabled,
     return (
         <Checkbox className="skills-selectable-row" checked={checked} disabled={Boolean(disabled)} onChange={() => onToggle(id)}>
             <Space orientation="vertical" size={2}>
-                <Space size={8}><Typography.Text strong>{title || id}</Typography.Text>{detail}</Space>
+                <Space size={8} wrap><Typography.Text strong>{title || id}</Typography.Text>{detail}</Space>
                 {description ? <Typography.Text type="secondary">{description}</Typography.Text> : null}
             </Space>
         </Checkbox>
@@ -211,13 +211,13 @@ function NewSkillSourceForm({ onAdded, onCancel, onError }: {
                 extra={<Button type="text" icon={<CloseOutlined />} disabled={isBusy} aria-label="Cancel new skill source" onClick={onCancel} />}
             >
                 <Form component={false} layout="vertical" requiredMark={false}>
-                    <Form.Item label="Repository URL">
-                        <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repo" disabled={isBusy} />
+                    <Form.Item label="Repository URL" htmlFor="skill-source-url">
+                        <Input id="skill-source-url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repo" disabled={isBusy} />
                     </Form.Item>
-                    <Form.Item label="Branch" extra="Leave blank to use the repository default branch.">
-                        <Input value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="Default branch" disabled={isBusy} />
+                    <Form.Item label="Branch" htmlFor="skill-source-branch">
+                        <Input id="skill-source-branch" value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="Default branch" disabled={isBusy} />
                     </Form.Item>
-                    <Button type="primary" htmlType="submit" disabled={isBusy || !url.trim()}>Register source</Button>
+                    <Button type="primary" htmlType="submit" disabled={isBusy || !url.trim()}>Add source</Button>
                 </Form>
             </Card>
         </form>
@@ -230,18 +230,26 @@ function SkillSourcesSection({ workspace }: { workspace: Workspace })
     const isBusy = useAppStore((state) => state.isBusy);
     const [isAdding, setIsAdding] = useState(false);
     const [formError, setFormError] = useState<string>();
+    const [removeSource, setRemoveSource] = useState<Workspace["config"]["skillSources"][number]>();
 
     return (
         <section className="skills-section">
-            <header className="skills-section-header">
-                <Space orientation="vertical" size={0}>
-                    <Typography.Title level={5}>GitHub sources</Typography.Title>
-                </Space>
-                <Button icon={<PlusOutlined />} disabled={isBusy || isAdding} onClick={() => setIsAdding(true)}>Add source</Button>
-            </header>
+            {!isAdding ? <header className="skills-section-header">
+                <Button icon={<PlusOutlined />} disabled={isBusy} onClick={() => setIsAdding(true)}>Add source</Button>
+            </header> : null}
             <div className="skills-section-body">
                 {formError ? <Alert type="error" title="Source update failed" description={<span className="pre-wrap">{formError}</span>} showIcon /> : null}
-                {workspace.config.skillSources.length === 0 ? (
+                {isAdding ? (
+                    <NewSkillSourceForm
+                        onCancel={() => setIsAdding(false)}
+                        onError={setFormError}
+                        onAdded={() =>
+                        {
+                            setFormError(undefined);
+                            setIsAdding(false);
+                        }}
+                    />
+                ) : workspace.config.skillSources.length === 0 ? (
                     <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No GitHub sources registered" />
                 ) : (
                     <Listy
@@ -270,19 +278,7 @@ function SkillSourcesSection({ workspace }: { workspace: Workspace })
                                             icon={<DeleteOutlined />}
                                             disabled={isBusy}
                                             aria-label={`Remove ${source.owner}/${source.name}`}
-                                            onClick={() =>
-                                            {
-                                                setFormError(undefined);
-                                                void runMutation(async () =>
-                                                {
-                                                    await window.appApi.workspace.removeSkillSource(source.owner, source.name);
-                                                    await refreshWorkspace();
-                                                    showSuccess("Skill source removed");
-                                                }).then((result) =>
-                                                {
-                                                    if (!result.ok) setFormError(result.message);
-                                                });
-                                            }}
+                                            onClick={() => setRemoveSource(source)}
                                         />
                                     </Tooltip>
                                 </Space>
@@ -290,20 +286,26 @@ function SkillSourcesSection({ workspace }: { workspace: Workspace })
                         )}
                     />
                 )}
-                {isAdding ? (
-                    <div className="skill-source-form">
-                        <NewSkillSourceForm
-                            onCancel={() => setIsAdding(false)}
-                            onError={setFormError}
-                            onAdded={() =>
-                            {
-                                setFormError(undefined);
-                                setIsAdding(false);
-                            }}
-                        />
-                    </div>
-                ) : null}
             </div>
+            <Modal open={Boolean(removeSource)} title="Remove skill source?" okText="Remove" okButtonProps={{ danger: true }} confirmLoading={isBusy}
+                   closable={!isBusy} cancelButtonProps={{ disabled: isBusy }} mask={{ closable: !isBusy }} keyboard={!isBusy}
+                   onCancel={() => setRemoveSource(undefined)} onOk={() =>
+                   {
+                       if (!removeSource) return;
+                       setFormError(undefined);
+                       void runMutation(async () =>
+                       {
+                           await window.appApi.workspace.removeSkillSource(removeSource.owner, removeSource.name);
+                           setRemoveSource(undefined);
+                           await refreshWorkspace();
+                           showSuccess("Skill source removed");
+                       }).then((result) =>
+                       {
+                           if (!result.ok) setFormError(result.message);
+                       });
+                   }}>
+                Remove {removeSource?.owner}/{removeSource?.name} from discovery? Installed skills are kept.
+            </Modal>
         </section>
     );
 }
@@ -317,6 +319,7 @@ export function SkillsPanel()
     const [listView, setListView] = useState<SkillsListView>("installed");
     const [originFilter, setOriginFilter] = useState<OriginFilter>("all");
     const [discovered, setDiscovered] = useState<RemoteSkill[]>([]);
+    const [hasDiscovered, setHasDiscovered] = useState(false);
     const [updates, setUpdates] = useState<SkillUpdate[]>([]);
     const [userSkills, setUserSkills] = useState<UserSkill[]>([]);
     const [selectedRemote, setSelectedRemote] = useState<string[]>([]);
@@ -360,7 +363,9 @@ export function SkillsPanel()
         {
             const skills = await window.appApi.workspace.discoverSkills();
             setDiscovered(skills);
+            setHasDiscovered(true);
             setSelectedRemote([]);
+            setFilter("");
             setOriginFilter("all");
             setListView("discover");
             setOutput(`Discovered ${skills.length} skill(s).`, "success", "Discover completed");
@@ -430,7 +435,7 @@ export function SkillsPanel()
     };
 
     const installedContent = filteredInstalled.length === 0
-        ? <Empty description={installed.length === 0 ? "No installed skills yet. Use Discover or Import." : "No matching skills."} />
+        ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={installed.length === 0 ? "No installed skills yet" : "No matching skills"} />
         : (
             <Listy
                 items={filteredInstalled}
@@ -447,7 +452,14 @@ export function SkillsPanel()
             />
         );
     const discoverContent = filteredDiscovered.length === 0
-        ? <Empty description={discovered.length === 0 ? "No skills found in registered sources." : "No matching discovered skills."} />
+        ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={!hasDiscovered
+            ? workspace.config.skillSources.length === 0 ? "Add a GitHub source to discover skills" : "Browse skills from your GitHub sources"
+            : discovered.length === 0 ? "No skills found in registered sources" : "No matching skills"}>
+            {!hasDiscovered ? <Button type="primary" disabled={isBusy} icon={workspace.config.skillSources.length === 0 ? <PlusOutlined /> : <SearchOutlined />}
+                onClick={workspace.config.skillSources.length === 0 ? () => setIsRegistrationOpen(true) : handleDiscover}>
+                {workspace.config.skillSources.length === 0 ? "Add source" : "Discover skills"}
+            </Button> : null}
+        </Empty>
         : (
             <Listy
                 items={filteredDiscovered}
@@ -469,13 +481,18 @@ export function SkillsPanel()
         );
     const tabItems: TabsProps["items"] = [
         { key: "installed", label: <Space>Installed<Tag>{installed.length}</Tag></Space>, children: installedContent },
-        ...(listView === "discover" || discovered.length > 0
-            ? [{ key: "discover", label: <Space>Discover<Tag>{discovered.length}</Tag></Space>, children: discoverContent }]
-            : []),
+        { key: "discover", label: <Space>Discover{hasDiscovered ? <Tag>{discovered.length}</Tag> : null}</Space>, children: discoverContent },
     ];
     return (
         <div className="skills-page">
-            <section className="skills-section">
+            <Flex align="center" justify="space-between" gap={16} wrap>
+                <Typography.Title level={3} className="page-title">Skills</Typography.Title>
+                <Space size={8}>
+                    <Button icon={<GithubOutlined />} disabled={isBusy} onClick={() => setIsRegistrationOpen(true)}>Sources</Button>
+                    <Button icon={<FolderAddOutlined />} disabled={isBusy} onClick={handleImport}>Import</Button>
+                </Space>
+            </Flex>
+            <section className="skills-library">
                 <div className="skills-section-body skills-library-body">
                     <Flex align="center" gap={12} wrap className="skills-toolbar">
                         <Input
@@ -485,41 +502,42 @@ export function SkillsPanel()
                             prefix={<SearchOutlined />}
                             value={filter}
                             onChange={(event) => setFilter(event.target.value)}
-                            placeholder={listView === "installed" ? "Search name, description, or repository..." : "Search discovered skills..."}
+                            placeholder="Search skills..."
                             disabled={isBusy}
                         />
                         {listView === "installed" && buckets.length > 0
                             ? <Select aria-label="Filter by origin" value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
                             : null}
                         <Space wrap className="skills-toolbar-actions">
-                            <Button icon={<GithubOutlined />} disabled={isBusy} onClick={() => setIsRegistrationOpen(true)}>Registration</Button>
-                            <Button icon={<ReloadOutlined />} disabled={isBusy} onClick={handleCheckUpdates}>Check updates</Button>
-                            {outdated.length > 0 ? <Button type="primary" disabled={isBusy} onClick={() => handleApplyUpdates(outdated.map((item) => item.id))}>Apply {outdated.length}</Button> : null}
-                            <Button icon={<FolderAddOutlined />} disabled={isBusy} onClick={handleImport}>Import</Button>
-                            <Button
-                                icon={<SearchOutlined />}
-                                disabled={isBusy || workspace.config.skillSources.length === 0}
-                                title={workspace.config.skillSources.length === 0 ? "Use Registration to add a GitHub source" : undefined}
-                                onClick={handleDiscover}
-                            >
-                                Discover
-                            </Button>
-                            {listView === "discover" ? <Button type="primary" icon={<CloudDownloadOutlined />} disabled={isBusy || selectedRemote.length === 0} onClick={handleDownload}>Install selected</Button> : null}
+                            {listView === "installed" ? <>
+                                <Tooltip title={installed.some((skill) => skill.origin.kind === "github") ? "Check GitHub skills for updates" : "No GitHub skills installed"}>
+                                    <Button icon={<ReloadOutlined />} disabled={isBusy || !installed.some((skill) => skill.origin.kind === "github")}
+                                            onClick={handleCheckUpdates}>Check updates</Button>
+                                </Tooltip>
+                                {outdated.length > 0 ? <Button type="primary" disabled={isBusy}
+                                    onClick={() => handleApplyUpdates(outdated.map((item) => item.id))}>Update {outdated.length}</Button> : null}
+                            </> : hasDiscovered ? <>
+                                <Button icon={<ReloadOutlined />} disabled={isBusy || workspace.config.skillSources.length === 0} onClick={handleDiscover}>Refresh</Button>
+                                <Button type="primary" icon={<CloudDownloadOutlined />} disabled={isBusy || selectedRemote.length === 0}
+                                        onClick={handleDownload}>Install selected ({selectedRemote.length})</Button>
+                            </> : null}
                         </Space>
                     </Flex>
                     <Tabs activeKey={listView} items={tabItems} onChange={(key) =>
                     {
                         const next = key as SkillsListView;
                         setListView(next);
-                        if (next === "installed") setOriginFilter("all");
+                        setFilter("");
+                        setOriginFilter("all");
                     }} />
                 </div>
             </section>
 
             <Modal
                 open={isRegistrationOpen}
-                title="Skill registration"
+                title="Skill sources"
                 width={720}
+                styles={{ body: { maxHeight: "65vh", overflowY: "auto" } }}
                 footer={null}
                 destroyOnHidden
                 closable={{ disabled: isBusy }}
@@ -553,7 +571,7 @@ export function SkillsPanel()
                     </Button>
                 )}
             >
-                {userSkills.length === 0 ? <Empty description="No skills were found in ~/.agents/skills" /> : (
+                {userSkills.length === 0 ? <Empty description={<>No skills found in <code>%USERPROFILE%\.agents\skills</code></>} /> : (
                     <Listy
                         items={userSkills}
                         rowKey="id"
@@ -575,7 +593,12 @@ export function SkillsPanel()
                 open={isOverwriteOpen}
                 title="Overwrite existing skills?"
                 okText="Overwrite"
+                okButtonProps={{ danger: true }}
                 confirmLoading={isBusy}
+                closable={!isBusy}
+                cancelButtonProps={{ disabled: isBusy }}
+                mask={{ closable: !isBusy }}
+                keyboard={!isBusy}
                 onCancel={() => setIsOverwriteOpen(false)}
                 onOk={() => handleImportConfirm(true)}
             >
@@ -587,6 +610,10 @@ export function SkillsPanel()
                 okText="Remove"
                 okButtonProps={{ danger: true }}
                 confirmLoading={isBusy}
+                closable={!isBusy}
+                cancelButtonProps={{ disabled: isBusy }}
+                mask={{ closable: !isBusy }}
+                keyboard={!isBusy}
                 onCancel={() => setRemoveId(undefined)}
                 onOk={() =>
                 {
