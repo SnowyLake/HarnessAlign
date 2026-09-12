@@ -6,6 +6,7 @@
 import { BrowserWindow, dialog, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import appIcon from "../../../build/icon.ico?asset";
 import { loadWindowState, MIN_WINDOW_SIZE, trackWindowState } from "./WindowState.js";
 import { logMainError } from "../services/ConsoleService.js";
 
@@ -73,6 +74,7 @@ async function openMainWindow(): Promise<BrowserWindow>
         minWidth: MIN_WINDOW_SIZE.width,
         minHeight: MIN_WINDOW_SIZE.height,
         title: "Harness Align",
+        icon: appIcon,
         backgroundColor: "#0c0d10",
         autoHideMenuBar: true,
         show: false,

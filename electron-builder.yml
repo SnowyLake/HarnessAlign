@@ -9,11 +9,14 @@ files:
 asar: true
 npmRebuild: false
 win:
+  icon: build/icon.ico
   executableName: HarnessAlign
   target:
     - nsis
     - dir
 nsis:
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
   artifactName: HarnessAlign-${version}-setup.${ext}
   shortcutName: Harness Align
   uninstallDisplayName: Harness Align

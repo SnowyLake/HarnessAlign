@@ -17,6 +17,7 @@ import {
 } from "@ant-design/icons";
 import { Badge, Button, Flex, Layout, Menu, Modal, Space, Spin, Tooltip, Typography, type MenuProps } from "antd";
 import { useState, type ReactNode } from "react";
+import appIcon from "../../../../../build/icon.png";
 import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
 import { SyncPanel } from "@/features/settings/SyncPanel";
 
@@ -86,7 +87,7 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
             <Header className="app-topbar">
                 <Flex align="center" gap={20} className="app-topbar-context">
                     <button type="button" className="app-brand" onClick={() => setView("project")}>
-                        <span className="app-brand-mark">HA</span>
+                        <img className="app-brand-mark" src={appIcon} alt="" width={36} height={36} />
                         <span className="app-brand-name">Harness Align</span>
                     </button>
                 </Flex>

@@ -17,6 +17,8 @@
 
 ## 这是什么
 
+<img src="build/icon.png" alt="Harness Align logo" width="96" height="96" />
+
 Harness Align 让你用一份 `.harness-align` 配置, 为多个编码助手生成各自需要的 `AGENTS.md` 和 Subagent 文件.
 
 Cursor, Codex, OpenCode 等工具都要读项目规则, 但目录位置和 Subagent 格式并不相同. 你在一个配置目录里维护公共规则, 可选 Layer 和共享 Subagent 正文, 然后由桌面应用按每个 Harness 的格式写出结果, 再部署到当前用户已经启用的助手目录.
@@ -52,6 +54,8 @@ Windows 安装包可用 `npm run build:win` 生成, 产物在 `release/`:
 Generate 和 Setup 使用当前 Layer 顺序与选项. 有未保存的源文件草稿时, 先点击 Save all 或按 Ctrl+S, 再生成或部署.
 
 ## 桌面应用
+
+应用使用白色圆角底板搭配黑色三段折带标志, 圆角外部透明, 深浅主题均保持白底黑标. 顶部品牌图标, 窗口, Windows 可执行文件和安装包使用同一标志.
 
 桌面应用使用顶部命令栏和主从编辑布局. 侧栏导航无横向分割线, 依次提供 Harnesses, Rules, Layers, Agents, Generated 和 Skills, 底部提供 Console 和 Settings. 窄窗口下侧栏自动收起为图标, 文件列表可调整宽度或折叠. Layers, Rules 和 Agents 的列表默认宽度统一为 28%, 可在 20% 到 45% 之间调整. Markdown 与 JSON 编辑器支持长文本和结构化内容.
 

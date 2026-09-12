@@ -70,23 +70,11 @@ select {
 }
 
 .app-brand-mark {
-    display: inline-flex;
+    display: block;
     width: 36px;
     height: 36px;
     flex: 0 0 36px;
-    align-items: center;
-    justify-content: center;
-    border-radius: 10px;
-    background: #1f2329;
-    color: #ffffff;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-}
-
-.dark .app-brand-mark {
-    background: #f2f3f5;
-    color: #17191d;
+    object-fit: contain;
 }
 
 .app-brand-name {
