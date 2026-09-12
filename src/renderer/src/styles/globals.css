@@ -523,7 +523,7 @@ select {
 }
 
 .workspace-layer-group-actions {
-    display: inline-flex;
+    display: flex;
     align-items: center;
 }
 

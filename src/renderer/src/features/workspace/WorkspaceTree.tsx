@@ -739,6 +739,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                             ghost
                             size="small"
                             items={layerItems}
+                            styles={{ header: { alignItems: "center" } }}
                             activeKey={openLayerNames}
                             onChange={(keys) => setOpenLayerNames(Array.isArray(keys) ? keys.map(String) : [String(keys)])}
                             className="workspace-layer-groups"
