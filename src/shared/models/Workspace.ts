@@ -57,23 +57,14 @@ export type SkillOrigin =
     | { kind: "unknown" };
 
 /** Installed project skill metadata without file bodies. */
-export interface ProjectSkill
+export interface ProjectSkill extends UserSkill
 {
-    id: string;
-    title: string;
-    description: string;
     origin: SkillOrigin;
 }
 
 /** Skill discovered under a remote GitHub skill source. */
-export interface RemoteSkill
+export interface RemoteSkill extends UserSkill, SkillSource
 {
-    id: string;
-    title: string;
-    description: string;
-    owner: string;
-    name: string;
-    branch: string;
     sourcePath: string;
     conflict: boolean;
 }
@@ -105,13 +96,10 @@ export interface RuleInput
 }
 
 /** Selectable layer Markdown source shown in the desktop editor. */
-export interface LayerOption
+export interface LayerOption extends LayerOptionInput
 {
-    path: string;
     layer: string;
     name: string;
-    targets: string[];
-    body: string;
 }
 
 /** Editor payload for a layer option Markdown source. */

@@ -90,11 +90,8 @@ export type SkillOrigin =
     | { kind: "unknown" };
 
 /** Installed project skill metadata without file bodies. */
-export interface ProjectSkill
+export interface ProjectSkill extends UserSkill
 {
-    id: string;
-    title: string;
-    description: string;
     origin: SkillOrigin;
 }
 
@@ -168,16 +165,10 @@ export function valueText(value: unknown): string
     }
 }
 
-/** Return whether `name` is a Windows reserved device name such as `con` or `lpt1`. */
-export function isWindowsReservedName(name: string): boolean
-{
-    return WINDOWS_RESERVED_NAMES.has(name.toUpperCase());
-}
-
 /** Throw if `name` cannot be used as a Windows directory or file stem. */
 export function assertWindowsSafeName(name: string, context: string): void
 {
-    if (isWindowsReservedName(name.split(".")[0] ?? name))
+    if (WINDOWS_RESERVED_NAMES.has((name.split(".")[0] ?? name).toUpperCase()))
     {
         throw new HalignError(`${context}: name must not be a Windows reserved device name, got ${valueText(name)}`);
     }
@@ -202,12 +193,6 @@ export function typeText(value: unknown): string
 export function isRecord(value: unknown): value is Record<string, unknown>
 {
     return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Return whether `field` is an own property of `record`. */
-export function hasOwn(record: Record<string, unknown>, field: string): boolean
-{
-    return Object.prototype.hasOwnProperty.call(record, field);
 }
 
 /** Compare two strings by Unicode code point for deterministic sorting. */

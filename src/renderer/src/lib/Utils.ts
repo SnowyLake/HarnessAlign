@@ -1,6 +1,6 @@
 /** Workspace labels and source paths with Windows-safe collision checks. */
 
-import type { LayerSelection, Workspace } from "../../../shared/models/Workspace.js";
+import type { LayerConfig, LayerSelection, Workspace } from "../../../shared/models/Workspace.js";
 
 /** Return the final path segment of a `/`-separated workspace-relative path. */
 export function fileName(path: string): string
@@ -59,6 +59,12 @@ export function defaultLayerOption(workspace: Workspace, name: string): string |
     return options[0]?.name;
 }
 
+/** Compare the saved Layer configuration with the current ordered generation selection. */
+export function hasLayerChanges(saved: readonly LayerConfig[], current: readonly LayerSelection[]): boolean
+{
+    return saved.length !== current.length || saved.some((item, index) => item.name !== current[index]?.name || item.selected !== current[index]?.option);
+}
+
 /** Move one enabled layer before or after its target in generation order. */
 export function moveLayerSelection(selection: readonly LayerSelection[], sourceName: string, targetName: string): LayerSelection[]
 {
@@ -67,8 +73,6 @@ export function moveLayerSelection(selection: readonly LayerSelection[], sourceN
     if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return [...selection];
     const next = [...selection];
     const [source] = next.splice(sourceIndex, 1);
-    if (!source) return [...selection];
-    const nextTargetIndex = next.findIndex((item) => item.name === targetName);
-    next.splice(sourceIndex < targetIndex ? nextTargetIndex + 1 : nextTargetIndex, 0, source);
+    next.splice(targetIndex, 0, source!);
     return next;
 }

@@ -10,17 +10,15 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 
 /** Saved window placement used the next time the main window opens. */
-interface WindowState
+interface WindowState extends Rectangle
 {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
     isMaximized: boolean;
 }
 
 /** Default restored size matching the BrowserWindow factory. */
 const DEFAULT_BOUNDS = { width: 1280, height: 840 };
+/** Minimum window size shared by creation and saved-state validation. */
+export const MIN_WINDOW_SIZE = { width: 960, height: 640 };
 /** Minimum overlap in pixels required before a saved rect counts as on-screen. */
 const MIN_VISIBLE_PX = 80;
 
@@ -40,13 +38,10 @@ function isVisibleOnScreen(bounds: Rectangle): boolean
 }
 
 /** Saved size plus optional position. Omit `x`/`y` so Electron centers a new window. */
-export interface RestoredWindowState
+export interface RestoredWindowState extends Pick<WindowState, "width" | "height" | "isMaximized">
 {
-    width: number;
-    height: number;
     x?: number;
     y?: number;
-    isMaximized: boolean;
 }
 
 /** Read saved bounds, or defaults when the file is missing, invalid, or off-screen. */
@@ -68,8 +63,8 @@ export async function loadWindowState(): Promise<RestoredWindowState>
             || !Number.isFinite(parsed.y)
             || !Number.isFinite(parsed.width)
             || !Number.isFinite(parsed.height)
-            || parsed.width < 960
-            || parsed.height < 640
+            || parsed.width < MIN_WINDOW_SIZE.width
+            || parsed.height < MIN_WINDOW_SIZE.height
         )
         {
             return { ...DEFAULT_BOUNDS, isMaximized: false };

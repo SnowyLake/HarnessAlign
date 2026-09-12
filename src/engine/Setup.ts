@@ -10,7 +10,7 @@ import { lstatIfExists, resolveUserHome } from "./FsSafe.js";
 import { generate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
 import { type Harness, type LayerSelection, type OutputMap, codePointCompare, errorText, HalignError, valueText } from "./Model.js";
-import { hasHiddenSegment, loadSkills } from "./Skills.js";
+import { copySkillTree, loadSkills } from "./Skills.js";
 
 /** Resolve `path` and throw if it escapes `root`. */
 function assertContainedWithin(root: string, path: string, label: string): string
@@ -57,15 +57,6 @@ async function assertRegularDirectory(path: string, label: string): Promise<void
     if (!stats) throw new HalignError(`${label}: directory does not exist: ${path}`);
     if (stats.isSymbolicLink()) throw deploymentReparseError(label, path);
     if (!stats.isDirectory()) throw new HalignError(`${label}: expected a directory: ${path}`);
-}
-
-/** Require an existing regular file. */
-async function assertRegularFile(path: string, label: string): Promise<void>
-{
-    const stats = await lstatIfExists(path);
-    if (!stats) throw new HalignError(`${label}: file does not exist: ${path}`);
-    if (stats.isSymbolicLink()) throw deploymentReparseError(label, path);
-    if (!stats.isFile()) throw new HalignError(`${label}: expected a file: ${path}`);
 }
 
 /** Require a regular file when the path exists. */
@@ -167,9 +158,8 @@ async function deployReplacements(userProfile: string, replacements: Array<{ tar
 /** Resolved source and target paths for one harness deploy. */
 interface SetupInstallation
 {
-    harness: Harness;
-    sourceAgents: string | undefined;
-    sourceRules: string;
+    agents: Array<[string, Buffer]>;
+    rules: Buffer;
     targetAgents: string;
     targetRules: string;
 }
@@ -218,39 +208,6 @@ async function listRelativeFiles(directory: string): Promise<string[]>
     };
     await visit(directory, "");
     return files;
-}
-
-/** Copy one skill directory while skipping hidden path segments. */
-async function copySkillDirectory(source: string, destination: string): Promise<void>
-{
-    const visit = async (current: string, prefix: string): Promise<void> =>
-    {
-        const entries = await fs.readdir(current, { withFileTypes: true });
-        entries.sort((left, right) => codePointCompare(left.name, right.name));
-        for (const entry of entries)
-        {
-            if (entry.name.startsWith(".")) continue;
-            const child = prefix ? `${prefix}/${entry.name}` : entry.name;
-            if (hasHiddenSegment(child)) continue;
-            const from = join(current, entry.name);
-            const to = join(destination, ...child.split("/"));
-            const stats = await lstatIfExists(from);
-            if (!stats) continue;
-            if (stats.isSymbolicLink()) throw new HalignError(`${from}: symbolic link skill sources are not allowed`);
-            if (stats.isDirectory())
-            {
-                await fs.mkdir(to, { recursive: true });
-                await visit(from, child);
-            }
-            else if (stats.isFile())
-            {
-                await fs.mkdir(join(to, ".."), { recursive: true });
-                await fs.copyFile(from, to);
-            }
-        }
-    };
-    await fs.mkdir(destination, { recursive: true });
-    await visit(source, "");
 }
 
 /** Format the setup success report for the desktop log. */
@@ -306,19 +263,6 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
 
     for (const target of targets)
     {
-        const sourceRoot = await assertNoReparseComponents(root, join(generatedRoot, target.harness), `${target.harness} generated source`);
-        const sourceAgentsPath = await assertNoReparseComponents(root, join(sourceRoot, "agents"), `${target.harness} source agents`);
-        const sourceRules = await assertNoReparseComponents(root, join(sourceRoot, "AGENTS.md"), `${target.harness} source AGENTS.md`);
-        await assertRegularFile(sourceRules, `${target.harness} source AGENTS.md`);
-        const sourceAgentsStats = await lstatIfExists(sourceAgentsPath);
-        let sourceAgents: string | undefined;
-        if (sourceAgentsStats)
-        {
-            await assertRegularDirectory(sourceAgentsPath, `${target.harness} source agents`);
-            await assertNoReparseTree(sourceAgentsPath, `${target.harness} source agents`);
-            sourceAgents = sourceAgentsPath;
-        }
-
         const targetRoot = await assertNoReparseComponents(deploymentRoot, target.root, `${target.harness} target root`);
         const targetStats = await lstatIfExists(targetRoot);
         if (!targetStats)
@@ -336,9 +280,10 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
             await assertNoReparseTree(targetAgents, `${target.harness} target agents`);
         }
         await assertRegularFileIfPresent(targetRules, `${target.harness} target AGENTS.md`);
-        const agentFiles = sourceAgents === undefined ? [] : (await listRelativeFiles(sourceAgents)).map((file) => `agents/${file}`);
-        const files = ["AGENTS.md", ...agentFiles];
-        installations.push({ harness: target.harness, sourceAgents, sourceRules, targetAgents, targetRules });
+        const prefix = `${target.harness}/agents/`;
+        const agents: Array<[string, Buffer]> = [...outputs].filter(([path]) => path.startsWith(prefix)).map(([path, content]) => [path.slice(prefix.length), content]);
+        const files = ["AGENTS.md", ...agents.map(([path]) => `agents/${path}`)];
+        installations.push({ agents, rules: outputs.get(`${target.harness}/AGENTS.md`)!, targetAgents, targetRules });
         reports.push({ harness: target.harness, root: targetRoot, skipped: false, files });
     }
 
@@ -379,13 +324,13 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
         ...installations.flatMap((installation) => [
             { target: installation.targetAgents, populate: async (path: string): Promise<void> =>
             {
-                if (installation.sourceAgents) await fs.cp(installation.sourceAgents, path, { recursive: true, force: false, errorOnExist: true });
-                else await fs.mkdir(path);
+                await fs.mkdir(path);
+                for (const [name, content] of installation.agents) await fs.writeFile(join(path, name), content, { flag: "wx" });
             } },
-            { target: installation.targetRules, populate: (path: string) => fs.copyFile(installation.sourceRules, path) },
+            { target: installation.targetRules, populate: (path: string) => fs.writeFile(path, installation.rules, { flag: "wx" }) },
         ]),
         { target: targetSharedRules, populate: (path: string) => fs.cp(sourceSharedRules, path, { recursive: true, force: false, errorOnExist: true }) },
-        ...skillInstallations.map((skill) => ({ target: skill.target, populate: (path: string) => copySkillDirectory(skill.source, path) })),
+        ...skillInstallations.map((skill) => ({ target: skill.target, populate: (path: string) => copySkillTree(skill.source, path) })),
     ]);
 
     return {

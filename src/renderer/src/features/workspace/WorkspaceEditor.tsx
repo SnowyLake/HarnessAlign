@@ -19,6 +19,9 @@ interface EditorFormBinding
     formRef: RefObject<HTMLFormElement | null>;
     handleChange: FormEventHandler<HTMLFormElement>;
     handleValueChange: (name: string, value: string) => void;
+    handleSubmit: FormEventHandler<HTMLFormElement>;
+    formError: string | undefined;
+    mutate: (work: () => Promise<void>) => void;
 }
 
 /** Props for a standard destructive confirmation modal. */
@@ -82,13 +85,14 @@ function useEditorAction(editorKey: string, onSave: (() => void) | undefined, on
 }
 
 /** Bind an uncontrolled native form to persistent drafts and external editor commands. */
-function useEditorForm(selection: Selection, onDelete?: () => void): EditorFormBinding
+function useEditorForm(workspace: Workspace, selection: Selection, onDelete?: () => void, onDone?: () => void): EditorFormBinding
 {
     const editorKey = selectionKey(selection);
     const draft = useAppStore((state) => state.editorDrafts[editorKey]);
     const setEditorDraft = useAppStore((state) => state.setEditorDraft);
     const formRef = useRef<HTMLFormElement>(null);
     const baselineRef = useRef<FormSnapshot | undefined>(draft?.baseline);
+    const [formError, setFormError] = useState<string>();
 
     useLayoutEffect(() =>
     {
@@ -114,8 +118,30 @@ function useEditorForm(selection: Selection, onDelete?: () => void): EditorFormB
         setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current });
     };
 
+    /** Run an editor mutation while sharing the busy guard and inline failure summary. */
+    const mutate = (work: () => Promise<void>): void =>
+    {
+        setFormError(undefined);
+        void runMutation(work).then((result) =>
+        {
+            if (!result.ok) setFormError(result.message);
+        });
+    };
+
+    /** Capture the native form before asynchronous work and persist its source draft. */
+    const handleSubmit: FormEventHandler<HTMLFormElement> = (event) =>
+    {
+        event.preventDefault();
+        const snapshot = formSnapshot(event.currentTarget);
+        mutate(async () =>
+        {
+            await persistEditorForm(workspace, selection, snapshot);
+            onDone?.();
+        });
+    };
+
     useEditorAction(editorKey, () => formRef.current?.requestSubmit(), onDelete);
-    return { draft, formRef, handleChange, handleValueChange };
+    return { draft, formRef, handleChange, handleValueChange, handleSubmit, formError, mutate };
 }
 
 /** Persist one mounted editor form and refresh it under the resulting selection. */
@@ -195,9 +221,8 @@ export function AgentDocumentTitleForm({ workspace }: { workspace: Workspace })
 {
     const isBusy = useAppStore((state) => state.isBusy);
     const setSelection = useAppStore((state) => state.setSelection);
-    const [formError, setFormError] = useState<string>();
     const selection: Selection = { kind: "config" };
-    const editor = useEditorForm(selection);
+    const editor = useEditorForm(workspace, selection);
     const [configName, setConfigName] = useState(draftText(editor.draft, "name", workspace.config.name));
 
     return (
@@ -207,18 +232,10 @@ export function AgentDocumentTitleForm({ workspace }: { workspace: Workspace })
             onFocusCapture={() => setSelection(selection)}
             onChange={editor.handleChange}
             onInput={editor.handleChange}
-            onSubmit={(event) =>
-            {
-                event.preventDefault();
-                setFormError(undefined);
-                void runMutation(() => persistEditorForm(workspace, selection, formSnapshot(event.currentTarget))).then((result) =>
-                {
-                    if (!result.ok) setFormError(result.message);
-                });
-            }}
+            onSubmit={editor.handleSubmit}
         >
             <Form component={false} layout="vertical" requiredMark={false}>
-                <FormError message={formError} />
+                <FormError message={editor.formError} />
                 <Form.Item
                     label="AGENTS.md title"
                     htmlFor="document-title"
@@ -254,9 +271,8 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
     const original = harness?.name;
     const selection: Selection = original ? { kind: "harness", name: original } : { kind: "harness-new" };
     const editorKey = selectionKey(selection);
-    const [formError, setFormError] = useState<string>();
     const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-    const editor = useEditorForm(selection, original ? () => setIsDeleteOpen(true) : undefined);
+    const editor = useEditorForm(workspace, selection, original ? () => setIsDeleteOpen(true) : undefined, onDone);
     const [harnessName, setHarnessName] = useState(draftText(editor.draft, "name", original ?? "new-harness"));
     const [agentFileFormat, setAgentFileFormat] = useState<"toml" | "md">(
         draftText(editor.draft, "agentFileFormat", harness?.agentFormat === "toml" ? "toml" : "md") === "toml" ? "toml" : "md",
@@ -272,20 +288,10 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                 onFocusCapture={() => setSelection(selection)}
                 onChange={editor.handleChange}
                 onInput={editor.handleChange}
-                onSubmit={(event) =>
-                {
-                    event.preventDefault();
-                    if (isBusy) return;
-                    setFormError(undefined);
-                    void runMutation(() => persistEditorForm(workspace, selection, formSnapshot(event.currentTarget))).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
-                        else onDone();
-                    });
-                }}
+                onSubmit={editor.handleSubmit}
             >
                 <Form component={false} layout="vertical" requiredMark={false}>
-                    <FormError message={formError} />
+                    <FormError message={editor.formError} />
                     <Form.Item label="Name" htmlFor="harness-name">
                         <Input
                             id="harness-name"
@@ -342,17 +348,13 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                 onConfirm={() =>
                 {
                     if (!original) return;
-                    setFormError(undefined);
-                    void runMutation(async () =>
+                    editor.mutate(async () =>
                     {
                         await window.appApi.workspace.removeHarness(original);
                         useAppStore.getState().clearEditorDraft(editorKey);
                         await refreshWorkspace();
                         showSuccess("Harness deleted", `Deleted harness ${original}`);
                         onDone();
-                    }).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
                     });
                 }}
             />
@@ -364,9 +366,8 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
 function LayerNewForm({ workspace }: { workspace: Workspace })
 {
     const setSelection = useAppStore((state) => state.setSelection);
-    const [formError, setFormError] = useState<string>();
     const selection: Selection = { kind: "layer-new" };
-    const editor = useEditorForm(selection);
+    const editor = useEditorForm(workspace, selection);
     const [layerName, setLayerName] = useState(draftText(editor.draft, "name", "new-layer"));
 
     return (
@@ -376,18 +377,10 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
             onFocusCapture={() => setSelection(selection)}
             onChange={editor.handleChange}
             onInput={editor.handleChange}
-            onSubmit={(event) =>
-            {
-                event.preventDefault();
-                setFormError(undefined);
-                void runMutation(() => persistEditorForm(workspace, selection, formSnapshot(event.currentTarget))).then((result) =>
-                {
-                    if (!result.ok) setFormError(result.message);
-                });
-            }}
+            onSubmit={editor.handleSubmit}
         >
             <Form component={false} layout="vertical" requiredMark={false}>
-                <FormError message={formError} />
+                <FormError message={editor.formError} />
                 <EditorNameField
                     value={layerName}
                     onChange={(value) =>
@@ -405,7 +398,6 @@ function LayerNewForm({ workspace }: { workspace: Workspace })
 function RuleForm({ workspace, selection }: { workspace: Workspace; selection: Extract<Selection, { kind: "rule" } | { kind: "rule-new" }> })
 {
     const isBusy = useAppStore((state) => state.isBusy);
-    const [formError, setFormError] = useState<string>();
     const [isDeleteOpen, setIsDeleteOpen] = useState(false);
     const isShared = (selection.kind === "rule-new" && selection.scope === "shared")
         || (selection.kind === "rule" && workspace.sharedRules.some((rule) => rule.path === selection.path));
@@ -418,7 +410,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
     const existing = selection.kind === "rule" ? workspace.rootRules.find((rule) => rule.path === selection.path) : undefined;
     const existingPath = sharedExisting?.path ?? existing?.path;
     const editorKey = selectionKey(selection);
-    const editor = useEditorForm(selection, existingPath ? () => setIsDeleteOpen(true) : undefined);
+    const editor = useEditorForm(workspace, selection, existingPath ? () => setIsDeleteOpen(true) : undefined);
     const [ruleName, setRuleName] = useState(draftText(editor.draft, "name", ruleDisplayName(existingPath ?? defaultPath)));
 
     return (
@@ -428,18 +420,10 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                 className="editor-form"
                 onChange={editor.handleChange}
                 onInput={editor.handleChange}
-                onSubmit={(event) =>
-                {
-                    event.preventDefault();
-                    setFormError(undefined);
-                    void runMutation(() => persistEditorForm(workspace, selection, formSnapshot(event.currentTarget))).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
-                    });
-                }}
+                onSubmit={editor.handleSubmit}
             >
                 <Form component={false} layout="vertical" requiredMark={false}>
-                    <FormError message={formError} />
+                    <FormError message={editor.formError} />
                     <EditorNameField
                         value={ruleName}
                         onChange={(value) =>
@@ -468,16 +452,12 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                     onCancel={() => setIsDeleteOpen(false)}
                     onConfirm={() =>
                     {
-                        setFormError(undefined);
-                        void runMutation(async () =>
+                        editor.mutate(async () =>
                         {
                             await window.appApi.workspace.deleteSource(existingPath);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace();
                             showSuccess("Rule deleted", `Deleted ${existingPath}`);
-                        }).then((result) =>
-                        {
-                            if (!result.ok) setFormError(result.message);
                         });
                     }}
                 />
@@ -490,7 +470,6 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
 function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selection: Extract<Selection, { kind: "layer-option" } | { kind: "layer-option-new" }> })
 {
     const isBusy = useAppStore((state) => state.isBusy);
-    const [formError, setFormError] = useState<string>();
     const [isDeleteOpen, setIsDeleteOpen] = useState(false);
     const existing = selection.kind === "layer-option"
         ? Object.values(workspace.layerOptions).flat().find((option) => option.path === selection.path)
@@ -499,7 +478,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
     const layerConfig = workspace.config.layers.find((candidate) => candidate.name === layer);
     const canDelete = Boolean(existing && layerConfig?.selected !== existing.name);
     const editorKey = selectionKey(selection);
-    const editor = useEditorForm(selection, canDelete ? () => setIsDeleteOpen(true) : undefined);
+    const editor = useEditorForm(workspace, selection, canDelete ? () => setIsDeleteOpen(true) : undefined);
     const [optionName, setOptionName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-option"));
 
     if (selection.kind === "layer-option" && !existing) return <MissingEditorEmpty title="Option not found" description="This layer option is no longer in the workspace." />;
@@ -512,18 +491,10 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                 className="editor-form"
                 onChange={editor.handleChange}
                 onInput={editor.handleChange}
-                onSubmit={(event) =>
-                {
-                    event.preventDefault();
-                    setFormError(undefined);
-                    void runMutation(() => persistEditorForm(workspace, selection, formSnapshot(event.currentTarget))).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
-                    });
-                }}
+                onSubmit={editor.handleSubmit}
             >
                 <Form component={false} layout="vertical" requiredMark={false}>
-                    <FormError message={formError} />
+                    <FormError message={editor.formError} />
                     <EditorNameField
                         value={optionName}
                         onChange={(value) =>
@@ -552,16 +523,12 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                     onCancel={() => setIsDeleteOpen(false)}
                     onConfirm={() =>
                     {
-                        setFormError(undefined);
-                        void runMutation(async () =>
+                        editor.mutate(async () =>
                         {
                             await window.appApi.workspace.removeLayerOption(existing.layer, existing.name);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace({ kind: "layer", name: existing.layer });
                             showSuccess("Layer option deleted", `Deleted ${existing.path}`);
-                        }).then((result) =>
-                        {
-                            if (!result.ok) setFormError(result.message);
                         });
                     }}
                 />
@@ -575,10 +542,9 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
 {
     const isBusy = useAppStore((state) => state.isBusy);
     const existing = selection.kind === "agent" ? workspace.agents.find((agent) => agent.path === selection.path) : undefined;
-    const [formError, setFormError] = useState<string>();
     const [isDeleteOpen, setIsDeleteOpen] = useState(false);
     const editorKey = selectionKey(selection);
-    const editor = useEditorForm(selection, existing ? () => setIsDeleteOpen(true) : undefined);
+    const editor = useEditorForm(workspace, selection, existing ? () => setIsDeleteOpen(true) : undefined);
     const [agentName, setAgentName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-agent"));
     const [activeMetadataName, setActiveMetadataName] = useState(workspace.config.harnesses[0]!.name);
     const selectedMetadataName = workspace.config.harnesses.some((harness) => harness.name === activeMetadataName)
@@ -592,18 +558,10 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                 className="editor-form"
                 onChange={editor.handleChange}
                 onInput={editor.handleChange}
-                onSubmit={(event) =>
-                {
-                    event.preventDefault();
-                    setFormError(undefined);
-                    void runMutation(() => persistEditorForm(workspace, selection, formSnapshot(event.currentTarget))).then((result) =>
-                    {
-                        if (!result.ok) setFormError(result.message);
-                    });
-                }}
+                onSubmit={editor.handleSubmit}
             >
                 <Form component={false} layout="vertical" requiredMark={false}>
-                    <FormError message={formError} />
+                    <FormError message={editor.formError} />
                     <EditorNameField
                         value={agentName}
                         onChange={(value) =>
@@ -657,16 +615,12 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                     onCancel={() => setIsDeleteOpen(false)}
                     onConfirm={() =>
                     {
-                        setFormError(undefined);
-                        void runMutation(async () =>
+                        editor.mutate(async () =>
                         {
                             await window.appApi.workspace.deleteSource(existing.path);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace();
                             showSuccess("Agent deleted", `Deleted ${existing.path}`);
-                        }).then((result) =>
-                        {
-                            if (!result.ok) setFormError(result.message);
                         });
                     }}
                 />

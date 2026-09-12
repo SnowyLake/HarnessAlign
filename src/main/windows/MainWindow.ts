@@ -6,7 +6,7 @@
 import { BrowserWindow, dialog, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadWindowState, trackWindowState } from "./WindowState.js";
+import { loadWindowState, MIN_WINDOW_SIZE, trackWindowState } from "./WindowState.js";
 import { logMainError } from "../services/ConsoleService.js";
 
 let mainWindow: BrowserWindow | undefined;
@@ -70,8 +70,8 @@ async function openMainWindow(): Promise<BrowserWindow>
         width: restored.width,
         height: restored.height,
         ...(restored.x !== undefined && restored.y !== undefined ? { x: restored.x, y: restored.y } : {}),
-        minWidth: 960,
-        minHeight: 640,
+        minWidth: MIN_WINDOW_SIZE.width,
+        minHeight: MIN_WINDOW_SIZE.height,
         title: "Harness Align",
         backgroundColor: "#0c0d10",
         autoHideMenuBar: true,
@@ -110,22 +110,14 @@ async function openMainWindow(): Promise<BrowserWindow>
         if (!isAllowedRendererNavigation(url)) event.preventDefault();
     });
 
-    if (import.meta.env.DEV && process.env.ELECTRON_RENDERER_URL)
+    const loading = import.meta.env.DEV && process.env.ELECTRON_RENDERER_URL
+        ? mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+        : mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
+    void loading.catch((error: unknown) =>
     {
-        void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL).catch((error: unknown) =>
-        {
-            logMainError("Window load failed", error);
-            mainWindow?.show();
-        });
-    }
-    else
-    {
-        void mainWindow.loadFile(join(__dirname, "../renderer/index.html")).catch((error: unknown) =>
-        {
-            logMainError("Window load failed", error);
-            mainWindow?.show();
-        });
-    }
+        logMainError("Window load failed", error);
+        mainWindow?.show();
+    });
 
     mainWindow.on("closed", () =>
     {

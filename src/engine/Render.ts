@@ -124,12 +124,6 @@ export function renderAgentsMarkdown(rules: Rule[], layers: LayerOption[], harne
     return Buffer.from(`${content}\n`, "utf8");
 }
 
-/** JSON-encode a value so TOML multiline strings can reuse escaped line text. */
-function jsonString(value: unknown): string
-{
-    return JSON.stringify(value);
-}
-
 /** Serialize one TOML subagent, storing the shared body in `instructions_field`. */
 function renderTomlAgent(agent: Agent, harness: HarnessConfig, metadata: Metadata): Buffer
 {
@@ -153,7 +147,7 @@ function renderTomlAgent(agent: Agent, harness: HarnessConfig, metadata: Metadat
     }
     const assignmentLine = `${assignment}\n`;
     if (!content.includes(assignmentLine)) throw new HalignError(`${agent.path}: ${harness.name} instructions field could not be rendered`);
-    const body = agent.body.split("\n").map((line) => jsonString(line).slice(1, -1)).join("\n");
+    const body = agent.body.split("\n").map((line) => JSON.stringify(line).slice(1, -1)).join("\n");
     const key = assignment.slice(0, assignment.indexOf(" = "));
     return Buffer.from(content.replace(assignmentLine, `${key} = """\n${body}"""\n`), "utf8");
 }

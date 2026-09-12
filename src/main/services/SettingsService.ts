@@ -37,7 +37,6 @@ export async function updateSettings(patch: unknown): Promise<AppSettings>
     const current = await getSettings();
     const parsedPatch = SETTINGS_PATCH_SCHEMA.parse(patch);
     const next: AppSettings = { theme: parsedPatch.theme ?? current.theme };
-    await fs.mkdir(app.getPath("userData"), { recursive: true });
     await atomicWrite(settingsPath(), Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
     return next;
 }

@@ -466,7 +466,7 @@ export function SkillsPanel()
         : (
             <Listy
                 items={filteredDiscovered}
-                rowKey="id"
+                rowKey={(skill) => `${skill.owner}/${skill.name}@${skill.branch}/${skill.sourcePath}`}
                 itemRender={(skill) => (
                     <SelectableSkillRow
                         id={skill.id}

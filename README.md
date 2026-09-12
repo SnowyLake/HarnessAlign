@@ -194,7 +194,7 @@ Arona soul content.
 
 Agent 和 Rule (包括 shared-rules) 支持仅修改文件名大小写, 重名检查会排除当前文件, 仍拒绝与其他文件忽略大小写后重名. Agent, Layer, Layer Option 和 Harness 名称允许英文字母大小写, 保留原始拼写, 忽略大小写后必须唯一. `targets`, `harnesses` 键和 Layer 选择中的引用必须与名称大小写一致. `agent_extension` 和 `instructions_field` 使用同一标识符规则, 允许英文大小写, 数字, 下划线和连字符, 且以字母或数字开头; 输出保留原始拼写. Harness 编辑时未切换格式会保留配置中的扩展名. `agent_format` 仍为固定的 `toml` / `yaml` 值, `instructions_field` 仍不能占用 `name` 或 `description`. Rule 文件名和 Skill id 保留各自已有的字符范围.
 
-Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正文. 每个 Harness 块里的 metadata 没有字段白名单, 会按该 Harness 的格式原样写出. 同名字段可以覆盖该 Harness 输出中的公共 `name` 或 `description`. TOML Harness 的正文占用 `instructions_field`, 不要在 metadata 里重复声明这个字段.
+Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正文. 保存前会检查公共 `name` 是否与其他 Agent 忽略大小写后重名, 冲突时保留原文件. 每个 Harness 块里的 metadata 没有字段白名单, 会按该 Harness 的格式原样写出. 同名字段可以覆盖该 Harness 输出中的公共 `name` 或 `description`. TOML Harness 的正文占用 `instructions_field`, 不要在 metadata 里重复声明这个字段.
 
 ## Skills
 
@@ -203,6 +203,10 @@ Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正�
 桌面应用可以从 Skills 页面的 Sources 弹窗登记 GitHub 仓库, 关闭弹窗后在 Discover 页签发现并安装 skill, 也可以从 `%USERPROFILE%\.agents\skills` 导入已有目录. Setup 把已经安装到项目里的 skill 覆盖部署到用户目录.
 
 GitHub 仓库根目录和子目录中的 `SKILL.md` 均可发现, 安装和检查更新. 根目录 skill 使用仓库名作为 id, `index.json` 中的 `sourcePath` 为空字符串是正常记录.
+
+本地导入和部署保留非隐藏的空目录, 跳过名称以 `.` 开头的文件和目录. 下载的 ZIP 路径必须使用 `/`, 包含反斜杠或路径逃逸的归档会被拒绝.
+
+批量安装和导入会先检查全部选中项的来源与大小写冲突. 冲突时不安装任何选中项; 逐项写入期间发生磁盘错误时, 之前成功的项仍可能保留.
 
 没有项目 Skills, 或 `.harness-align/skills/` 里只有 `index.json` 时, skills 部署会跳过并视为成功. shared-rules 仍然必需.
 
@@ -249,7 +253,7 @@ Token 到期时在 Settings 中点击 Manage connection, 再使用 Update connec
 `setup` 在生成之后:
 
 - 更新 `%USERPROFILE%\<config_path>\AGENTS.md`
-- 替换该目录下的 `agents/`. 当前没有生成 Subagent 时, 目标 `agents/` 会被替换为空目录
+- 使用本次生成的文件替换该目录下的 `agents/`, 不部署 `generated/` 中的未知文件. 当前没有生成 Subagent 时, 目标 `agents/` 会被替换为空目录
 - 用 `.harness-align/rules/shared/` 完整替换 `%USERPROFILE%\.agents\shared-rules`
 - 按 id 覆盖 `%USERPROFILE%\.agents\skills\<id>/`, 保留其他无关 skill, 也不复制 `index.json`
 

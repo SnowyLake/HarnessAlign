@@ -5,7 +5,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { join, posix, resolve } from "node:path";
+import { join, posix, relative, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError, resolveUserHome } from "./FsSafe.js";
 import {
@@ -14,7 +14,6 @@ import {
     errorText,
     FRONTMATTER,
     HalignError,
-    hasOwn,
     isRecord,
     type ProjectSkill,
     type SkillOrigin,
@@ -23,7 +22,6 @@ import {
     SKILL_NAME_MAX,
     type UserSkill,
     valueText,
-    WINDOWS_RESERVED_NAMES,
 } from "./Model.js";
 
 /** Index provenance persisted in `.harness-align/skills/index.json`. */
@@ -165,7 +163,6 @@ async function listSkillFiles(skillDirectory: string): Promise<string[]>
         {
             if (entry.name.startsWith(".")) continue;
             const child = prefix ? `${prefix}/${entry.name}` : entry.name;
-            if (hasHiddenSegment(child)) continue;
             const path = join(current, entry.name);
             const stats = await lstatIfExists(path);
             if (!stats) continue;
@@ -209,7 +206,7 @@ export async function loadSkillIndex(root: string): Promise<SkillIndex>
     {
         throw new HalignError(`.harness-align/skills/index.json: invalid JSON: ${errorText(error)}`);
     }
-    if (!isRecord(parsed) || !hasOwn(parsed, "skills") || !isRecord(parsed.skills))
+    if (!isRecord(parsed) || !Object.hasOwn(parsed, "skills") || !isRecord(parsed.skills))
     {
         throw new HalignError(".harness-align/skills/index.json: expected a mapping with skills");
     }
@@ -275,14 +272,8 @@ function originFromIndex(entry: SkillIndexEntry | undefined): SkillOrigin
     if (!entry) return { kind: "unknown" };
     if (entry.origin === "github")
     {
-        return {
-            kind: "github",
-            owner: entry.owner,
-            name: entry.name,
-            branch: entry.branch,
-            sourcePath: entry.sourcePath,
-            contentHash: entry.contentHash,
-        };
+        const { origin: kind, ...details } = entry;
+        return { kind, ...details };
     }
     return { kind: "local", contentHash: entry.contentHash };
 }
@@ -331,60 +322,44 @@ export async function loadSkills(root: string): Promise<ProjectSkill[]>
             throw new HalignError(`${display(root, skillFile)}: SKILL.md is required`);
         }
         const meta = await readSkillMeta(path, id);
-        skills.push({ id, title: meta.title, description: meta.description, origin: originFromIndex(index[id]) });
+        skills.push({ id, ...meta, origin: originFromIndex(Object.hasOwn(index, id) ? index[id] : undefined) });
     }
+    const installedIds = new Set(skills.map((skill) => skill.id));
     for (const id of Object.keys(index))
     {
-        if (!skills.some((skill) => skill.id === id))
+        if (!installedIds.has(id))
         {
             throw new HalignError(`.harness-align/skills/index.json: skills.${id} points at a missing skill directory`);
         }
     }
-    return skills.sort((left, right) => codePointCompare(left.id, right.id));
+    return skills;
 }
 
-/** Copy non-hidden skill files from `sourceDir` into a managed skill destination. */
-async function copySkillTree(sourceDir: string, destinationDir: string): Promise<void>
+/** Copy non-hidden skill content, preserving empty directories and refusing links. */
+export async function copySkillTree(sourceDir: string, destinationDir: string): Promise<void>
 {
     if (!(await lstatIfExists(join(sourceDir, "SKILL.md")))?.isFile())
     {
         throw new HalignError(`${sourceDir}: SKILL.md is required`);
     }
-    const files = await listSkillFiles(sourceDir);
-    await fs.mkdir(destinationDir, { recursive: true });
-    for (const relative of files)
-    {
-        const from = join(sourceDir, ...relative.split("/"));
-        const to = join(destinationDir, ...relative.split("/"));
-        await fs.mkdir(join(to, ".."), { recursive: true });
-        await fs.copyFile(from, to);
-    }
+    await fs.cp(sourceDir, destinationDir, {
+        recursive: true, force: false, errorOnExist: true,
+        filter: async (path) =>
+        {
+            if (hasHiddenSegment(relative(sourceDir, path).split(sep).join("/"))) return false;
+            if ((await fs.lstat(path)).isSymbolicLink()) throw new HalignError(`${path}: symbolic link skill sources are not allowed`);
+            return true;
+        },
+    });
     if (!(await lstatIfExists(join(destinationDir, "SKILL.md")))?.isFile())
     {
         throw new HalignError(`${destinationDir}: SKILL.md is required after copy`);
     }
 }
 
-/** Install one skill from an already-extracted local directory into `.harness-align/skills/<id>`, optionally replacing a different origin. */
-export async function installSkillFromDirectory(
-    rootPath: string,
-    id: string,
-    sourceDir: string,
-    origin: Exclude<SkillOrigin, { kind: "unknown" }>,
-    allowOriginChange = false,
-): Promise<void>
+/** Reject case aliases and unauthorized origin changes before a single or batch install. */
+export function assertSkillReplacement(collision: ProjectSkill | undefined, skillId: string, origin: Exclude<SkillOrigin, { kind: "unknown" }>, allowOriginChange = false): void
 {
-    const root = resolve(rootPath);
-    const skillId = assertSkillName(id, `.harness-align/skills/${id}`);
-    const skillsRoot = join(root, ".harness-align", "skills");
-    const destination = join(skillsRoot, skillId);
-    assertContained(root, destination, destination);
-    await ensureRegularSource(root, destination);
-    const sourceStats = await lstatIfExists(sourceDir);
-    if (!sourceStats?.isDirectory()) throw new HalignError(`${sourceDir}: expected a skill directory`);
-    const skillsRootStats = await lstatIfExists(skillsRoot);
-    const existing = skillsRootStats ? await loadSkills(root) : [];
-    const collision = existing.find((skill) => skill.id.toLowerCase() === skillId.toLowerCase());
     if (collision && collision.id !== skillId)
     {
         throw new HalignError(`.harness-align/skills/${skillId}: skill ids must be unique without case sensitivity, got ${valueText(skillId)} after ${valueText(collision.id)}`);
@@ -407,13 +382,33 @@ export async function installSkillFromDirectory(
             }
         }
     }
+}
+
+/** Install one skill from an already-extracted local directory into `.harness-align/skills/<id>`, optionally replacing a different origin. */
+export async function installSkillFromDirectory(
+    rootPath: string,
+    id: string,
+    sourceDir: string,
+    origin: Exclude<SkillOrigin, { kind: "unknown" }>,
+    allowOriginChange = false,
+): Promise<void>
+{
+    const root = resolve(rootPath);
+    const skillId = assertSkillName(id, `.harness-align/skills/${id}`);
+    const skillsRoot = join(root, ".harness-align", "skills");
+    const destination = join(skillsRoot, skillId);
+    assertContained(root, destination, destination);
+    await ensureRegularSource(root, destination);
+    const sourceStats = await lstatIfExists(sourceDir);
+    if (!sourceStats?.isDirectory()) throw new HalignError(`${sourceDir}: expected a skill directory`);
+    const existing = await loadSkills(root);
+    assertSkillReplacement(existing.find((skill) => skill.id.toLowerCase() === skillId.toLowerCase()), skillId, origin, allowOriginChange);
     const contentHash = await hashSkillDirectory(sourceDir);
     const index = await loadSkillIndex(root);
     const temporary = join(root, ".harness-align", `.skill-install-${skillId}-${randomUUID()}`);
     const backup = join(root, ".harness-align", `.skill-backup-${skillId}-${randomUUID()}`);
     if (await lstatIfExists(temporary)) throw new HalignError(`${display(root, temporary)}: temporary path already exists`);
     await fs.mkdir(join(root, ".harness-align"), { recursive: true });
-    await fs.mkdir(temporary);
     let replaced = false;
     let installed = false;
     try
@@ -513,7 +508,15 @@ export async function listUserSkills(userProfile = process.env.USERPROFILE): Pro
     {
         if (entry.name.startsWith(".")) continue;
         const id = entry.name;
-        if (!SKILL_NAME.test(id) || id.length > SKILL_NAME_MAX || WINDOWS_RESERVED_NAMES.has(id.toUpperCase())) continue;
+        try
+        {
+            assertSkillName(id, skillsRoot);
+        }
+        catch (error)
+        {
+            if (error instanceof HalignError) continue;
+            throw error;
+        }
         const directory = join(skillsRoot, id);
         const directoryStats = await lstatIfExists(directory);
         if (!directoryStats || directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) continue;
@@ -521,7 +524,7 @@ export async function listUserSkills(userProfile = process.env.USERPROFILE): Pro
         const skillStats = await lstatIfExists(skillFile);
         if (!skillStats?.isFile()) continue;
         const meta = await readSkillMeta(directory, id);
-        skills.push({ id, title: meta.title, description: meta.description });
+        skills.push({ id, ...meta });
     }
     return skills;
 }
@@ -562,6 +565,7 @@ export async function importUserSkills(
         {
             throw new HalignError(`.harness-align/skills/${collision.id}: skill already exists; pass overwrite to replace it`);
         }
+        assertSkillReplacement(collision, skillId, { kind: "local", contentHash: "" }, overwrite);
         if (!(await lstatIfExists(join(source, "SKILL.md")))?.isFile()) throw new HalignError(`${source}: SKILL.md is required`);
         selected.push({ id: skillId, source, contentHash: await hashSkillDirectory(source) });
     }

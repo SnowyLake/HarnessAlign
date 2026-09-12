@@ -4,7 +4,7 @@
  */
 
 import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
-import { fileName, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { fileName, hasLayerChanges, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type FormSnapshot, type Selection } from "@/stores/AppStore";
 import type { AgentFormat, Config, HarnessConfig, RuleInput, Workspace } from "@shared/models/Workspace";
 
@@ -132,20 +132,13 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             if (selection.kind === "harness" && !existing) throw new Error(`Harness ${selection.name} no longer exists`);
             const agentFileFormat = snapshotText(snapshot, "agentFileFormat", existing?.agentFormat === "toml" ? "toml" : "md") === "toml" ? "toml" : "md";
             const agentFormat: AgentFormat = agentFileFormat === "toml" ? "toml" : "yaml";
-            const harness: HarnessConfig = agentFormat === "toml"
-                ? {
-                    name: snapshotText(snapshot, "name", existing?.name).trim(),
-                    configPath: snapshotText(snapshot, "configPath", existing?.configPath).trim(),
-                    agentFormat,
-                    agentExtension: existing?.agentFormat === agentFormat ? existing.agentExtension : agentFileFormat,
-                    instructionsField: snapshotText(snapshot, "instructionsField", existing?.instructionsField).trim(),
-                }
-                : {
-                    name: snapshotText(snapshot, "name", existing?.name).trim(),
-                    configPath: snapshotText(snapshot, "configPath", existing?.configPath).trim(),
-                    agentFormat,
-                    agentExtension: existing?.agentFormat === agentFormat ? existing.agentExtension : agentFileFormat,
-                };
+            const harness: HarnessConfig = {
+                name: snapshotText(snapshot, "name", existing?.name).trim(),
+                configPath: snapshotText(snapshot, "configPath", existing?.configPath).trim(),
+                agentFormat,
+                agentExtension: existing?.agentFormat === agentFormat ? existing.agentExtension : agentFileFormat,
+                ...(agentFormat === "toml" ? { instructionsField: snapshotText(snapshot, "instructionsField", existing?.instructionsField).trim() } : {}),
+            };
             if (!existing) await window.appApi.workspace.addHarness(harness);
             else
             {
@@ -311,9 +304,7 @@ export async function saveWorkspaceChanges(): Promise<void>
 
     const draftEntries = Object.entries(initial.editorDrafts).map(([key, draft]) => ({ key, draft }));
     const configDraft = draftEntries.find(({ draft }) => draft.selection.kind === "config")?.draft;
-    const savedLayers = initial.workspace.config.layers;
-    const hasLocalLayerChanges = savedLayers.length !== initial.layerSelection.length
-        || savedLayers.some((item, index) => item.name !== initial.layerSelection[index]?.name || item.selected !== initial.layerSelection[index]?.option);
+    const hasLocalLayerChanges = hasLayerChanges(initial.workspace.config.layers, initial.layerSelection);
     const pending = draftEntries
         .filter(({ draft }) => draft.selection.kind !== "config")
         .sort((left, right) => editorSavePriority(left.draft.selection) - editorSavePriority(right.draft.selection) || left.key.localeCompare(right.key));

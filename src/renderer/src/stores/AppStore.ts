@@ -7,6 +7,7 @@ import type { ThemeMode } from "../../../shared/models/AppSettings.js";
 import type { LayerSelection, Workspace } from "../../../shared/models/Workspace.js";
 import type { SyncPreview, SyncStatus } from "../../../shared/models/Sync.js";
 import type { LogChange, LogEntry, LogSnapshot } from "../../../shared/models/Console.js";
+import { defaultLayerOption, hasLayerChanges } from "../lib/Utils.js";
 
 /** Workspace modules available from the primary navigation. */
 export type WorkspaceView = "project" | "rules" | "shared-rules" | "layers" | "skills" | "agents" | "generated";
@@ -174,12 +175,9 @@ function reconcileLayerSelection(current: readonly LayerSelection[], workspace: 
     {
         const options = Object.hasOwn(workspace.layerOptions, selection.name) ? workspace.layerOptions[selection.name] : undefined;
         if (!options?.length) continue;
-        const saved = workspace.config.layers.find((layer) => layer.name === selection.name)?.selected;
         const option = options.some((candidate) => candidate.name === selection.option)
             ? selection.option
-            : saved && options.some((candidate) => candidate.name === saved)
-                ? saved
-                : options[0]!.name;
+            : defaultLayerOption(workspace, selection.name)!;
         next.push({ name: selection.name, option });
     }
     return next;
@@ -223,10 +221,7 @@ interface AppState
 /** Count retained source drafts and an unsaved layer sequence as workspace changes. */
 export function workspaceChangeCount(state: Pick<AppState, "workspace" | "layerSelection" | "editorDrafts">): number
 {
-    const saved = state.workspace?.config.layers ?? [];
-    const hasLayerChanges = saved.length !== state.layerSelection.length
-        || saved.some((item, index) => item.name !== state.layerSelection[index]?.name || item.selected !== state.layerSelection[index]?.option);
-    return Object.keys(state.editorDrafts).length + (hasLayerChanges ? 1 : 0);
+    return Object.keys(state.editorDrafts).length + (hasLayerChanges(state.workspace?.config.layers ?? [], state.layerSelection) ? 1 : 0);
 }
 
 /** Renderer UI state for workspace modules, settings, and command progress. */

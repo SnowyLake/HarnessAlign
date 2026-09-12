@@ -13,8 +13,8 @@ import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { workspaceService } from "../src/main/services/WorkspaceService.js";
-import { uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
-import { useAppStore } from "../src/renderer/src/stores/AppStore.js";
+import { defaultLayerOption, moveLayerSelection, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
+import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
 import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
@@ -23,15 +23,16 @@ import { applySync, connectSync, disconnectSync, getSyncStatus, inspectSync, pre
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, readSyncSnapshot, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
-import { buildOutputs, generate, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
+import { buildOutputs, generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
+import { readResponseBytes } from "../src/main/services/RemoteFetch.js";
 import { loadConfig, validateConfig } from "../src/engine/Load.js";
 import { HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
 import { reportSetup, setup } from "../src/engine/Setup.js";
-import { assertSafeZipEntry, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
+import { assertSafeZipEntry, importUserSkills, listUserSkills, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
-    addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace, importUserSkills,
-    listUserSkills, loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource,
+    addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
+    loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkillSource,
     renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, updateHarness,
     applySyncSources, recoverSyncSources, validateSyncSources,
 } from "../src/engine/Edit.js";
@@ -2180,5 +2181,188 @@ test("discovery times out once without retrying a different branch", async (t) =
             t.mock.timers.reset();
             mocked.mock.restore();
         }
+    });
+});
+
+test("prototype-named harnesses and skills require explicit own metadata", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await addHarness(root, { name: "constructor", configPath: ".constructor", agentFormat: "yaml", agentExtension: "md" });
+        assert.equal((await buildOutputs(root)).has("constructor/agents/explorer.md"), false);
+        const agent = (await loadWorkspace(root)).agents[0]!;
+        await saveAgent(root, { ...agent, harnesses: { ...agent.harnesses, constructor: { enabled: true } } });
+        assert.match(output(await buildOutputs(root), "constructor/agents/explorer.md"), /enabled: true/u);
+        const directory = join(root, ".harness-align", "skills", "constructor");
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, "SKILL.md"), "# Skill\n");
+        assert.deepEqual((await loadSkills(root))[0]!.origin, { kind: "unknown" });
+    });
+});
+
+test("agent saves reject duplicate logical names before changing any sources", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const agent = (await loadWorkspace(root)).agents[0]!;
+        const before = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(saveAgent(root, { ...agent, path: ".harness-align/agents/other.md", name: agent.name.toUpperCase() }), /name must be unique/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+        await saveAgent(root, { ...agent, description: "Updated description" });
+        assert.equal((await loadWorkspace(root)).agents[0]!.description, "Updated description");
+    });
+});
+
+test("setup excludes unmanaged generated agents and deploys an empty current selection", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "test-home");
+        await mkdir(join(home, ".codex", "agents"), { recursive: true });
+        await mkdir(join(root, ".harness-align", "rules", "shared"));
+        await generate(root);
+        const unmanaged = join(root, ".harness-align", "generated", "codex", "agents", "unmanaged.toml");
+        await writeFile(unmanaged, "keep in generated only");
+        const first = await setup(root, undefined, home);
+        assert.deepEqual(await readdir(join(home, ".codex", "agents")), ["explorer.toml"]);
+        assert.deepEqual(first.targets[0]!.files, ["AGENTS.md", "agents/explorer.toml"]);
+        await unlink(join(root, ".harness-align", "agents", "explorer.md"));
+        await setup(root, undefined, home);
+        assert.deepEqual(await readdir(join(home, ".codex", "agents")), []);
+        assert.equal(await readFile(unmanaged, "utf8"), "keep in generated only");
+    });
+});
+
+test("generated reads reject a linked workspace parent", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await generate(root);
+        const source = join(root, ".harness-align");
+        const redirected = join(root, "redirected");
+        await rename(source, redirected);
+        await symlink(redirected, source, "junction");
+        await assert.rejects(readGeneratedFiles(root), /symbolic link/u);
+    });
+});
+
+test("skill install and deployment share hidden-file filtering and preserve empty directories", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const source = join(root, "incoming");
+        await mkdir(join(source, "empty"), { recursive: true });
+        await mkdir(join(source, ".hidden"));
+        await writeFile(join(source, "SKILL.md"), "# Skill\n");
+        await writeFile(join(source, ".hidden", "private.txt"), "hidden");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" });
+        const installed = join(root, ".harness-align", "skills", "demo");
+        assert.deepEqual((await readdir(installed)).sort(), ["SKILL.md", "empty"]);
+        const home = join(root, "test-home");
+        await mkdir(home);
+        await mkdir(join(root, ".harness-align", "rules", "shared"));
+        await setup(root, undefined, home);
+        assert.deepEqual((await readdir(join(home, ".agents", "skills", "demo"))).sort(), ["SKILL.md", "empty"]);
+    });
+});
+
+test("bounded downloads cancel oversized bodies and release stream locks", async () =>
+{
+    for (const declared of [true, false])
+    {
+        let cancelled = false;
+        const response = new Response(new ReadableStream<Uint8Array>({
+            start(controller) { controller.enqueue(new Uint8Array(5)); },
+            cancel() { cancelled = true; },
+        }), { headers: declared ? { "content-length": "5" } : {} });
+        await assert.rejects(readResponseBytes(response, 4, "test download"), /exceeds 4 bytes/u);
+        assert.equal(cancelled, true);
+        assert.equal(response.body!.locked, false);
+    }
+    const response = new Response("1234");
+    assert.equal((await readResponseBytes(response, 4, "test download")).toString(), "1234");
+    assert.equal(response.body!.locked, false);
+    await assert.rejects(readResponseBytes(new Response(null), 4, "test download"), /empty response body/u);
+});
+
+test("discovery rejects backslash paths before installing archive contents", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await addSkillSource(root, { url: "https://github.com/example/repo" });
+        const archive = Buffer.from(TEST_SKILL_ARCHIVE.toString("latin1").replaceAll("repo-main/", "repo-main\\"), "latin1");
+        assert.notDeepEqual(archive, TEST_SKILL_ARCHIVE);
+        t.mock.method(globalThis, "fetch", async () => new Response(archive));
+        await assert.rejects(discoverSkills(root), /zip entry path is unsafe/u);
+        assert.deepEqual(await loadSkills(root), []);
+    });
+});
+
+test("Layer selection keeps local choices and falls back only when the selected option disappears", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        try
+        {
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [] };
+            initial.setWorkspace(undefined);
+            initial.setWorkspace(workspace);
+            initial.setLayerSelection([{ name: "soul", option: "kei" }]);
+            initial.setWorkspace(workspace);
+            assert.deepEqual(useAppStore.getState().layerSelection, [{ name: "soul", option: "kei" }]);
+            assert.equal(workspaceChangeCount(useAppStore.getState()), 1);
+            initial.setWorkspace({ ...workspace, layerOptions: { soul: workspace.layerOptions.soul!.filter((option) => option.name !== "kei") } });
+            assert.deepEqual(useAppStore.getState().layerSelection, [{ name: "soul", option: "arona" }]);
+            assert.equal(workspaceChangeCount(useAppStore.getState()), 0);
+            initial.setLayerSelection([]);
+            initial.setWorkspace(workspace);
+            assert.deepEqual(useAppStore.getState().layerSelection, []);
+            assert.equal(defaultLayerOption(workspace, "constructor"), undefined);
+            const sequence = ["a", "b", "c"].map((name) => ({ name, option: "default" }));
+            assert.deepEqual(moveLayerSelection(sequence, "a", "c").map((item) => item.name), ["b", "c", "a"]);
+            assert.deepEqual(moveLayerSelection(sequence, "c", "a").map((item) => item.name), ["c", "a", "b"]);
+            assert.deepEqual(moveLayerSelection(sequence, "missing", "a"), sequence);
+            assert.deepEqual(moveLayerSelection(sequence, "a", "a"), sequence);
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+        }
+        await saveConfig(root, { ...await loadConfig(root), layers: [] });
+        await rm(join(root, ".harness-align", "layers"), { recursive: true });
+        await assert.rejects(removeLayer(root, "constructor"), /layer does not exist/u);
+    });
+});
+
+test("skill batches reject later origin and case conflicts before installing the first item", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const source = join(root, "incoming");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Existing local skill\n");
+        await installSkillFromDirectory(root, "kept", source, { kind: "local", contentHash: "" });
+        await addSkillSource(root, { url: "https://github.com/example/repo" });
+        await addSkillSource(root, { url: "https://github.com/example/other" });
+        const other = Buffer.from(TEST_SKILL_ARCHIVE.toString("latin1").replaceAll("demo", "kept"), "latin1");
+        t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) => new Response(String(input).includes("/other/") ? other : TEST_SKILL_ARCHIVE));
+        await discoverSkills(root);
+        const before = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(installSkills(root, ["demo", "kept"]), /different origin/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+    });
+    await withProject(async (root) =>
+    {
+        const home = join(root, "test-home");
+        for (const id of ["fresh", "demo"])
+        {
+            await mkdir(join(home, ".agents", "skills", id), { recursive: true });
+            await writeFile(join(home, ".agents", "skills", id, "SKILL.md"), "# User skill\n");
+        }
+        await installSkillFromDirectory(root, "Demo", join(home, ".agents", "skills", "demo"), { kind: "local", contentHash: "" });
+        const before = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(importUserSkills(root, ["fresh", "demo"], true, home), /unique without case sensitivity/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
     });
 });

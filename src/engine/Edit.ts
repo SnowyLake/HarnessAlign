@@ -8,7 +8,7 @@ import { join, posix, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { stringify as stringifyYaml } from "yaml";
 import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, isAtomicWriteTemporary, lstatIfExists, pathKey, reparseError, resolveUserHome } from "./FsSafe.js";
-import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, type SharedRule, validateConfig } from "./Load.js";
+import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, type SharedRule, validateAgentHarnesses, validateConfig, validateTargets } from "./Load.js";
 import {
     IDENTIFIER_NAME,
     type Agent,
@@ -19,21 +19,16 @@ import {
     type Harness,
     type HarnessConfig,
     HalignError,
-    hasOwn,
     isRecord,
     type LayerOption,
     type Metadata,
     normalizedBody,
     type ProjectSkill,
     type Rule,
-    typeText,
     valueText,
 } from "./Model.js";
-import { importUserSkills as importUserSkillsEngine, listUserSkills as listUserSkillsEngine, loadSkills, parseGitHubSkillSource, removeSkill as removeSkillEngine } from "./Skills.js";
+import { loadSkills, parseGitHubSkillSource } from "./Skills.js";
 import { parseSyncSnapshot, readSyncSnapshot, syncSnapshotHash, type SyncSnapshot } from "./Sync.js";
-
-export type { SharedRule };
-export { listUserSkillsEngine as listUserSkills, importUserSkillsEngine as importUserSkills, removeSkillEngine as removeSkill };
 
 /** Default `.harness-align/config.json` written when the user workspace does not exist yet. */
 const DEFAULT_USER_CONFIG = {
@@ -59,21 +54,10 @@ export interface Workspace
 }
 
 /** Editor payload for creating or updating a rule source file. */
-export interface RuleInput
-{
-    path: string;
-    priority: number;
-    targets: string[];
-    body: string;
-}
+export type RuleInput = Rule;
 
 /** Editor payload for creating or updating a layer option source file. */
-export interface LayerOptionInput
-{
-    path: string;
-    targets: string[];
-    body: string;
-}
+export type LayerOptionInput = Pick<LayerOption, "path" | "targets" | "body">;
 
 /** Sort editable rules by priority and use their paths as a deterministic tie-breaker. */
 function sortEditableRules(rules: Rule[]): Rule[]
@@ -248,7 +232,7 @@ function editableSourceKind(path: string): "root-rule" | "shared-rule" | "agent"
 /** Return whether a discovered layer directory exists. */
 function hasCatalogLayer(options: Record<string, LayerOption[]>, name: string): boolean
 {
-    return options[name] !== undefined;
+    return Object.hasOwn(options, name);
 }
 
 /** Return whether any catalog layer matches `name` without case sensitivity. */
@@ -278,32 +262,6 @@ function assertAgentPath(path: string): void
     }
 }
 
-/** Collect configured harness names. */
-function configuredNames(harnesses: HarnessConfig[]): Set<string>
-{
-    return new Set(harnesses.map((harness) => harness.name));
-}
-
-/** Validate a target allowlist against configured harness names. */
-function assertTargets(path: string, targets: string[], harnesses: HarnessConfig[]): string[]
-{
-    if (!Array.isArray(targets) || targets.some((target) => typeof target !== "string"))
-    {
-        throw new HalignError(`${path}: targets must be an array of configured harness names, got ${valueText(targets)}`);
-    }
-    if (new Set(targets).size !== targets.length)
-    {
-        throw new HalignError(`${path}: targets must be a unique array, got ${valueText(targets)}`);
-    }
-    const configured = configuredNames(harnesses);
-    const invalid = targets.find((target) => !configured.has(target));
-    if (invalid !== undefined)
-    {
-        throw new HalignError(`${path}: targets may only contain configured harness names, got ${valueText(invalid)}`);
-    }
-    return targets;
-}
-
 /** Validate a subagent payload before writing it. */
 function assertAgentInput(agent: Agent, harnesses: HarnessConfig[]): void
 {
@@ -317,26 +275,7 @@ function assertAgentInput(agent: Agent, harnesses: HarnessConfig[]): void
     {
         throw new HalignError(`${agent.path}: description must be a non-empty string, got ${valueText(agent.description)}`);
     }
-    const harnessConfigs = new Map(harnesses.map((harness) => [harness.name, harness]));
-    const keys = Object.keys(agent.harnesses);
-    if (keys.length === 0) throw new HalignError(`${agent.path}: at least one configured harness block is required`);
-    const invalid = keys.find((name) => !harnessConfigs.has(name));
-    if (invalid !== undefined)
-    {
-        throw new HalignError(`${agent.path}: harnesses may only contain configured harness names, got ${valueText(invalid)}`);
-    }
-    for (const [name, metadata] of Object.entries(agent.harnesses))
-    {
-        if (!isRecord(metadata))
-        {
-            throw new HalignError(`${agent.path}: ${name} metadata must be a mapping, got ${typeText(metadata)}`);
-        }
-        const harness = harnessConfigs.get(name)!;
-        if (harness.instructionsField !== undefined && hasOwn(metadata, harness.instructionsField))
-        {
-            throw new HalignError(`${agent.path}: ${name}.${harness.instructionsField} is reserved for the Markdown body`);
-        }
-    }
+    validateAgentHarnesses(agent.harnesses, agent.path, harnesses);
 }
 
 /** Load config, root rules, layer options, shared-rules, agents, and skills from a config root. */
@@ -540,7 +479,7 @@ export async function saveRule(rootPath: string, input: RuleInput): Promise<void
     {
         throw new HalignError(`${path}: priority must be a non-negative integer, got ${valueText(input.priority)}`);
     }
-    const targets = assertTargets(path, input.targets, config.harnesses);
+    const targets = validateTargets(input.targets, path, config.harnesses);
     await writeManaged(root, path, serializeFrontmatter({ priority: input.priority, targets }, input.body, path));
 }
 
@@ -558,7 +497,7 @@ export async function saveLayerOption(rootPath: string, input: LayerOptionInput)
     {
         throw new HalignError(`${path}: layer does not exist, got ${valueText(layer)}`);
     }
-    const targets = assertTargets(path, input.targets, config.harnesses);
+    const targets = validateTargets(input.targets, path, config.harnesses);
     await writeManaged(root, path, serializeLayerOption(targets, input.body));
 }
 
@@ -579,6 +518,9 @@ export async function saveAgent(rootPath: string, agent: Agent): Promise<void>
     const path = managedRelative(agent.path, agent.path);
     const next: Agent = { ...agent, path, body: normalizedBody(agent.body) };
     assertAgentInput(next, config.harnesses);
+    const agents = await loadAgents(root, config.harnesses);
+    const collision = agents.find((candidate) => candidate.name.toLowerCase() === next.name.toLowerCase() && pathKey(join(root, candidate.path)) !== pathKey(join(root, path)));
+    if (collision) throw new HalignError(`${path}: name must be unique without case sensitivity, got ${valueText(next.name)} already used by ${collision.path}`);
     await writeManaged(root, path, serializeFrontmatter({
         name: next.name,
         description: next.description,
@@ -835,8 +777,8 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
         path: ".harness-align/config.json",
         content: Buffer.from(`${JSON.stringify(configDocument(nextConfig), null, 2)}\n`, "utf8"),
     }];
-    for (const rule of nextRules) assertTargets(rule.path, rule.targets, nextConfig.harnesses);
-    for (const option of nextLayerOptions) assertTargets(option.path, option.targets, nextConfig.harnesses);
+    for (const rule of nextRules) validateTargets(rule.targets, rule.path, nextConfig.harnesses);
+    for (const option of nextLayerOptions) validateTargets(option.targets, option.path, nextConfig.harnesses);
     for (const agent of nextAgents) assertAgentInput(agent, nextConfig.harnesses);
     if (from !== harness.name)
     {

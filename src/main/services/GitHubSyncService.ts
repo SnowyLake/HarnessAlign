@@ -15,14 +15,11 @@ import {
     SYNC_MAX_ENTRIES, SYNC_MAX_FILE_BYTES, SYNC_MAX_TOTAL_BYTES, type SyncSnapshot,
 } from "../../engine/Sync.js";
 import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncFileView, SyncPreview, SyncResult, SyncStatus } from "../../shared/models/Sync.js";
-import { fetchRemote } from "./RemoteFetch.js";
+import { fetchRemote, readResponseBytes } from "./RemoteFetch.js";
 
 /** Stored connection includes only an OS-encrypted token. */
-interface SyncConnection
+interface SyncConnection extends Omit<SyncConnectionInput, "token">
 {
-    owner: string;
-    repository: string;
-    branch: string;
     encryptedToken: string;
 }
 
@@ -188,23 +185,7 @@ async function github(connection: SyncConnection, token: string, path: string, m
                             : "retry when GitHub is available";
             throw new HalignError(`GitHub ${method} ${path || "/"}: HTTP ${response.status}; ${hint}`);
         }
-        if (!response.body) throw new HalignError("GitHub returned an empty response");
-        const reader = response.body.getReader();
-        const chunks: Uint8Array[] = [];
-        let size = 0;
-        while (true)
-        {
-            const { done, value } = await reader.read();
-            if (done) break;
-            size += value.byteLength;
-            if (size > MAX_RESPONSE_BYTES)
-            {
-                await reader.cancel();
-                throw new HalignError(`GitHub response exceeds ${MAX_RESPONSE_BYTES} bytes`);
-            }
-            chunks.push(value);
-        }
-        return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        return JSON.parse((await readResponseBytes(response, MAX_RESPONSE_BYTES, "GitHub response")).toString("utf8"));
     }
     catch (error)
     {
@@ -446,20 +427,15 @@ export async function applySync(root: string, directory: string, token: string, 
     await checkRepository(state.connection, token);
     const currentHead = REFERENCE_SCHEMA.parse(await github(state.connection, token, `/git/ref/heads/${encodeURIComponent(state.connection.branch)}`)).object.sha;
     if (currentHead !== preview.remote.head) throw new HalignError("The remote branch changed after preview; preview again");
-    let head = currentHead;
-    if (preview.remote.empty || syncSnapshotHash(next) !== syncSnapshotHash(preview.remote.snapshot))
+    const needsUpload = preview.remote.empty || syncSnapshotHash(next) !== syncSnapshotHash(preview.remote.snapshot);
+    const head = needsUpload ? await createSyncCommit(state.connection, token, preview.remote, next) : currentHead;
+    // A receipt covers publication and a crash between local adoption and saving the baseline.
+    state.pending = { connectionKey: preview.connectionKey, head, parent: currentHead, before: local, snapshot: next };
+    await writeState(directory, state);
+    if (needsUpload)
     {
-        head = await createSyncCommit(state.connection, token, preview.remote, next);
-        state.pending = { connectionKey: preview.connectionKey, head, parent: currentHead, before: local, snapshot: next };
-        await writeState(directory, state);
         // Never force: concurrent uploads must be re-read and reviewed against a new baseline.
         await github(state.connection, token, `/git/refs/heads/${encodeURIComponent(state.connection.branch)}`, "PATCH", { sha: head, force: false });
-    }
-    else
-    {
-        // A receipt also covers a crash after local adoption but before saving the common baseline.
-        state.pending = { connectionKey: preview.connectionKey, head, parent: currentHead, before: local, snapshot: next };
-        await writeState(directory, state);
     }
     await finishSync(root, directory, state, local, next, head);
     retainedPreview = undefined;

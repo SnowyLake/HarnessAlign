@@ -10,7 +10,7 @@ import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import { SYNC_APPLY_SCHEMA, SYNC_CONNECTION_SCHEMA } from "../../shared/models/Schemas.js";
 import { applySync, connectSync, disconnectSync, getSyncEncryptedToken, getSyncStatus, inspectSync, previewSync } from "../services/GitHubSyncService.js";
 import { withWorkspace } from "../services/WorkspaceService.js";
-import { assertTrusted, runIpc } from "../utils/Ipc.js";
+import { runIpc } from "../utils/Ipc.js";
 
 /** Read an OS-protected token inside the serialized operation that uses its connection. */
 async function syncToken(directory: string): Promise<string>
@@ -30,14 +30,12 @@ async function syncToken(directory: string): Promise<string>
 /** Register fixed sync capabilities after validating each sender and renderer payload. */
 export function registerSyncHandlers(): void
 {
-    ipcMain.handle(IPC_CHANNELS.syncStatus, (event) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.syncStatus, (event) => runIpc(event, async () =>
     {
-        assertTrusted(event);
         return withWorkspace(() => getSyncStatus(app.getPath("userData")));
     }));
-    ipcMain.handle(IPC_CHANNELS.syncConnect, (event, input: unknown) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.syncConnect, (event, input: unknown) => runIpc(event, async () =>
     {
-        assertTrusted(event);
         const connection = SYNC_CONNECTION_SCHEMA.parse(input);
         return withWorkspace(async () =>
         {
@@ -45,30 +43,26 @@ export function registerSyncHandlers(): void
             return connectSync(app.getPath("userData"), connection, safeStorage.encryptString(connection.token).toString("base64"));
         });
     }));
-    ipcMain.handle(IPC_CHANNELS.syncDisconnect, (event) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.syncDisconnect, (event) => runIpc(event, async () =>
     {
-        assertTrusted(event);
         return withWorkspace(() => disconnectSync(app.getPath("userData")));
     }));
-    ipcMain.handle(IPC_CHANNELS.syncPreview, (event) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.syncPreview, (event) => runIpc(event, async () =>
     {
-        assertTrusted(event);
         return withWorkspace(async (root) =>
         {
             const directory = app.getPath("userData");
             return previewSync(root, directory, await syncToken(directory));
         });
     }));
-    ipcMain.handle(IPC_CHANNELS.syncInspect, (event, previewId: unknown, key: unknown) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.syncInspect, (event, previewId: unknown, key: unknown) => runIpc(event, async () =>
     {
-        assertTrusted(event);
         const id = z.uuid().parse(previewId);
         const change = z.string().min(1).max(241).parse(key);
         return withWorkspace(async () => inspectSync(id, change));
     }));
-    ipcMain.handle(IPC_CHANNELS.syncApply, (event, input: unknown) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.syncApply, (event, input: unknown) => runIpc(event, async () =>
     {
-        assertTrusted(event);
         const decisions = SYNC_APPLY_SCHEMA.parse(input);
         return withWorkspace(async (root) =>
         {

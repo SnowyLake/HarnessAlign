@@ -5,7 +5,7 @@
 
 import { promises as fs } from "node:fs";
 import { join, posix, resolve } from "node:path";
-import { assertContained, atomicWrite, display, lstatIfExists, pathKey, readUtf8, reparseError } from "./FsSafe.js";
+import { assertContained, atomicWrite, display, ensureRegularSource, lstatIfExists, pathKey, readUtf8, reparseError } from "./FsSafe.js";
 import { loadAgents, loadConfig, loadLayerOptions, loadRules } from "./Load.js";
 import {
     type Config,
@@ -62,6 +62,7 @@ export async function buildOutputs(rootPath: string, selection?: readonly LayerS
         outputs.set(`${harness.name}/AGENTS.md`, renderAgentsMarkdown(rules, selectedLayers, harness.name, config.name));
         for (const agent of orderedAgents)
         {
+            if (!Object.hasOwn(agent.harnesses, harness.name)) continue;
             const metadata = agent.harnesses[harness.name];
             if (!metadata) continue;
             const destinationPath = `${harness.name}/agents/${agent.name}.${harness.agentExtension}`;
@@ -79,6 +80,7 @@ export async function buildOutputs(rootPath: string, selection?: readonly LayerS
 /** Return the generated directory after ensuring it is not a reparse point. */
 async function outputRoot(root: string): Promise<string>
 {
+    await ensureRegularSource(root, join(root, ".harness-align"));
     const path = join(root, ".harness-align", "generated");
     const stats = await lstatIfExists(path);
     if (stats?.isSymbolicLink()) throw new HalignError(".harness-align/generated: symbolic link output directories are not allowed");
@@ -143,7 +145,7 @@ async function loadManifest(root: string): Promise<string[]>
         if (error instanceof HalignError) throw error;
         throw new HalignError(`.harness-align/generated/.manifest.json: invalid manifest: ${errorText(error)}`);
     }
-    if (!isRecord(manifest) || typeof manifest.version !== "number" || !Number.isInteger(manifest.version) || manifest.version !== 1)
+    if (!isRecord(manifest) || manifest.version !== 1)
     {
         throw new HalignError(".harness-align/generated/.manifest.json: version must be integer 1");
     }

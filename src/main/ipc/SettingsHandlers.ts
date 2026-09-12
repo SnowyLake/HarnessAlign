@@ -6,7 +6,7 @@ import { ipcMain } from "electron";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import type { AppSettings } from "../../shared/models/AppSettings.js";
 import { getSettings, updateSettings } from "../services/SettingsService.js";
-import { assertTrusted, runIpc } from "../utils/Ipc.js";
+import { runIpc } from "../utils/Ipc.js";
 import { getMainWindow } from "../windows/MainWindow.js";
 
 /** Notify the renderer after settings.json changes. */
@@ -19,15 +19,10 @@ function emitChanged(settings: AppSettings): void
 /** Register settings IPC handlers. */
 export function registerSettingsHandlers(): void
 {
-    ipcMain.handle(IPC_CHANNELS.settingsGet, (event) =>
-    {
-        assertTrusted(event);
-        return runIpc(getSettings);
-    });
+    ipcMain.handle(IPC_CHANNELS.settingsGet, (event) => runIpc(event, getSettings));
 
-    ipcMain.handle(IPC_CHANNELS.settingsUpdate, (event, patch: unknown) => runIpc(async () =>
+    ipcMain.handle(IPC_CHANNELS.settingsUpdate, (event, patch: unknown) => runIpc(event, async () =>
     {
-        assertTrusted(event);
         const settings = await updateSettings(patch);
         emitChanged(settings);
         return settings;

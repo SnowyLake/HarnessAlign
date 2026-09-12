@@ -29,7 +29,6 @@ import {
     errorText,
     firstSorted,
     HalignError,
-    hasOwn,
     isRecord,
     normalizedBody,
     typeText,
@@ -113,9 +112,10 @@ async function parseFrontmatter(root: string, path: string): Promise<[Record<str
     return [metadata, body];
 }
 
-/** Require a unique string array. */
-function stringArray(value: unknown, path: string, field: string): string[]
+/** Validate an explicit, unique allowlist of configured harness names. */
+export function validateTargets(value: unknown, path: string, harnesses: readonly HarnessConfig[]): string[]
 {
+    const field = "targets";
     if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item.length > 0))
     {
         throw new HalignError(`${path}: ${field} must be a string array, got ${valueText(value)}`);
@@ -124,6 +124,9 @@ function stringArray(value: unknown, path: string, field: string): string[]
     {
         throw new HalignError(`${path}: ${field} must not contain duplicates, got ${valueText(value)}`);
     }
+    const configured = new Set(harnesses.map((harness) => harness.name));
+    const invalid = value.find((target) => !configured.has(target));
+    if (invalid !== undefined) throw new HalignError(`${path}: targets may only contain configured harness names, got ${valueText(invalid)}`);
     return value;
 }
 
@@ -150,7 +153,7 @@ function validateHarnessConfig(value: unknown, path: string, index: number): Har
     if (unknown.length > 0) throw new HalignError(`${context}: unknown field ${valueText(firstSorted(unknown))}`);
     for (const field of ["name", "config_path", "agent_format", "agent_extension"])
     {
-        if (!hasOwn(value, field)) throw new HalignError(`${context}: ${field} is required`);
+        if (!Object.hasOwn(value, field)) throw new HalignError(`${context}: ${field} is required`);
     }
 
     const name = validateString(context, "name", value.name);
@@ -169,7 +172,7 @@ function validateHarnessConfig(value: unknown, path: string, index: number): Har
     }
 
     let instructionsField: string | undefined;
-    if (hasOwn(value, "instructions_field")) instructionsField = validateString(context, "instructions_field", value.instructions_field);
+    if (Object.hasOwn(value, "instructions_field")) instructionsField = validateString(context, "instructions_field", value.instructions_field);
     if (instructionsField !== undefined && (!IDENTIFIER_NAME.test(instructionsField) || instructionsField === "name" || instructionsField === "description"))
     {
         throw new HalignError(`${context}: instructions_field must match ${IDENTIFIER_NAME.source} and be other than name or description, got ${valueText(instructionsField)}`);
@@ -196,7 +199,7 @@ function validateSkillSource(value: unknown, path: string, index: number): Skill
     if (unknown.length > 0) throw new HalignError(`${context}: unknown field ${valueText(firstSorted(unknown))}`);
     for (const field of ["owner", "name", "branch"])
     {
-        if (!hasOwn(value, field)) throw new HalignError(`${context}: ${field} is required`);
+        if (!Object.hasOwn(value, field)) throw new HalignError(`${context}: ${field} is required`);
     }
     const owner = validateString(context, "owner", value.owner);
     const name = validateString(context, "name", value.name);
@@ -226,13 +229,13 @@ export function validateConfig(value: unknown): Config
     if (unknownFields.length > 0) throw new HalignError(`${path}: unknown field ${valueText(firstSorted(unknownFields))}`);
     for (const field of ["version", "layers", "harnesses"])
     {
-        if (!hasOwn(value, field)) throw new HalignError(`${path}: ${field} is required`);
+        if (!Object.hasOwn(value, field)) throw new HalignError(`${path}: ${field} is required`);
     }
-    if (typeof value.version !== "number" || !Number.isInteger(value.version) || value.version !== 1)
+    if (value.version !== 1)
     {
         throw new HalignError(`${path}: version must be integer 1, got ${valueText(value.version)}`);
     }
-    const name = hasOwn(value, "name") ? value.name : "AGENTS";
+    const name = Object.hasOwn(value, "name") ? value.name : "AGENTS";
     if (typeof name !== "string" || !name.trim() || /[\r\n]/u.test(name))
     {
         throw new HalignError(`${path}: name must be a non-empty single-line string, got ${valueText(name)}`);
@@ -244,8 +247,8 @@ export function validateConfig(value: unknown): Config
         if (!isRecord(layer)) throw new HalignError(`${context} must be a mapping, got ${typeText(layer)}`);
         const unknown = Object.keys(layer).filter((field) => field !== "name" && field !== "selected");
         if (unknown.length > 0) throw new HalignError(`${context}: unknown field ${valueText(firstSorted(unknown))}`);
-        if (!hasOwn(layer, "name")) throw new HalignError(`${context}: name is required`);
-        if (!hasOwn(layer, "selected")) throw new HalignError(`${context}: selected is required`);
+        if (!Object.hasOwn(layer, "name")) throw new HalignError(`${context}: name is required`);
+        if (!Object.hasOwn(layer, "selected")) throw new HalignError(`${context}: selected is required`);
         const layerName = validateString(context, "name", layer.name);
         const selected = validateString(context, "selected", layer.selected);
         if (!IDENTIFIER_NAME.test(layerName)) throw new HalignError(`${context}: name must match ${IDENTIFIER_NAME.source}, got ${valueText(layerName)}`);
@@ -260,7 +263,7 @@ export function validateConfig(value: unknown): Config
     }
     const harnesses = value.harnesses.map((harness, index) => validateHarnessConfig(harness, path, index));
     const skillSources: SkillSource[] = [];
-    if (hasOwn(value, "skill_sources"))
+    if (Object.hasOwn(value, "skill_sources"))
     {
         if (!Array.isArray(value.skill_sources))
         {
@@ -386,28 +389,13 @@ export async function loadRules(root: string, harnesses: HarnessConfig[]): Promi
         const [metadata, body] = await parseFrontmatter(root, sourcePath);
         const unknown = Object.keys(metadata).filter((field) => !RULE_FIELDS.has(field));
         if (unknown.length > 0) throw new HalignError(`${path}: unknown rule field ${valueText(firstSorted(unknown))}`);
-        if (!hasOwn(metadata, "priority")) throw new HalignError(`${path}: priority is required`);
+        if (!Object.hasOwn(metadata, "priority")) throw new HalignError(`${path}: priority is required`);
         const priority = metadata.priority;
         if (typeof priority !== "number" || !Number.isInteger(priority) || priority < 0)
         {
             throw new HalignError(`${path}: priority must be a non-negative integer, got ${valueText(priority)}`);
         }
-        let targets: Harness[];
-        if (!hasOwn(metadata, "targets"))
-        {
-            targets = [];
-        }
-        else
-        {
-            const rawTargets = stringArray(metadata.targets, path, "targets");
-            const configured = new Set(harnesses.map((harness) => harness.name));
-            const invalid = rawTargets.find((target) => !configured.has(target));
-            if (invalid !== undefined)
-            {
-                throw new HalignError(`${path}: targets may only contain configured harness names, got ${valueText(invalid)}`);
-            }
-            targets = rawTargets;
-        }
+        const targets = validateTargets(Object.hasOwn(metadata, "targets") ? metadata.targets : [], path, harnesses);
         rules.push({ path, priority, targets, body: normalizedBody(body) });
     }
     return rules;
@@ -476,15 +464,7 @@ async function loadLayerDirectory(root: string, directory: string, layer: string
         const [metadata, body] = await parseLayerSource(root, sourcePath);
         const unknown = Object.keys(metadata).filter((field) => !LAYER_FIELDS.has(field));
         if (unknown.length > 0) throw new HalignError(`${path}: unknown layer field ${valueText(firstSorted(unknown))}`);
-        const targets = hasOwn(metadata, "targets")
-            ? stringArray(metadata.targets, path, "targets")
-            : [];
-        const configured = new Set(harnesses.map((harness) => harness.name));
-        const invalid = targets.find((target) => !configured.has(target));
-        if (invalid !== undefined)
-        {
-            throw new HalignError(`${path}: targets may only contain configured harness names, got ${valueText(invalid)}`);
-        }
+        const targets = validateTargets(Object.hasOwn(metadata, "targets") ? metadata.targets : [], path, harnesses);
         options.push({ path, layer, name, targets, body: body ? normalizedBody(body) : "" });
     }
     if (selected !== undefined && !options.some((option) => option.name === selected))
@@ -548,7 +528,6 @@ export async function loadAgents(root: string, configuredHarnesses: HarnessConfi
     const paths = await markdownFiles(root, join(root, ".harness-align", "agents"), false);
     const agents: Agent[] = [];
     const names = new Map<string, string>();
-    const harnessConfigs = new Map(configuredHarnesses.map((harness) => [harness.name, harness]));
     for (const sourcePath of paths)
     {
         const path = display(root, sourcePath);
@@ -557,7 +536,7 @@ export async function loadAgents(root: string, configuredHarnesses: HarnessConfi
         if (unknown.length > 0) throw new HalignError(`${path}: unknown agent field ${valueText(firstSorted(unknown))}`);
         for (const field of AGENT_FIELDS)
         {
-            if (!hasOwn(metadata, field)) throw new HalignError(`${path}: ${field} is required`);
+            if (!Object.hasOwn(metadata, field)) throw new HalignError(`${path}: ${field} is required`);
         }
         const name = validateString(path, "name", metadata.name);
         if (!IDENTIFIER_NAME.test(name)) throw new HalignError(`${path}: name must match ${IDENTIFIER_NAME.source}, got ${valueText(name)}`);
@@ -569,36 +548,41 @@ export async function loadAgents(root: string, configuredHarnesses: HarnessConfi
         }
         names.set(foldedName, name);
         const description = validateString(path, "description", metadata.description);
-        if (!isRecord(metadata.harnesses))
-        {
-            throw new HalignError(`${path}: harnesses must be a mapping, got ${typeText(metadata.harnesses)}`);
-        }
-        const invalidHarness = Object.keys(metadata.harnesses).find((harness) => !harnessConfigs.has(harness));
-        if (invalidHarness !== undefined)
-        {
-            throw new HalignError(`${path}: harnesses may only contain configured harness names, got ${valueText(invalidHarness)}`);
-        }
-        const rendered: Record<Harness, Metadata> = {};
-        for (const [harnessName, rawValues] of Object.entries(metadata.harnesses))
-        {
-            const harness = harnessConfigs.get(harnessName)!;
-            if (!isRecord(rawValues))
-            {
-                throw new HalignError(`${path}: ${harness.name} metadata must be a mapping, got ${typeText(rawValues)}`);
-            }
-            if (harness.instructionsField !== undefined && hasOwn(rawValues, harness.instructionsField))
-            {
-                throw new HalignError(`${path}: ${harness.name}.${harness.instructionsField} is reserved for the Markdown body`);
-            }
-            rendered[harness.name] = rawValues;
-        }
-        if (Object.keys(rendered).length === 0)
-        {
-            throw new HalignError(`${path}: at least one configured harness block is required`);
-        }
-        agents.push({ path, name, description, harnesses: rendered, body: normalizedBody(body) });
+        const harnesses = validateAgentHarnesses(metadata.harnesses, path, configuredHarnesses);
+        agents.push({ path, name, description, harnesses, body: normalizedBody(body) });
     }
     return agents;
+}
+
+/** Validate per-harness metadata and retain only explicitly configured own properties. */
+export function validateAgentHarnesses(value: unknown, path: string, configuredHarnesses: readonly HarnessConfig[]): Record<Harness, Metadata>
+{
+    if (!isRecord(value)) throw new HalignError(`${path}: harnesses must be a mapping, got ${typeText(value)}`);
+    const harnessConfigs = new Map(configuredHarnesses.map((harness) => [harness.name, harness]));
+    const invalidHarness = Object.keys(value).find((harness) => !harnessConfigs.has(harness));
+    if (invalidHarness !== undefined)
+    {
+        throw new HalignError(`${path}: harnesses may only contain configured harness names, got ${valueText(invalidHarness)}`);
+    }
+    const rendered: Record<Harness, Metadata> = {};
+    for (const [harnessName, rawValues] of Object.entries(value))
+    {
+        const harness = harnessConfigs.get(harnessName)!;
+        if (!isRecord(rawValues))
+        {
+            throw new HalignError(`${path}: ${harness.name} metadata must be a mapping, got ${typeText(rawValues)}`);
+        }
+        if (harness.instructionsField !== undefined && Object.hasOwn(rawValues, harness.instructionsField))
+        {
+            throw new HalignError(`${path}: ${harness.name}.${harness.instructionsField} is reserved for the Markdown body`);
+        }
+        rendered[harness.name] = rawValues;
+    }
+    if (Object.keys(rendered).length === 0)
+    {
+        throw new HalignError(`${path}: at least one configured harness block is required`);
+    }
+    return rendered;
 }
 
 /** Shared-rule markdown deployed independently of generated AGENTS.md. */

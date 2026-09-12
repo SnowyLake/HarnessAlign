@@ -9,16 +9,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
 import { loadConfig } from "../../engine/Load.js";
-import { codePointCompare, errorText, HalignError, valueText } from "../../engine/Model.js";
+import { codePointCompare, errorText, HalignError, type SkillOrigin, valueText } from "../../engine/Model.js";
 import {
     assertSafeZipEntry,
     assertSkillName,
+    assertSkillReplacement,
     installSkillFromDirectory,
     loadSkills,
     readSkillFrontmatter,
 } from "../../engine/Skills.js";
 import type { RemoteSkill, SkillUpdate } from "../../shared/models/Workspace.js";
-import { fetchRemote } from "./RemoteFetch.js";
+import { fetchRemote, readResponseBytes } from "./RemoteFetch.js";
 
 /** Compressed zip size limit (128 MiB). */
 const MAX_COMPRESSED_BYTES = 128 * 1024 * 1024;
@@ -40,18 +41,10 @@ class ArchiveHttpError extends HalignError
 }
 
 /** One discovered skill held in the session unzip cache. */
-interface CachedSkill
+interface CachedSkill extends RemoteSkill
 {
-    id: string;
-    title: string;
-    description: string;
-    owner: string;
-    name: string;
-    branch: string;
-    sourcePath: string;
     files: Map<string, Uint8Array>;
     contentHash: string;
-    conflict: boolean;
 }
 
 /** Session cache of the last successful discover for a workspace root. */
@@ -90,38 +83,7 @@ async function fetchZip(owner: string, name: string, branch: string): Promise<Ui
             await response.body?.cancel();
             throw new ArchiveHttpError(response.status, location);
         }
-        const lengthHeader = response.headers.get("content-length");
-        if (lengthHeader && Number(lengthHeader) > MAX_COMPRESSED_BYTES)
-        {
-            throw new HalignError(`skill archive exceeds ${MAX_COMPRESSED_BYTES} compressed bytes`);
-        }
-        if (!response.body)
-        {
-            throw new HalignError(`failed to download ${owner}/${name}@${branch}: empty response body`);
-        }
-        const reader = response.body.getReader();
-        const chunks: Uint8Array[] = [];
-        let received = 0;
-        while (true)
-        {
-            const { done, value } = await reader.read();
-            if (done || value === undefined) break;
-            received += value.byteLength;
-            if (received > MAX_COMPRESSED_BYTES)
-            {
-                await reader.cancel();
-                throw new HalignError(`skill archive exceeds ${MAX_COMPRESSED_BYTES} compressed bytes`);
-            }
-            chunks.push(value);
-        }
-        const buffer = new Uint8Array(received);
-        let offset = 0;
-        for (const chunk of chunks)
-        {
-            buffer.set(chunk, offset);
-            offset += chunk.byteLength;
-        }
-        return buffer;
+        return await readResponseBytes(response, MAX_COMPRESSED_BYTES, `skill archive ${location}`);
     }
     catch (error)
     {
@@ -177,7 +139,7 @@ function unzipSkillArchive(bytes: Uint8Array): Map<string, Uint8Array>
         {
             throw new HalignError(`skill archive exceeds ${MAX_UNCOMPRESSED_BYTES} uncompressed bytes`);
         }
-        const safe = assertSafeZipEntry(rawPath.replace(/\\/gu, "/"));
+        const safe = assertSafeZipEntry(rawPath);
         const slash = safe.indexOf("/");
         if (slash <= 0) continue;
         const relative = assertSafeZipEntry(safe.slice(slash + 1));
@@ -201,19 +163,6 @@ function hashSkillFiles(files: Map<string, Uint8Array>): string
     return hash.digest("hex");
 }
 
-/** Return whether `path` belongs to `sourcePath` and not a nested skill root. */
-function belongsToSkillRoot(path: string, sourcePath: string, roots: readonly string[]): boolean
-{
-    if (sourcePath === "")
-    {
-        return !roots.some((root) => root !== "" && (path === `${root}/SKILL.md` || path.startsWith(`${root}/`)));
-    }
-    if (path !== `${sourcePath}/SKILL.md` && !path.startsWith(`${sourcePath}/`)) return false;
-    return !roots.some((root) => root !== sourcePath
-        && root.startsWith(`${sourcePath}/`)
-        && (path === `${root}/SKILL.md` || path.startsWith(`${root}/`)));
-}
-
 /** Discover SKILL.md directories inside one extracted repository map. */
 function discoverInArchive(
     files: Map<string, Uint8Array>,
@@ -225,34 +174,30 @@ function discoverInArchive(
     const skillFiles = [...files.keys()].filter((path) => path === "SKILL.md" || path.endsWith("/SKILL.md"));
     skillFiles.sort(codePointCompare);
     const roots = skillFiles.map((skillFile) => (skillFile === "SKILL.md" ? "" : skillFile.slice(0, -"/SKILL.md".length)));
-    const discovered: Array<Omit<CachedSkill, "conflict">> = [];
-    for (const sourcePath of roots)
+    const skillMaps = new Map(roots.map((root) => [root, new Map<string, Uint8Array>()]));
+    for (const [path, data] of files)
+    {
+        let parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+        for (;;)
+        {
+            const skillMap = skillMaps.get(parent);
+            if (skillMap)
+            {
+                skillMap.set(parent ? path.slice(parent.length + 1) : path, data);
+                break;
+            }
+            if (!parent) break;
+            parent = parent.includes("/") ? parent.slice(0, parent.lastIndexOf("/")) : "";
+        }
+    }
+    return [...skillMaps].map(([sourcePath, skillMap]) =>
     {
         const id = sourcePath ? sourcePath.split("/").at(-1)! : name;
         assertSkillName(id, `${owner}/${name}:${sourcePath || "."}`);
-        const skillMap = new Map<string, Uint8Array>();
-        for (const [path, data] of files)
-        {
-            if (!belongsToSkillRoot(path, sourcePath, roots)) continue;
-            const relative = sourcePath === "" ? path : path.slice(sourcePath.length + 1);
-            skillMap.set(relative, data);
-        }
-        if (!skillMap.has("SKILL.md")) continue;
-        const text = new TextDecoder("utf-8", { fatal: false }).decode(skillMap.get("SKILL.md"));
-        const meta = readSkillFrontmatter(text);
-        discovered.push({
-            id,
-            title: meta.name ?? id,
-            description: meta.description ?? "",
-            owner,
-            name,
-            branch,
-            sourcePath,
-            files: skillMap,
-            contentHash: hashSkillFiles(skillMap),
-        });
-    }
-    return discovered;
+        const meta = readSkillFrontmatter(new TextDecoder().decode(skillMap.get("SKILL.md")));
+        return { id, title: meta.name ?? id, description: meta.description ?? "", owner, name, branch, sourcePath,
+            files: skillMap, contentHash: hashSkillFiles(skillMap) };
+    });
 }
 
 /** Mark leaf-id conflicts across every discovered skill. */
@@ -341,7 +286,8 @@ export async function installSkills(root: string, ids: readonly string[]): Promi
 {
     if (ids.length === 0) throw new HalignError("install requires at least one skill id");
     const skills = await cachedSkills(root);
-    const selected: CachedSkill[] = [];
+    const existing = await loadSkills(root);
+    const selected: Array<{ skill: CachedSkill; origin: Exclude<SkillOrigin, { kind: "unknown" }> }> = [];
     for (const id of ids)
     {
         const matches = skills.filter((skill) => skill.id === id);
@@ -350,22 +296,20 @@ export async function installSkills(root: string, ids: readonly string[]): Promi
         {
             throw new HalignError(`skill id conflicts across discovered sources, got ${valueText(id)}`);
         }
-        selected.push(matches[0]!);
+        const skill = matches[0]!;
+        const origin: Exclude<SkillOrigin, { kind: "unknown" }> = {
+            kind: "github", owner: skill.owner, name: skill.name, branch: skill.branch, sourcePath: skill.sourcePath, contentHash: skill.contentHash,
+        };
+        assertSkillReplacement(existing.find((item) => item.id.toLowerCase() === id.toLowerCase()), id, origin);
+        selected.push({ skill, origin });
     }
     const installed: string[] = [];
-    for (const skill of selected)
+    for (const { skill, origin } of selected)
     {
         const temporary = await materializeSkill(skill);
         try
         {
-            await installSkillFromDirectory(root, skill.id, temporary, {
-                kind: "github",
-                owner: skill.owner,
-                name: skill.name,
-                branch: skill.branch,
-                sourcePath: skill.sourcePath,
-                contentHash: skill.contentHash,
-            });
+            await installSkillFromDirectory(root, skill.id, temporary, origin);
             installed.push(skill.id);
         }
         finally
@@ -380,16 +324,14 @@ export async function installSkills(root: string, ids: readonly string[]): Promi
 export async function checkSkillUpdates(root: string): Promise<SkillUpdate[]>
 {
     const installed = await loadSkills(root);
-    const remote = await discoverSkills(root);
-    const remoteById = new Map(remote.filter((skill) => !skill.conflict).map((skill) => [skill.id, skill]));
-    const cache = new Map((discoverCache?.skills ?? []).map((skill) => [skill.id, skill]));
+    await discoverSkills(root);
+    const remoteById = new Map((discoverCache?.skills ?? []).filter((skill) => !skill.conflict).map((skill) => [skill.id, skill]));
     const updates: SkillUpdate[] = [];
     for (const skill of installed)
     {
         if (skill.origin.kind !== "github") continue;
         const remoteSkill = remoteById.get(skill.id);
-        const cached = cache.get(skill.id);
-        if (!remoteSkill || !cached
+        if (!remoteSkill
             || remoteSkill.owner.toLowerCase() !== skill.origin.owner.toLowerCase()
             || remoteSkill.name.toLowerCase() !== skill.origin.name.toLowerCase()
             || remoteSkill.sourcePath !== skill.origin.sourcePath)
@@ -405,7 +347,7 @@ export async function checkSkillUpdates(root: string): Promise<SkillUpdate[]>
         updates.push({
             id: skill.id,
             currentHash: skill.origin.contentHash,
-            remoteHash: cached.contentHash,
+            remoteHash: remoteSkill.contentHash,
         });
     }
     return updates;

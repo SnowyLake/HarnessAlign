@@ -352,10 +352,6 @@ select {
     overflow-wrap: anywhere;
 }
 
-.break-anywhere {
-    overflow-wrap: anywhere;
-}
-
 .skills-section-header {
     display: flex;
     min-height: 56px;
@@ -494,10 +490,6 @@ select {
     min-width: 0;
     flex: 1;
     margin: 3px 8px;
-}
-
-.workspace-tree-row[data-indent="true"] .workspace-tree-rename {
-    margin-left: 28px;
 }
 
 .workspace-tree-dirty {

@@ -6,7 +6,7 @@ import { Badge, Button, Collapse, Dropdown, Empty, Flex, Input, Modal, Popover, 
 import { useEffect, useState } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation, saveRenamedSource } from "@/features/workspace/WorkspaceTasks";
-import { catalogLayerNames, defaultLayerOption, fileName, moveLayerSelection, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { catalogLayerNames, defaultLayerOption, moveLayerSelection, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 
 /** New-item actions exposed below workspace trees. */
@@ -35,7 +35,6 @@ interface TreeButtonProps
 {
     label: string;
     active: boolean;
-    indent?: boolean;
     disabled?: boolean;
     selection?: Selection;
     canSave?: boolean;
@@ -53,7 +52,7 @@ interface TreeButtonProps
 }
 
 /** One selectable row in a workspace module tree. */
-function TreeButton({ label, active, indent, disabled, selection, canSave = false, canDelete = false, isDraggable = false, isDragging = false, dropPosition, onRename, onDragStart, onDragEnd, onDragPositionChange, onDragLeave, onDrop, onClick }: TreeButtonProps)
+function TreeButton({ label, active, disabled, selection, canSave = false, canDelete = false, isDraggable = false, isDragging = false, dropPosition, onRename, onDragStart, onDragEnd, onDragPositionChange, onDragLeave, onDrop, onClick }: TreeButtonProps)
 {
     const editorKey = selection ? selectionKey(selection) : undefined;
     const isDirty = useAppStore((state) => editorKey ? Boolean(state.editorDrafts[editorKey]) : false);
@@ -135,7 +134,6 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
             }}
             className="workspace-tree-row"
             data-active={active || undefined}
-            data-indent={indent || undefined}
             data-draggable={isDraggable || undefined}
             data-dragging={isDragging || undefined}
         >
@@ -173,7 +171,7 @@ function TreeButton({ label, active, indent, disabled, selection, canSave = fals
                     onClick={onClick}
                     className="workspace-tree-button"
                     styles={{
-                        root: { paddingInline: 12, paddingLeft: indent ? 30 : 12, textAlign: "left" },
+                        root: { paddingInline: 12, textAlign: "left" },
                         content: { flex: 1, minWidth: 0, overflow: "hidden", textAlign: "start", textOverflow: "ellipsis" },
                     }}
                 >
