@@ -31,7 +31,7 @@ export function WorkspacePage({ view }: WorkspacePageProps)
     return (
         <div className="workspace-module-page">
             <div className="workspace-module-surface">
-                <Splitter key={view} className="workspace-splitter">
+                <Splitter key={view === "shared-rules" ? "rules" : view} className="workspace-splitter">
                     <Splitter.Panel defaultSize="28%" min="20%" max="45%" collapsible>
                         <WorkspaceTree view={view} />
                     </Splitter.Panel>

@@ -2,7 +2,7 @@
 
 import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
 import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, PlusOutlined, RightOutlined, SaveOutlined } from "@ant-design/icons";
-import { Badge, Button, Collapse, Dropdown, Empty, Input, Modal, Popover, Select, Switch, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
+import { Badge, Button, Collapse, Dropdown, Empty, Flex, Input, Modal, Popover, Segmented, Select, Switch, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
 import { useEffect, useState } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation, saveRenamedSource } from "@/features/workspace/WorkspaceTasks";
@@ -434,6 +434,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
     const workspace = useAppStore((state) => state.workspace);
     const selection = useAppStore((state) => state.selection);
     const setSelection = useAppStore((state) => state.setSelection);
+    const setView = useAppStore((state) => state.setView);
     const isBusy = useAppStore((state) => state.isBusy);
     const editorDrafts = useAppStore((state) => state.editorDrafts);
     const layerSelection = useAppStore((state) => state.layerSelection);
@@ -455,6 +456,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
     if (!workspace) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No project open" />;
     const rootRuleTabs = workspace.rootRules;
+    const isRuleView = view === "rules" || view === "shared-rules";
     const newAction = NEW_ACTION_BY_VIEW[view];
     const layerNames = [...layerSelection.map((layer) => layer.name), ...catalogLayerNames(workspace).filter((name) => !layerSelection.some((layer) => layer.name === name))];
     const layerItems: NonNullable<CollapseProps["items"]> = layerNames.map((layerName) =>
@@ -625,13 +627,26 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
     return (
         <div className="workspace-tree">
-            <div className="workspace-tree-header">
-                <Typography.Text strong>{view === "shared-rules" ? "Shared rules" : view.charAt(0).toUpperCase() + view.slice(1)}</Typography.Text>
+            <Flex className="workspace-tree-header" wrap={isRuleView} style={isRuleView ? { flexBasis: "auto" } : undefined}>
+                <Flex align="center" gap={8} wrap={isRuleView}>
+                    <Typography.Text strong>{isRuleView ? "Rules" : view.charAt(0).toUpperCase() + view.slice(1)}</Typography.Text>
+                    {isRuleView ? (
+                        <Segmented<"rules" | "shared-rules">
+                            size="small"
+                            name="rule-scope"
+                            aria-label="Rule scope"
+                            value={view}
+                            options={[{ value: "rules", label: "Root" }, { value: "shared-rules", label: "Shared" }]}
+                            onChange={setView}
+                            disabled={isBusy}
+                        />
+                    ) : null}
+                </Flex>
                 {newAction ? <Tooltip title={newAction.label}>
                     <Button type="text" size="small" icon={<PlusOutlined />} disabled={isBusy} aria-label={newAction.label}
                             onClick={() => setSelection(newAction.selection)}>Add</Button>
                 </Tooltip> : null}
-            </div>
+            </Flex>
             <div className="workspace-tree-content">
                 {view === "rules" ? (
                     <>

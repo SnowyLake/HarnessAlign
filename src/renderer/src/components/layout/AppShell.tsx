@@ -13,7 +13,6 @@ import {
     RocketOutlined,
     SaveOutlined,
     SettingOutlined,
-    ShareAltOutlined,
     SyncOutlined,
     ThunderboltOutlined,
 } from "@ant-design/icons";
@@ -32,14 +31,13 @@ interface NavItem
 }
 
 /** Primary workspace modules shown in the desktop sidebar. */
-const WORKSPACE_NAV_ITEMS: Readonly<Record<WorkspaceView, NavItem>> = {
+const WORKSPACE_NAV_ITEMS: Readonly<Record<Exclude<WorkspaceView, "shared-rules">, NavItem>> = {
     project: { label: "Harnesses", icon: <DeploymentUnitOutlined /> },
     rules: { label: "Rules", icon: <FileTextOutlined /> },
-    "shared-rules": { label: "Shared rules", icon: <ShareAltOutlined /> },
     layers: { label: "Layers", icon: <AppstoreOutlined /> },
     agents: { label: "Agents", icon: <RobotOutlined /> },
-    skills: { label: "Skills", icon: <ThunderboltOutlined /> },
     generated: { label: "Generated", icon: <FileDoneOutlined /> },
+    skills: { label: "Skills", icon: <ThunderboltOutlined /> },
 };
 
 /** Props for the desktop chrome that wraps feature pages and owns header commands. */
@@ -63,16 +61,18 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
     const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const dirtyCount = useAppStore(workspaceChangeCount);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
-    const currentNav = view === "settings" || view === "showcase" ? undefined : WORKSPACE_NAV_ITEMS[view];
+    const navigationView = view === "shared-rules" ? "rules" : view;
+    const currentNav = navigationView === "settings" || navigationView === "showcase" ? undefined : WORKSPACE_NAV_ITEMS[navigationView];
     const pageLabel = currentNav?.label ?? (view === "settings" ? "Settings" : "Ant Design");
     const primaryItems: MenuProps["items"] = [
         { key: "project", icon: WORKSPACE_NAV_ITEMS.project.icon, label: WORKSPACE_NAV_ITEMS.project.label },
+        { type: "divider" },
         { key: "rules", icon: WORKSPACE_NAV_ITEMS.rules.icon, label: WORKSPACE_NAV_ITEMS.rules.label },
-        { key: "shared-rules", icon: WORKSPACE_NAV_ITEMS["shared-rules"].icon, label: WORKSPACE_NAV_ITEMS["shared-rules"].label },
         { key: "layers", icon: WORKSPACE_NAV_ITEMS.layers.icon, label: WORKSPACE_NAV_ITEMS.layers.label },
         { key: "agents", icon: WORKSPACE_NAV_ITEMS.agents.icon, label: WORKSPACE_NAV_ITEMS.agents.label },
-        { key: "skills", icon: WORKSPACE_NAV_ITEMS.skills.icon, label: WORKSPACE_NAV_ITEMS.skills.label },
         { key: "generated", icon: WORKSPACE_NAV_ITEMS.generated.icon, label: WORKSPACE_NAV_ITEMS.generated.label },
+        { type: "divider" },
+        { key: "skills", icon: WORKSPACE_NAV_ITEMS.skills.icon, label: WORKSPACE_NAV_ITEMS.skills.label },
     ];
     const utilityItems: MenuProps["items"] = [
         ...(import.meta.env.DEV ? [{ key: "showcase", icon: <ExperimentOutlined />, label: "UI Kit" }] : []),
@@ -80,7 +80,10 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
     ];
 
     /** Select one known application view from an Ant Design menu. */
-    const handleMenuClick: MenuProps["onClick"] = ({ key }) => setView(key as AppView);
+    const handleMenuClick: MenuProps["onClick"] = ({ key }) =>
+    {
+        if (key !== navigationView) setView(key as AppView);
+    };
 
     return (
         <Layout className="app-shell">
@@ -128,7 +131,7 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
                     theme="light"
                 >
                     <nav className="app-sider-navigation" aria-label="Application navigation">
-                        <Menu className="app-sider-primary" mode="inline" selectedKeys={[view]} items={primaryItems} onClick={handleMenuClick} />
+                        <Menu className="app-sider-primary" mode="inline" selectedKeys={[navigationView]} items={primaryItems} onClick={handleMenuClick} />
                         <div className="app-sider-footer">
                             <Menu mode="inline" selectedKeys={[view]} items={utilityItems} onClick={handleMenuClick} />
                         </div>
