@@ -14,7 +14,7 @@ import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { workspaceService } from "../src/main/services/WorkspaceService.js";
 import { uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
-import { discoverSkills, installSkills } from "../src/main/services/SkillRemoteService.js";
+import { checkSkillUpdates, discoverSkills, installSkills } from "../src/main/services/SkillRemoteService.js";
 import { applySync, connectSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, readSyncSnapshot, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA } from "../src/shared/models/Schemas.js";
@@ -24,7 +24,7 @@ import { loadConfig, validateConfig } from "../src/engine/Load.js";
 import { HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
 import { reportSetup, setup } from "../src/engine/Setup.js";
-import { assertSafeZipEntry, hashSkillDirectory, installSkillFromDirectory, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
+import { assertSafeZipEntry, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace, importUserSkills,
     listUserSkills, loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkill, removeSkillSource,
@@ -1335,6 +1335,21 @@ test("loadSkills tolerates a missing directory, loads SKILL.md, and rejects junk
     });
 });
 
+test("skill index rejects missing, non-string, and whitespace-only GitHub source paths", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const directory = join(root, ".harness-align", "skills");
+        await mkdir(directory);
+        for (const sourcePath of [undefined, null, 0, false, {}, [], " \t"])
+        {
+            const skills = { demo: { origin: "github", owner: "example", name: "repo", branch: "main", sourcePath, contentHash: "hash" } };
+            await writeFile(join(directory, "index.json"), JSON.stringify({ skills }));
+            await assert.rejects(loadSkillIndex(root), /skills\.demo\.sourcePath/u);
+        }
+    });
+});
+
 test("skill hash ignores hidden files and changes when content changes", async () =>
 {
     await withProject(async (root) =>
@@ -1985,6 +2000,46 @@ test("IPC payload schemas reject coercion and incomplete editor shapes", () =>
     assert.equal(LAYER_SELECTION_SCHEMA.safeParse([{ name: "layer" }]).success, false);
     assert.equal(SKILL_IDS_SCHEMA.safeParse(["Demo", "demo"]).success, false);
     assert.equal(SKILL_IDS_SCHEMA.safeParse("demo").success, false);
+});
+
+test("repository-root skills survive batch installation, workspace reload, reinstall, and update checks", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await addSkillSource(root, { url: "https://github.com/example/repo" });
+        const archive = Buffer.from(
+            "UEsDBBQAAAAIAIxwLF1GWw6tCQAAAAcAAAASAAAAcmVwby1tYWluL1NLSUxMLm1kU1YIys8v4QIAUEsDBBQAAAAIAIxwLF30xqGHCQAAAAcAAAAXAAAA"
+            + "cmVwby1tYWluL2RlbW8vU0tJTEwubWRTVnBJzc3nAgBQSwECFAAUAAAACACMcCxdRlsOrQkAAAAHAAAAEgAAAAAAAAAAAAAAAAAAAAAAcmVwby1tYWlu"
+            + "L1NLSUxMLm1kUEsBAhQAFAAAAAgAjHAsXfTGoYcJAAAABwAAABcAAAAAAAAAAAAAAAAAOQAAAHJlcG8tbWFpbi9kZW1vL1NLSUxMLm1kUEsFBgAAAAACAAIAhQAAAHcAAAAAAA==",
+            "base64",
+        );
+        const mocked = t.mock.method(globalThis, "fetch", async () => new Response(archive));
+        try
+        {
+            const discovered = await discoverSkills(root);
+            assert.deepEqual(discovered.map(({ id, sourcePath }) => ({ id, sourcePath })), [{ id: "demo", sourcePath: "demo" }, { id: "repo", sourcePath: "" }]);
+            assert.match(await installSkills(root, ["repo", "demo"]), /Installed 2 skill\(s\)/u);
+            const workspace = await loadWorkspace(root);
+            assert.deepEqual(workspace.skills.map((skill) => skill.id), ["demo", "repo"]);
+            const origin = workspace.skills.find((skill) => skill.id === "repo")!.origin;
+            assert.equal(origin.kind, "github");
+            if (origin.kind !== "github") assert.fail("Expected GitHub origin");
+            assert.equal(origin.sourcePath, "");
+            assert.deepEqual(await readdir(join(root, ".harness-align", "skills", "repo")), ["SKILL.md"]);
+            assert.match(await installSkills(root, ["repo"]), /Installed 1 skill\(s\)/u);
+            const updates = await checkSkillUpdates(root);
+            assert.equal(updates.length, 2);
+            for (const update of updates)
+            {
+                assert.equal(update.error, undefined);
+                assert.equal(update.currentHash, update.remoteHash);
+            }
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
 });
 
 test("discovery cache no longer installs skills after their source is removed", async (t) =>

@@ -202,6 +202,8 @@ Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正�
 
 桌面应用可以从 Skills 页面的 Sources 弹窗登记 GitHub 仓库, 关闭弹窗后在 Discover 页签发现并安装 skill, 也可以从 `%USERPROFILE%\.agents\skills` 导入已有目录. Setup 把已经安装到项目里的 skill 覆盖部署到用户目录.
 
+GitHub 仓库根目录和子目录中的 `SKILL.md` 均可发现, 安装和检查更新. 根目录 skill 使用仓库名作为 id, `index.json` 中的 `sourcePath` 为空字符串是正常记录.
+
 没有项目 Skills, 或 `.harness-align/skills/` 里只有 `index.json` 时, skills 部署会跳过并视为成功. shared-rules 仍然必需.
 
 ## GitHub 多设备同步

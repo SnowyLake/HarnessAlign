@@ -192,7 +192,7 @@ export async function hashSkillDirectory(skillDirectory: string): Promise<string
     return hash.digest("hex");
 }
 
-/** Load and validate `.harness-align/skills/index.json`, returning an empty index when missing. */
+/** Load and validate the skill index, allowing an empty GitHub source path for repository-root skills. */
 export async function loadSkillIndex(root: string): Promise<SkillIndex>
 {
     const path = join(root, ".harness-align", "skills", "index.json");
@@ -223,19 +223,23 @@ export async function loadSkillIndex(root: string): Promise<SkillIndex>
         }
         if (entry.origin === "github")
         {
-            for (const field of ["owner", "name", "branch", "sourcePath", "contentHash"])
+            for (const field of ["owner", "name", "branch", "contentHash"])
             {
                 if (typeof entry[field] !== "string" || !String(entry[field]).trim())
                 {
                     throw new HalignError(`.harness-align/skills/index.json: skills.${id}.${field} must be a non-empty string`);
                 }
             }
+            if (typeof entry.sourcePath !== "string" || (entry.sourcePath !== "" && !entry.sourcePath.trim()))
+            {
+                throw new HalignError(`.harness-align/skills/index.json: skills.${id}.sourcePath must be a non-blank string or "" for the repository root, got ${valueText(entry.sourcePath)}`);
+            }
             index[id] = {
                 origin: "github",
                 owner: entry.owner as string,
                 name: entry.name as string,
                 branch: entry.branch as string,
-                sourcePath: entry.sourcePath as string,
+                sourcePath: entry.sourcePath,
                 contentHash: entry.contentHash as string,
             };
         }
