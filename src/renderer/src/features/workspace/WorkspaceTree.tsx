@@ -1,7 +1,7 @@
 /** Source navigation and Layer groups sharing the current generation selection. */
 
 import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
-import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, PlusOutlined, RightOutlined, SaveOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
 import { Badge, Button, Collapse, Dropdown, Empty, Flex, Input, Modal, Popover, Segmented, Select, Switch, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
 import { useEffect, useState } from "react";
 import { showSuccess } from "@/components/common/Feedback";
@@ -598,7 +598,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                 <Button
                     type="text"
                     block
-                    icon={<RightOutlined />}
+                    icon={<EditOutlined />}
                     disabled={isBusy}
                     onClick={(event) =>
                     {

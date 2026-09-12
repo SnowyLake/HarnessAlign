@@ -3,7 +3,6 @@
  */
 
 import {
-    AppstoreOutlined,
     BuildOutlined,
     CodeOutlined,
     DeploymentUnitOutlined,
@@ -34,7 +33,7 @@ interface NavItem
 const WORKSPACE_NAV_ITEMS: Readonly<Record<Exclude<WorkspaceView, "shared-rules">, NavItem>> = {
     project: { label: "Harnesses", icon: <DeploymentUnitOutlined /> },
     rules: { label: "Rules", icon: <FileTextOutlined /> },
-    layers: { label: "Layers", icon: <AppstoreOutlined /> },
+    layers: { label: "Layers", icon: <BuildOutlined /> },
     agents: { label: "Agents", icon: <RobotOutlined /> },
     generated: { label: "Generated", icon: <FileDoneOutlined /> },
     skills: { label: "Skills", icon: <ThunderboltOutlined /> },

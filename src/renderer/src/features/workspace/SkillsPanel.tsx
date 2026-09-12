@@ -7,12 +7,11 @@ import {
     CloseOutlined,
     DeleteOutlined,
     ExportOutlined,
-    FolderAddOutlined,
     GithubOutlined,
+    ImportOutlined,
     PlusOutlined,
     ReloadOutlined,
     SearchOutlined,
-    SyncOutlined,
     ThunderboltOutlined,
     WarningOutlined,
 } from "@ant-design/icons";
@@ -138,7 +137,7 @@ function InstalledSkillRow({ skill, update, isBusy, onUpdate, onRemove }: {
     }
     else if (update && isOutdated(update))
     {
-        actions.push(<IconAction key="update" label="Apply update" disabled={isBusy} onClick={() => onUpdate(skill.id)} icon={<SyncOutlined />} />);
+        actions.push(<IconAction key="update" label="Apply update" disabled={isBusy} onClick={() => onUpdate(skill.id)} icon={<CloudDownloadOutlined />} />);
     }
     actions.push(<IconAction key="remove" label="Remove" danger disabled={isBusy} onClick={() => onRemove(skill.id)} icon={<DeleteOutlined />} />);
 
@@ -492,7 +491,7 @@ export function SkillsPanel()
                 <Typography.Title level={3} className="page-title">Skills</Typography.Title>
                 <Space size={8}>
                     <Button icon={<GithubOutlined />} disabled={isBusy} onClick={() => setIsRegistrationOpen(true)}>Sources</Button>
-                    <Button icon={<FolderAddOutlined />} disabled={isBusy} onClick={handleImport}>Import</Button>
+                    <Button icon={<ImportOutlined />} disabled={isBusy} onClick={handleImport}>Import</Button>
                 </Space>
             </Flex>
             <section className="skills-library">
