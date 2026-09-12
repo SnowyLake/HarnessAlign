@@ -13,7 +13,7 @@ import { defaultLayerOption, hasLayerChanges } from "../lib/Utils.js";
 export type WorkspaceView = "project" | "rules" | "shared-rules" | "layers" | "skills" | "agents" | "generated";
 
 /** Top-level desktop shell view. */
-export type AppView = WorkspaceView | "console" | "settings" | "showcase";
+export type AppView = WorkspaceView | "console" | "settings";
 
 /** Currently selected workspace editor target. */
 export type Selection =
@@ -242,7 +242,7 @@ export const useAppStore = create<AppState>((set) => ({
     nextEditorActionId: 1,
     setView: (view) => set((state) => ({
         view,
-        selection: view === "settings" || view === "showcase" || view === "console"
+        selection: view === "settings" || view === "console"
             ? state.selection
             : selectionForView(view, state.selection, state.workspace),
     })),
@@ -251,7 +251,7 @@ export const useAppStore = create<AppState>((set) => ({
         const shouldReset = !state.workspace || !workspace;
         return {
             workspace,
-            selection: state.view === "settings" || state.view === "showcase" || state.view === "console"
+            selection: state.view === "settings" || state.view === "console"
                 ? state.selection
                 : selectionForView(state.view, state.selection, workspace),
             layerSelection: !workspace

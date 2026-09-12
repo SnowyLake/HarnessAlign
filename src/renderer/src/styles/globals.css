@@ -49,7 +49,6 @@ select {
     justify-content: space-between;
     gap: 24px;
     padding: 0 24px;
-    border-bottom: 1px solid var(--ant-color-border-secondary);
     line-height: normal;
 }
 
@@ -127,7 +126,6 @@ select {
 .app-sider-footer {
     margin-top: auto;
     padding: 8px 8px 0;
-    border-top: 1px solid var(--ant-color-border-secondary);
 }
 
 .app-content {
@@ -146,8 +144,7 @@ select {
 }
 
 .workspace-wide-page,
-.settings-page,
-.showcase-page {
+.settings-page {
     width: min(100% - 48px, 1240px);
     margin: 0 auto;
     padding: 24px 0 32px;
@@ -166,12 +163,6 @@ select {
 
 .settings-about {
     text-align: center;
-}
-
-.showcase-page {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px;
 }
 
 .workspace-module-page {
@@ -694,10 +685,6 @@ select {
 }
 
 @media (max-width: 1199px) {
-    .showcase-page {
-        grid-template-columns: 1fr;
-    }
-
     .app-topbar {
         padding-inline: 16px;
     }

@@ -82,7 +82,7 @@
 - `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, `SettingsService.ts` 模块函数, `WorkspaceService`, `SkillRemoteService`.
 - `src/main/services/GitHubSyncService.ts` 负责私有仓库快照读写, 同步预览, 共同基线与上传恢复记录. `SyncHandlers.ts` 负责 sender 和 payload 校验以及 `safeStorage` 凭据加解密. Token 不回传 Renderer, 不写入同步快照或日志.
 - `src/preload/` 只把 typed `window.appApi` 暴露给 Renderer.
-- `src/renderer/` 是 React UI. 标准界面控件直接使用 Ant Design 官方组件, `components/common/` 只保存 Ant Design 没有对应物的共享领域控件与反馈桥接, `features/` 保存业务界面, `stores/AppStore.ts` 只保存 UI 状态. `showcase` 视图仅开发模式可见.
+- `src/renderer/` 是 React UI. 标准界面控件直接使用 Ant Design 官方组件, `components/common/` 只保存 Ant Design 没有对应物的共享领域控件与反馈桥接, `features/` 保存业务界面, `stores/AppStore.ts` 只保存 UI 状态.
 - `.agents/skills/antd/SKILL.md` 是本仓库的 Ant Design 开发辅助规则, 面向在仓库工作的 Agent. 它不属于 `.harness-align/skills/`, 不参与产品的 Skills 发现, 安装或 `setup` 部署.
 - `src/shared/` 保存 IPC 契约, DTO 和 Zod schema. 引擎类型与 Shared DTO 需要并行维护, Shared 不得 import 引擎.
 - `tests/Halign.test.ts` 是唯一测试源文件, 使用 Node 内置 `node:test` 覆盖解析, 渲染, 生成, 部署, Skills, 源文件写回, 目录迁移和路径安全.

@@ -9,10 +9,9 @@ import { FeedbackBridge, showError, showSuccess, writeLog } from "@/components/c
 import { AppShell } from "@/components/layout/AppShell";
 import { ConsolePage } from "@/features/console/ConsolePage";
 import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
-import { ShowcasePage } from "@/features/showcase/ShowcasePage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
 import { refreshWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
-import { useAppStore, workspaceChangeCount, type WorkspaceView } from "@/stores/AppStore";
+import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 
 /** Root React tree for the desktop shell. */
 export function App()
@@ -133,9 +132,7 @@ export function App()
         ? <ConsolePage />
         : view === "settings"
             ? <SettingsPage />
-            : import.meta.env.DEV && view === "showcase"
-                ? <ShowcasePage />
-                : <WorkspacePage view={view as WorkspaceView} />;
+            : <WorkspacePage view={view} />;
 
     return (
         <ConfigProvider

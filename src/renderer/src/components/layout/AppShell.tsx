@@ -7,7 +7,6 @@ import {
     BuildOutlined,
     CodeOutlined,
     DeploymentUnitOutlined,
-    ExperimentOutlined,
     FileDoneOutlined,
     FileTextOutlined,
     RobotOutlined,
@@ -62,20 +61,17 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
     const dirtyCount = useAppStore(workspaceChangeCount);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
     const navigationView = view === "shared-rules" ? "rules" : view;
-    const currentNav = navigationView === "settings" || navigationView === "showcase" || navigationView === "console" ? undefined : WORKSPACE_NAV_ITEMS[navigationView];
-    const pageLabel = currentNav?.label ?? (view === "console" ? "Console" : view === "settings" ? "Settings" : "Ant Design");
+    const currentNav = navigationView === "settings" || navigationView === "console" ? undefined : WORKSPACE_NAV_ITEMS[navigationView];
+    const pageLabel = currentNav?.label ?? (view === "console" ? "Console" : "Settings");
     const primaryItems: MenuProps["items"] = [
         { key: "project", icon: WORKSPACE_NAV_ITEMS.project.icon, label: WORKSPACE_NAV_ITEMS.project.label },
-        { type: "divider" },
         { key: "rules", icon: WORKSPACE_NAV_ITEMS.rules.icon, label: WORKSPACE_NAV_ITEMS.rules.label },
         { key: "layers", icon: WORKSPACE_NAV_ITEMS.layers.icon, label: WORKSPACE_NAV_ITEMS.layers.label },
         { key: "agents", icon: WORKSPACE_NAV_ITEMS.agents.icon, label: WORKSPACE_NAV_ITEMS.agents.label },
         { key: "generated", icon: WORKSPACE_NAV_ITEMS.generated.icon, label: WORKSPACE_NAV_ITEMS.generated.label },
-        { type: "divider" },
         { key: "skills", icon: WORKSPACE_NAV_ITEMS.skills.icon, label: WORKSPACE_NAV_ITEMS.skills.label },
     ];
     const utilityItems: MenuProps["items"] = [
-        ...(import.meta.env.DEV ? [{ key: "showcase", icon: <ExperimentOutlined />, label: "UI Kit" }] : []),
         { key: "console", icon: <CodeOutlined />, label: "Console" },
         { key: "settings", icon: <SettingOutlined />, label: "Settings" },
     ];
