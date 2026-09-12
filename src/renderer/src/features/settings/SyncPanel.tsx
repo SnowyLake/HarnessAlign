@@ -7,6 +7,9 @@ import { flushSync } from "react-dom";
 import type { SyncApplyInput, SyncChange, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileView } from "@shared/models/Sync";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 
+const CREATE_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write";
+const MANAGE_TOKENS_URL = "https://github.com/settings/personal-access-tokens";
+
 /** Render bounded text and binary metadata without interpreting remote content as HTML. */
 function SyncFileContent({ label, value }: { label: string; value: SyncFileView | null })
 {
@@ -190,6 +193,12 @@ export function SyncPanel()
                                 <Form.Item name="token" label="Fine-grained personal access token" rules={[{ required: true }]}
                                            extra="Select only this repository with Contents: Read and write. The token is encrypted on this device and is never synced.">
                                     <Input.Password autoComplete="new-password" />
+                                </Form.Item>
+                                <Form.Item extra="The template prefills the name, a 90-day expiry and Contents permission. Select only your sync repository, then paste the generated token above.">
+                                    <Space wrap>
+                                        <Button onClick={() => void run(() => window.appApi.app.openExternal(CREATE_TOKEN_URL))}>Create token on GitHub</Button>
+                                        <Button type="link" onClick={() => void run(() => window.appApi.app.openExternal(MANAGE_TOKENS_URL))}>Manage tokens</Button>
+                                    </Space>
                                 </Form.Item>
                                 <Typography.Paragraph type="secondary">
                                     Use a private repository with an existing branch, such as one initialized with a README.

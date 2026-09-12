@@ -211,8 +211,8 @@ Subagent 文件使用公共 `name`, `description`, `harnesses` 和 Markdown 正�
 首次连接:
 
 1. 在 GitHub 创建一个专用私有仓库, 勾选创建 README, 确保仓库已有分支.
-2. 创建 fine-grained personal access token, 选择该仓库, 授予 `Contents: Read and write` 权限. 组织仓库可能需要管理员批准 Token.
-3. 在 Settings 点击 Connect GitHub, 填写 Owner, Private repository, Existing branch 和 Token, 点击 Connect. Token 使用本机系统加密保存, 不写入同步仓库, 不会在界面中回显.
+2. 在 Settings 点击 Connect GitHub, 使用 Create token on GitHub 打开[创建链接模板](https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write). 模板预填名称 `HarnessAlign-Sync`, 90 天有效期和 `Contents: Read and write` 权限. 在 GitHub 选择正确的 Resource owner, 在 Repository access 中选择 Only select repositories 并仅勾选同步仓库, 然后创建 fine-grained personal access token. 可为名称追加设备名以便单独管理; 组织仓库可能需要管理员批准 Token.
+3. 回到连接界面, 填写 Owner, Private repository, Existing branch 和 Token, 点击 Connect. Token 使用本机系统加密保存, 不写入同步仓库, 不会在界面中回显. Manage tokens 打开 GitHub 的 Fine-grained tokens 管理页.
 4. 保存所有工作区草稿, 点击顶部 Sync 查看上传, 下载和冲突项. Refresh preview 可以重新获取变更. View versions 可以对照本地与远端内容; 大文件只显示部分文本, 二进制文件显示大小和哈希.
 5. 首次接入已有配置时, 选择合并, 使用本机完整配置, 或使用远端完整配置. 选择某一方的完整配置会同时应用该方的删除操作. 确认后点击 Sync now.
 6. 在其他设备连接相同仓库及分支. 同步完成后按需执行 Generate 或 Setup, 更新本机生成结果或助手目录.
