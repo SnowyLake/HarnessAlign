@@ -1,13 +1,13 @@
 /**
- * Desktop root: load the user workspace, route feature modules, and own command output notifications.
+ * Desktop root: load the user workspace and route feature modules through unified operation feedback.
  * Renderer work stays on `window.appApi`.
  */
 
 import { App as AntApp, Button, ConfigProvider, Result, Spin, theme as antTheme } from "antd";
 import { useEffect, useState } from "react";
-import { FeedbackBridge } from "@/components/common/Feedback";
+import { FeedbackBridge, showError, showSuccess, writeLog } from "@/components/common/Feedback";
 import { AppShell } from "@/components/layout/AppShell";
-import { AppOutput } from "@/components/layout/AppOutput";
+import { ConsolePage } from "@/features/console/ConsolePage";
 import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
 import { ShowcasePage } from "@/features/showcase/ShowcasePage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
@@ -38,9 +38,14 @@ export function App()
             const loaded = await window.appApi.workspace.load();
             if (isCancelled) return;
             useAppStore.getState().setWorkspace(loaded);
+            writeLog("info", "Workspace loaded");
         })().catch((error: unknown) =>
         {
-            if (!isCancelled) setLoadError(error instanceof Error ? error.message : String(error));
+            if (!isCancelled)
+            {
+                setLoadError("See Console for details.");
+                showError(error, "Workspace load failed");
+            }
         });
         const unsubscribe = window.appApi.settings.onChanged((settings) =>
         {
@@ -104,10 +109,10 @@ export function App()
         void runCommand(async () =>
         {
             const report = await window.appApi.workspace.generate(useAppStore.getState().layerSelection);
-            useAppStore.getState().setOutput(report, "success", "Generate completed");
+            showSuccess("Generate completed", report);
             await refreshWorkspace();
-            useAppStore.getState().setView("generated");
-        });
+            if (useAppStore.getState().view !== "console") useAppStore.getState().setView("generated");
+        }, "Generate");
     };
 
     /** Deploy generated output to existing harness directories. */
@@ -118,17 +123,19 @@ export function App()
         void runCommand(async () =>
         {
             const report = await window.appApi.workspace.setup(useAppStore.getState().layerSelection);
-            useAppStore.getState().setOutput(report, "success", "Setup completed");
+            showSuccess("Setup completed", report);
             await refreshWorkspace();
-        });
+        }, "Setup");
     };
 
     /** Render the active feature page. */
-    const page = view === "settings"
-        ? <SettingsPage />
-        : import.meta.env.DEV && view === "showcase"
-            ? <ShowcasePage />
-            : <WorkspacePage view={view as WorkspaceView} />;
+    const page = view === "console"
+        ? <ConsolePage />
+        : view === "settings"
+            ? <SettingsPage />
+            : import.meta.env.DEV && view === "showcase"
+                ? <ShowcasePage />
+                : <WorkspacePage view={view as WorkspaceView} />;
 
     return (
         <ConfigProvider
@@ -174,14 +181,13 @@ export function App()
             <AntApp className="app-root">
                 <FeedbackBridge />
                 <AppShell onSave={handleSave} onGenerate={handleGenerate} onSetup={handleSetup}>
-                    {workspace ? page : (
+                    {workspace || view === "console" ? page : (
                         <div className="workspace-load-state">
                             {loadError ? <Result status="error" title="Unable to load workspace" subTitle={loadError}
                                 extra={<Button type="primary" onClick={() => setLoadAttempt((current) => current + 1)}>Retry</Button>} /> : <Spin size="large" aria-label="Loading workspace" />}
                         </div>
                     )}
                 </AppShell>
-                <AppOutput />
             </AntApp>
         </ConfigProvider>
     );

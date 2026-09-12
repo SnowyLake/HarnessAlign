@@ -4,6 +4,7 @@
  */
 
 import type { AppSettings } from "../models/AppSettings.js";
+import type { LogChange, LogInput, LogSnapshot } from "../models/Console.js";
 import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncPreview, SyncResult, SyncStatus } from "../models/Sync.js";
 import type {
     Agent,
@@ -21,6 +22,12 @@ import type {
 /** Privileged capabilities exposed to the renderer through `window.appApi`. */
 export interface AppApi
 {
+    console: {
+        read(): Promise<LogSnapshot>;
+        append(input: LogInput): Promise<void>;
+        clear(): Promise<void>;
+        onChanged(callback: (change: LogChange) => void): () => void;
+    };
     sync: {
         status(): Promise<SyncStatus>;
         connect(input: SyncConnectionInput): Promise<SyncStatus>;

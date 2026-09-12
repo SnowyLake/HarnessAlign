@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { atomicWrite } from "../../engine/FsSafe.js";
 import { DEFAULT_APP_SETTINGS, type AppSettings } from "../../shared/models/AppSettings.js";
 import { APP_SETTINGS_SCHEMA, SETTINGS_PATCH_SCHEMA } from "../../shared/models/Schemas.js";
+import { logMainError } from "./ConsoleService.js";
 
 /** Return the settings.json path under Electron userData. */
 function settingsPath(): string
@@ -23,8 +24,9 @@ export async function getSettings(): Promise<AppSettings>
         const parsed: unknown = JSON.parse(await fs.readFile(settingsPath(), "utf8"));
         return APP_SETTINGS_SCHEMA.parse(parsed);
     }
-    catch
+    catch (error)
     {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) logMainError("Settings reset to defaults", error);
         return { ...DEFAULT_APP_SETTINGS };
     }
 }

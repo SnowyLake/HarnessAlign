@@ -69,7 +69,7 @@ Generate 和 Setup 使用当前 Layer 顺序与选项. 有未保存的源文件�
 
 Settings 页的 `AGENTS.md title` 只控制生成文档的一级标题. 点击顶部 Save all 或按 Ctrl+S 后, 所有页面的草稿以及当前 Layer 顺序与选择会统一写回. 文件列表顶部的 Add 新建对应内容, 编辑区顶部的 Create 或 Save file 只保存当前项, Discard changes 恢复当前文件的已保存内容. 文件行操作菜单和右键菜单中的 Save 同样只保存当前文件. 切换页面会保留草稿, 关闭有未保存修改的窗口时会提示确认.
 
-关闭 Group 开关会立即移出当前生成序列, 保留源文件和编辑能力. 操作反馈统一显示在顶部; 点击生成或部署提示, 或顶部 Output 图标可查看完整输出. 工作区加载失败时可点击 Retry 重试.
+关闭 Group 开关会立即移出当前生成序列, 保留源文件和编辑能力. 顶部弹出提示只显示简短结果; 侧边栏 Settings 上方的 Console 独立页面按时间累计操作记录, 完整报告和错误详情. 日志仅保留在本次应用运行的内存中, 切换页面或刷新窗口不会丢失, 关闭应用后清空. Console 支持自动滚动和手动清空, 操作进行中或工作区加载失败时也可查看. 工作区加载失败时可点击 Retry 重试.
 
 Harness 编辑面板的 Save harness 只保存当前项. 关闭面板会保留草稿, 卡片用 Unsaved 标记未保存项; Discard changes 放弃当前草稿. 新建草稿关闭后可通过 Continue new harness 继续编辑. 删除操作位于编辑面板内, 并需要再次确认. 保存 Harness 后再运行 Generate 或 Setup.
 

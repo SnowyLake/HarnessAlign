@@ -1,9 +1,9 @@
 /**
  * Shared workspace runners used by the shell and editor forms.
- * Command errors go to Output; mutation errors return for form Alerts.
+ * Operation details go to Console; forms and notifications retain short summaries.
  */
 
-import { showError, showSuccess } from "@/components/common/Feedback";
+import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
 import { fileName, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type FormSnapshot, type Selection } from "@/stores/AppStore";
 import type { AgentFormat, Config, HarnessConfig, RuleInput, Workspace } from "@shared/models/Workspace";
@@ -335,12 +335,14 @@ export async function saveWorkspaceChanges(): Promise<void>
             { kind: "config" },
             configDraft?.current ?? { name: [currentWorkspace.config.name] },
         );
+        writeLog("success", "Configuration saved", "Saved .harness-align/config.json");
         useAppStore.getState().clearEditorDraft(selectionKey({ kind: "config" }));
         currentWorkspace = await window.appApi.workspace.load();
 
         for (const entry of pending)
         {
             const result = await persistEditorSnapshot(currentWorkspace, entry.draft.selection, entry.draft.current);
+            writeLog("success", "Source saved", `${result.message}\n${selectionKey(result.selection)}`);
             const state = useAppStore.getState();
             state.clearEditorDraft(entry.key);
             state.clearEditorDraft(selectionKey(result.selection));
@@ -368,7 +370,7 @@ export async function saveWorkspaceChanges(): Promise<void>
         {
             refreshMessage = ` Workspace refresh also failed: ${errorMessage(refreshError)}`;
         }
-        showError(`Save failed: ${message}${refreshMessage}`);
+        showError(`Save failed: ${message}${refreshMessage}`, "Save failed");
     }
     finally
     {
@@ -386,19 +388,20 @@ export async function refreshWorkspace(next?: Selection): Promise<void>
     if (next) useAppStore.getState().setSelection(next);
 }
 
-/** Run Generate / Setup work while holding busy; errors open the output notification flow. */
-export async function runCommand(work: () => Promise<void>): Promise<void>
+/** Log the operation start and retain failures while holding the workspace busy boundary. */
+export async function runCommand(work: () => Promise<void>, operation = "Command"): Promise<void>
 {
-    const { isBusy, setIsBusy, setOutput } = useAppStore.getState();
+    const { isBusy, setIsBusy } = useAppStore.getState();
     if (isBusy) return;
     setIsBusy(true);
+    writeLog("info", `${operation} started`);
     try
     {
         await work();
     }
     catch (error)
     {
-        setOutput(errorMessage(error), "error", "Command failed");
+        showError(error, `${operation} failed`);
     }
     finally
     {
@@ -406,7 +409,7 @@ export async function runCommand(work: () => Promise<void>): Promise<void>
     }
 }
 
-/** Run a form save/delete while holding busy; failures toast briefly and return the full message. */
+/** Run a form save/delete while retaining diagnostics only in Console. */
 export async function runMutation(work: () => Promise<void>): Promise<{ ok: true } | { ok: false; message: string }>
 {
     const { isBusy, setIsBusy } = useAppStore.getState();
@@ -419,9 +422,8 @@ export async function runMutation(work: () => Promise<void>): Promise<{ ok: true
     }
     catch (error)
     {
-        const message = errorMessage(error);
-        showError(message);
-        return { ok: false, message };
+        showError(error);
+        return { ok: false, message: "Operation failed. See Console for details." };
     }
     finally
     {

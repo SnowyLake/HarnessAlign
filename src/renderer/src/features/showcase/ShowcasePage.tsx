@@ -61,7 +61,7 @@ export function ShowcasePage()
                 <Card title="Feedback" extra="Alerts and transient messages">
                     <Space orientation="vertical" size="middle" className="full-width">
                         <Alert title="Neutral alert" description="Inline guidance uses Alert." showIcon />
-                        <Alert type="error" title="Error alert" description="Mutation failures show the full error message." showIcon />
+                        <Alert type="error" title="Error alert" description="Failure summaries stay brief. Full details are recorded in Console." showIcon />
                         <Button onClick={() => showSuccess("Message sample")}>Show message</Button>
                     </Space>
                 </Card>

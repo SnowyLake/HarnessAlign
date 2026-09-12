@@ -7,6 +7,7 @@ import { BrowserWindow, dialog, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadWindowState, trackWindowState } from "./WindowState.js";
+import { logMainError } from "../services/ConsoleService.js";
 
 let mainWindow: BrowserWindow | undefined;
 let opening: Promise<BrowserWindow> | undefined;
@@ -113,7 +114,7 @@ async function openMainWindow(): Promise<BrowserWindow>
     {
         void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL).catch((error: unknown) =>
         {
-            process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+            logMainError("Window load failed", error);
             mainWindow?.show();
         });
     }
@@ -121,7 +122,7 @@ async function openMainWindow(): Promise<BrowserWindow>
     {
         void mainWindow.loadFile(join(__dirname, "../renderer/index.html")).catch((error: unknown) =>
         {
-            process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+            logMainError("Window load failed", error);
             mainWindow?.show();
         });
     }

@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import type { SyncApplyInput, SyncChange, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileView } from "@shared/models/Sync";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
+import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
 
 const CREATE_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write";
 const MANAGE_TOKENS_URL = "https://github.com/settings/personal-access-tokens";
@@ -63,7 +64,11 @@ export function SyncPanel()
         {
             setStatus(next);
             if (next.connected) form.setFieldsValue({ owner: next.owner, repository: next.repository, branch: next.branch });
-        }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+        }).catch((cause: unknown) =>
+        {
+            setError("Sync status unavailable. See Console for details.");
+            showError(cause, "Sync status unavailable");
+        });
     }, [form, setStatus]);
 
     useEffect(() =>
@@ -95,13 +100,12 @@ export function SyncPanel()
         }
         catch (cause)
         {
-            const message = cause instanceof Error ? cause.message : String(cause);
-            setError(message);
-            state.setOutput(message, "error", "GitHub Sync failed");
+            setError("GitHub operation failed. See Console for details.");
+            showError(cause, "GitHub operation failed");
         }
         finally
         {
-            await window.appApi.sync.status().then(setStatus).catch(() => undefined);
+            await window.appApi.sync.status().then(setStatus).catch((cause: unknown) => showError(cause, "Sync status refresh failed"));
             state.setIsBusy(false);
         }
     }
@@ -116,6 +120,7 @@ export function SyncPanel()
         setPreview(next);
         setChoices({});
         setMode("merge");
+        writeLog("success", "Sync preview ready", JSON.stringify(next, null, 2));
     }
 
     /** Apply only the reviewed preview and refresh the local editor's saved baseline. */
@@ -126,9 +131,9 @@ export function SyncPanel()
         try
         {
             const result = await window.appApi.sync.apply({ previewId: preview.id, mode, choices });
+            showSuccess("GitHub Sync complete", result.message);
             await reloadSyncedWorkspace();
             setStatus(result.status);
-            useAppStore.getState().setOutput(result.message, "success", "GitHub Sync complete");
             setDialog(undefined);
         }
         finally
@@ -161,6 +166,7 @@ export function SyncPanel()
                                     <Button danger disabled={isBusy} onClick={() => void run(async () =>
                                     {
                                         setStatus(await window.appApi.sync.disconnect());
+                                        showSuccess("GitHub disconnected");
                                         setPreview(undefined);
                                         setIsConnecting(false);
                                         form.setFieldValue("token", "");
@@ -174,6 +180,7 @@ export function SyncPanel()
                                 try
                                 {
                                     setStatus(await window.appApi.sync.connect(values));
+                                    showSuccess("GitHub connected", `${values.owner}/${values.repository} (${values.branch})`);
                                     setPreview(undefined);
                                     setIsConnecting(false);
                                     setDialog(undefined);
@@ -210,7 +217,7 @@ export function SyncPanel()
                         {status?.hasPendingUpload ? <Alert type="warning" showIcon title="An earlier sync needs recovery. Open Sync from the top bar to check its remote result before retrying." /> : null}
                         {!isConnection && preview ? (
                             <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-                                {preview.notice ? <Alert type="info" showIcon title={preview.notice} /> : null}
+                                {preview.notice ? <Alert type="info" showIcon title="Sync recovery completed. See Console for details." /> : null}
                                 {preview.firstSync && !preview.remoteEmpty ? (
                                     <Form layout="vertical" requiredMark={false}>
                                         <Form.Item label="First sync" extra="Merge combines independent changes. Adopting one side also applies its deletions after you click Sync now.">

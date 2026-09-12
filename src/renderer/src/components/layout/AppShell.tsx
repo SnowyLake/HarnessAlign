@@ -5,6 +5,7 @@
 import {
     AppstoreOutlined,
     BuildOutlined,
+    CodeOutlined,
     DeploymentUnitOutlined,
     ExperimentOutlined,
     FileDoneOutlined,
@@ -57,13 +58,12 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
     const workspace = useAppStore((state) => state.workspace);
     const isBusy = useAppStore((state) => state.isBusy);
     const hasSourceDrafts = useAppStore((state) => Object.keys(state.editorDrafts).length > 0);
-    const setOutputDialogOpen = useAppStore((state) => state.setOutputDialogOpen);
     const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const dirtyCount = useAppStore(workspaceChangeCount);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
     const navigationView = view === "shared-rules" ? "rules" : view;
-    const currentNav = navigationView === "settings" || navigationView === "showcase" ? undefined : WORKSPACE_NAV_ITEMS[navigationView];
-    const pageLabel = currentNav?.label ?? (view === "settings" ? "Settings" : "Ant Design");
+    const currentNav = navigationView === "settings" || navigationView === "showcase" || navigationView === "console" ? undefined : WORKSPACE_NAV_ITEMS[navigationView];
+    const pageLabel = currentNav?.label ?? (view === "console" ? "Console" : view === "settings" ? "Settings" : "Ant Design");
     const primaryItems: MenuProps["items"] = [
         { key: "project", icon: WORKSPACE_NAV_ITEMS.project.icon, label: WORKSPACE_NAV_ITEMS.project.label },
         { type: "divider" },
@@ -76,6 +76,7 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
     ];
     const utilityItems: MenuProps["items"] = [
         ...(import.meta.env.DEV ? [{ key: "showcase", icon: <ExperimentOutlined />, label: "UI Kit" }] : []),
+        { key: "console", icon: <CodeOutlined />, label: "Console" },
         { key: "settings", icon: <SettingOutlined />, label: "Settings" },
     ];
 
@@ -116,9 +117,6 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
                                     aria-label="Setup" onClick={() => setIsSetupOpen(true)}>Setup</Button>
                         </Tooltip>
                     </Space.Compact>
-                    <Tooltip title="Output">
-                        <Button type="text" icon={<FileTextOutlined />} aria-label="Open output" onClick={() => setOutputDialogOpen(true)} />
-                    </Tooltip>
                 </Flex>
             </Header>
             <Layout className="app-workbench" hasSider>
@@ -138,7 +136,7 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
                     </nav>
                 </Sider>
                 <Layout className="app-main">
-                    <Content className="app-content" inert={isBusy} aria-busy={isBusy} aria-label={pageLabel}>{children}</Content>
+                    <Content className="app-content" inert={isBusy && view !== "console"} aria-busy={isBusy} aria-label={pageLabel}>{children}</Content>
                 </Layout>
             </Layout>
             <SyncPanel />

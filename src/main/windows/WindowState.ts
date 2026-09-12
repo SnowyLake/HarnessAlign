@@ -4,6 +4,7 @@
  */
 
 import { app, screen, type BrowserWindow, type Rectangle } from "electron";
+import { logMainError } from "../services/ConsoleService.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
@@ -77,8 +78,9 @@ export async function loadWindowState(): Promise<RestoredWindowState>
         if (!isVisibleOnScreen(bounds)) return { ...DEFAULT_BOUNDS, isMaximized: parsed.isMaximized };
         return { ...bounds, isMaximized: parsed.isMaximized };
     }
-    catch
+    catch (error)
     {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) logMainError("Window state reset to defaults", error);
         return { ...DEFAULT_BOUNDS, isMaximized: false };
     }
 }
@@ -122,7 +124,7 @@ export function trackWindowState(window: BrowserWindow, initial: Rectangle): voi
             }
             catch (error: unknown)
             {
-                process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+                logMainError("Window state save failed", error);
             }
         }, 200);
     };
@@ -139,7 +141,7 @@ export function trackWindowState(window: BrowserWindow, initial: Rectangle): voi
         }
         catch (error: unknown)
         {
-            process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+            logMainError("Window state save failed", error);
         }
     });
 }

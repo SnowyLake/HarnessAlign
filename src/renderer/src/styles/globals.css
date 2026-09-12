@@ -638,14 +638,37 @@ select {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--source-accent) 18%, transparent);
 }
 
-.app-output-pre {
-    max-height: 60vh;
-    margin: 0;
+.console-page {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    height: 100%;
+    padding: 24px;
+}
+
+.console-history {
+    flex: 1;
+    min-height: 0;
     padding: 16px;
     overflow: auto;
     border: 1px solid var(--ant-color-border-secondary);
-    border-radius: 10px;
-    background: var(--ant-color-bg-layout);
+    border-radius: var(--ant-border-radius-lg);
+    background: var(--ant-color-bg-container);
+}
+
+.console-entry {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--ant-color-border-secondary);
+    overflow-wrap: anywhere;
+}
+
+.console-entry time {
+    color: var(--ant-color-text-secondary);
+    font-size: 12px;
+}
+
+.console-entry pre {
+    margin: 8px 0 0;
     font-family: "Cascadia Mono", Consolas, monospace;
     font-size: 12px;
     line-height: 1.6;

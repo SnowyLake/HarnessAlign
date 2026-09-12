@@ -6,6 +6,7 @@ import { app, BrowserWindow } from "electron";
 import * as http from "node:http";
 import { registerIpcHandlers } from "./ipc/RegisterIpcHandlers.js";
 import { createMainWindow, getMainWindow } from "./windows/MainWindow.js";
+import { logMainError } from "./services/ConsoleService.js";
 
 // Enable environment proxies before the first Node fetch; older Node 24 runtimes lack this API.
 if ("setGlobalProxyFromEnv" in http && typeof http.setGlobalProxyFromEnv === "function") http.setGlobalProxyFromEnv();
@@ -16,7 +17,7 @@ function focusMainWindow(): void
     const window = getMainWindow();
     if (!window)
     {
-        void createMainWindow();
+        void createMainWindow().catch((error: unknown) => logMainError("Window creation failed", error));
         return;
     }
     if (window.isMinimized()) window.restore();
@@ -38,14 +39,14 @@ else
     app.whenReady().then(() =>
     {
         registerIpcHandlers();
-        void createMainWindow();
+        void createMainWindow().catch((error: unknown) => logMainError("Window creation failed", error));
         app.on("activate", () =>
         {
-            if (BrowserWindow.getAllWindows().length === 0) void createMainWindow();
+            if (BrowserWindow.getAllWindows().length === 0) void createMainWindow().catch((error: unknown) => logMainError("Window creation failed", error));
         });
     }).catch((error: unknown) =>
     {
-        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        logMainError("Application startup failed", error);
         app.exit(1);
     });
 

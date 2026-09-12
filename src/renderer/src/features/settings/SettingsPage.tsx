@@ -6,7 +6,7 @@ import { DesktopOutlined, FileTextOutlined, GithubOutlined } from "@ant-design/i
 import type { ThemeMode } from "@shared/models/AppSettings";
 import { Button, Card, Flex, Segmented, Space, Typography } from "antd";
 import { useEffect, useState } from "react";
-import { showError } from "@/components/common/Feedback";
+import { showError, writeLog } from "@/components/common/Feedback";
 import { AgentDocumentTitleForm } from "@/features/workspace/WorkspaceEditor";
 import { useAppStore } from "@/stores/AppStore";
 
@@ -36,7 +36,7 @@ export function SettingsPage()
 
     useEffect(() =>
     {
-        void window.appApi.app.getVersion().then(setVersion).catch(() => setVersion(""));
+        void window.appApi.app.getVersion().then(setVersion).catch((error: unknown) => showError(error, "Version lookup failed"));
     }, []);
 
     return (
@@ -56,7 +56,8 @@ export function SettingsPage()
                                 {
                                     setTheme(settings.theme);
                                     applyTheme(settings.theme);
-                                }).catch((error: unknown) => showError(error instanceof Error ? error.message : String(error)));
+                                    writeLog("success", "Theme updated", `Theme: ${settings.theme}`);
+                                }).catch((error: unknown) => showError(error, "Theme update failed"));
                             }}
                         />
                     </Flex>

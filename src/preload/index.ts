@@ -6,10 +6,23 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { AppApi } from "../shared/contracts/AppApi.js";
 import { IPC_CHANNELS } from "../shared/contracts/IpcChannels.js";
 import type { AppSettings } from "../shared/models/AppSettings.js";
+import type { LogChange } from "../shared/models/Console.js";
 import type { Agent, Config, HarnessConfig, LayerOptionInput, RuleInput } from "../shared/models/Workspace.js";
 
 /** Renderer-facing capability API bridged onto `window.appApi`. */
 const appApi: AppApi = {
+    console: {
+        read: () => ipcRenderer.invoke(IPC_CHANNELS.consoleRead),
+        append: (input) => ipcRenderer.invoke(IPC_CHANNELS.consoleAppend, input),
+        clear: () => ipcRenderer.invoke(IPC_CHANNELS.consoleClear),
+        onChanged: (callback) =>
+        {
+            /** Forward only typed console events from Main. */
+            const listener = (_event: IpcRendererEvent, change: LogChange): void => callback(change);
+            ipcRenderer.on(IPC_CHANNELS.consoleChanged, listener);
+            return () => { ipcRenderer.removeListener(IPC_CHANNELS.consoleChanged, listener); };
+        },
+    },
     sync: {
         status: () => ipcRenderer.invoke(IPC_CHANNELS.syncStatus),
         connect: (input) => ipcRenderer.invoke(IPC_CHANNELS.syncConnect, input),

@@ -5,6 +5,13 @@
 
 import { z } from "zod";
 
+/** Validate renderer log records without accepting arbitrary objects or executable content. */
+export const LOG_INPUT_SCHEMA = z.object({
+    level: z.enum(["info", "success", "error"]),
+    title: z.string().trim().min(1),
+    details: z.string(),
+}).strict();
+
 /** Validate the one-time private repository credential supplied by the renderer. */
 export const SYNC_CONNECTION_SCHEMA = z.strictObject({
     owner: z.string().min(1).max(100),

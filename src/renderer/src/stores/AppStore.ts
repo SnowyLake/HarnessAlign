@@ -3,18 +3,16 @@
  */
 
 import { create } from "zustand";
-import type { ThemeMode } from "@shared/models/AppSettings";
-import type { LayerSelection, Workspace } from "@shared/models/Workspace";
-import type { SyncPreview, SyncStatus } from "@shared/models/Sync";
+import type { ThemeMode } from "../../../shared/models/AppSettings.js";
+import type { LayerSelection, Workspace } from "../../../shared/models/Workspace.js";
+import type { SyncPreview, SyncStatus } from "../../../shared/models/Sync.js";
+import type { LogChange, LogEntry, LogSnapshot } from "../../../shared/models/Console.js";
 
 /** Workspace modules available from the primary navigation. */
 export type WorkspaceView = "project" | "rules" | "shared-rules" | "layers" | "skills" | "agents" | "generated";
 
 /** Top-level desktop shell view. */
-export type AppView = WorkspaceView | "settings" | "showcase";
-
-/** Tone applied to output notifications and the full output dialog. */
-export type OutputTone = "success" | "error";
+export type AppView = WorkspaceView | "console" | "settings" | "showcase";
 
 /** Currently selected workspace editor target. */
 export type Selection =
@@ -197,12 +195,8 @@ interface AppState
     syncDialog: "review" | "connection" | undefined;
     selection: Selection;
     layerSelection: LayerSelection[];
-    output: string;
-    outputTone: OutputTone;
-    outputTitle: string;
-    outputNoticeId: number;
-    isOutputNoticeVisible: boolean;
-    isOutputDialogOpen: boolean;
+    logs: LogEntry[];
+    logRevision: number;
     isBusy: boolean;
     theme: ThemeMode;
     editorDrafts: Record<string, EditorDraft>;
@@ -215,9 +209,8 @@ interface AppState
     setSyncDialog: (dialog: "review" | "connection" | undefined) => void;
     setSelection: (selection: Selection) => void;
     setLayerSelection: (selection: LayerSelection[]) => void;
-    setOutput: (output: string, tone: OutputTone, title: string) => void;
-    dismissOutputNotice: () => void;
-    setOutputDialogOpen: (isOpen: boolean) => void;
+    setLogSnapshot: (snapshot: LogSnapshot) => void;
+    applyLogChange: (change: LogChange) => void;
     setIsBusy: (isBusy: boolean) => void;
     setTheme: (theme: ThemeMode) => void;
     setEditorDraft: (key: string, draft: EditorDraft | undefined) => void;
@@ -245,12 +238,8 @@ export const useAppStore = create<AppState>((set) => ({
     syncDialog: undefined,
     selection: { kind: "config" },
     layerSelection: [],
-    output: "No command output yet.",
-    outputTone: "success",
-    outputTitle: "Output",
-    outputNoticeId: 0,
-    isOutputNoticeVisible: false,
-    isOutputDialogOpen: false,
+    logs: [],
+    logRevision: 0,
     isBusy: false,
     theme: "system",
     editorDrafts: {},
@@ -258,7 +247,7 @@ export const useAppStore = create<AppState>((set) => ({
     nextEditorActionId: 1,
     setView: (view) => set((state) => ({
         view,
-        selection: view === "settings" || view === "showcase"
+        selection: view === "settings" || view === "showcase" || view === "console"
             ? state.selection
             : selectionForView(view, state.selection, state.workspace),
     })),
@@ -267,7 +256,7 @@ export const useAppStore = create<AppState>((set) => ({
         const shouldReset = !state.workspace || !workspace;
         return {
             workspace,
-            selection: state.view === "settings" || state.view === "showcase"
+            selection: state.view === "settings" || state.view === "showcase" || state.view === "console"
                 ? state.selection
                 : selectionForView(state.view, state.selection, workspace),
             layerSelection: !workspace
@@ -281,15 +270,11 @@ export const useAppStore = create<AppState>((set) => ({
     }),
     setSelection: (selection) => set({ selection }),
     setLayerSelection: (layerSelection) => set({ layerSelection }),
-    setOutput: (output, tone, title) => set((state) => ({
-        output,
-        outputTone: tone,
-        outputTitle: title,
-        outputNoticeId: state.outputNoticeId + 1,
-        isOutputNoticeVisible: true,
-    })),
-    dismissOutputNotice: () => set({ isOutputNoticeVisible: false }),
-    setOutputDialogOpen: (isOutputDialogOpen) => set({ isOutputDialogOpen }),
+    setLogSnapshot: (snapshot) => set({ logs: snapshot.entries, logRevision: snapshot.revision }),
+    applyLogChange: (change) => set((state) => change.revision <= state.logRevision ? state : {
+        logs: change.entry ? [...state.logs, change.entry] : [],
+        logRevision: change.revision,
+    }),
     setIsBusy: (isBusy) => set({ isBusy }),
     setTheme: (theme) => set({ theme }),
     setSyncPreview: (syncPreview) => set({ syncPreview }),

@@ -19,7 +19,7 @@ import {
 import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, UserSkill, Workspace } from "@shared/models/Workspace";
 import { Alert, Avatar, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Listy, Modal, Select, Space, Tabs, Tag, Tooltip, Typography, type TabsProps } from "antd";
 import { useState, type ReactNode } from "react";
-import { showError, showSuccess } from "@/components/common/Feedback";
+import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
 import { refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore } from "@/stores/AppStore";
 
@@ -113,7 +113,7 @@ function OriginMeta({ origin }: { origin: SkillOrigin })
                 type="link"
                 size="small"
                 icon={<ExportOutlined />}
-                onClick={() => void window.appApi.app.openExternal(`https://github.com/${repo}`).catch((error: unknown) => showError(String(error)))}
+                onClick={() => void window.appApi.app.openExternal(`https://github.com/${repo}`).catch((error: unknown) => showError(error, "Open link failed"))}
             >
                 {repo}
             </Button>
@@ -134,7 +134,7 @@ function InstalledSkillRow({ skill, update, isBusy, onUpdate, onRemove }: {
     const actions: ReactNode[] = [];
     if (update?.error)
     {
-        actions.push(<Tooltip key="error" title={update.error}><Typography.Text type="danger" tabIndex={0} aria-label={update.error}><WarningOutlined /></Typography.Text></Tooltip>);
+        actions.push(<Tooltip key="error" title="Update check failed. See Console for details."><Typography.Text type="danger" tabIndex={0} aria-label="Update check failed"><WarningOutlined /></Typography.Text></Tooltip>);
     }
     else if (update && isOutdated(update))
     {
@@ -195,9 +195,9 @@ function NewSkillSourceForm({ onAdded, onCancel, onError }: {
                 void runMutation(async () =>
                 {
                     const input = branch.trim() ? { url: url.trim(), branch: branch.trim() } : { url: url.trim() };
-                    await window.appApi.workspace.addSkillSource(input);
+                    const config = await window.appApi.workspace.addSkillSource(input);
+                    showSuccess("Skill source added", config.skillSources.map((source) => `${source.owner}/${source.name} (${source.branch ?? "default branch"})`).join("\n"));
                     await refreshWorkspace();
-                    showSuccess("Skill source added");
                     onAdded();
                 }).then((result) =>
                 {
@@ -268,7 +268,7 @@ function SkillSourcesSection({ workspace }: { workspace: Workspace })
                                             type="text"
                                             icon={<ExportOutlined />}
                                             aria-label={`Open ${source.owner}/${source.name}`}
-                                            onClick={() => void window.appApi.app.openExternal(`https://github.com/${source.owner}/${source.name}`).catch((error: unknown) => showError(String(error)))}
+                                            onClick={() => void window.appApi.app.openExternal(`https://github.com/${source.owner}/${source.name}`).catch((error: unknown) => showError(error, "Open link failed"))}
                                         />
                                     </Tooltip>
                                     <Tooltip title="Remove source">
@@ -296,9 +296,9 @@ function SkillSourcesSection({ workspace }: { workspace: Workspace })
                        void runMutation(async () =>
                        {
                            await window.appApi.workspace.removeSkillSource(removeSource.owner, removeSource.name);
+                           showSuccess("Skill source removed", `${removeSource.owner}/${removeSource.name}`);
                            setRemoveSource(undefined);
                            await refreshWorkspace();
-                           showSuccess("Skill source removed");
                        }).then((result) =>
                        {
                            if (!result.ok) setFormError(result.message);
@@ -315,7 +315,6 @@ export function SkillsPanel()
 {
     const workspace = useAppStore((state) => state.workspace);
     const isBusy = useAppStore((state) => state.isBusy);
-    const setOutput = useAppStore((state) => state.setOutput);
     const [listView, setListView] = useState<SkillsListView>("installed");
     const [originFilter, setOriginFilter] = useState<OriginFilter>("all");
     const [discovered, setDiscovered] = useState<RemoteSkill[]>([]);
@@ -368,8 +367,8 @@ export function SkillsPanel()
             setFilter("");
             setOriginFilter("all");
             setListView("discover");
-            setOutput(`Discovered ${skills.length} skill(s).`, "success", "Discover completed");
-        });
+            showSuccess("Discover completed", `Discovered ${skills.length} skill(s).\n${JSON.stringify(skills, null, 2)}`);
+        }, "Discover");
     };
 
     /** Download the selected discovered skills into this project. */
@@ -378,11 +377,11 @@ export function SkillsPanel()
         void runCommand(async () =>
         {
             const report = await window.appApi.workspace.installSkills(selectedRemote);
-            setOutput(report, "success", "Install completed");
+            showSuccess("Install completed", report);
             setSelectedRemote([]);
             setListView("installed");
             await refreshWorkspace();
-        });
+        }, "Install");
     };
 
     /** Compare installed GitHub skills with remote content hashes. */
@@ -393,8 +392,10 @@ export function SkillsPanel()
             const next = await window.appApi.workspace.checkSkillUpdates();
             setUpdates(next);
             setListView("installed");
-            setOutput(`Checked ${next.length} GitHub skill(s).`, "success", "Update check completed");
-        });
+            const report = `Checked ${next.length} GitHub skill(s).\n${JSON.stringify(next, null, 2)}`;
+            if (next.some((update) => update.error)) showError(report, "Update check completed with errors");
+            else showSuccess("Update check completed", report);
+        }, "Update check");
     };
 
     /** Apply selected updates and refresh the workspace. */
@@ -404,10 +405,10 @@ export function SkillsPanel()
         void runCommand(async () =>
         {
             const report = await window.appApi.workspace.applySkillUpdates(ids);
-            setOutput(report, "success", "Updates applied");
+            showSuccess("Updates applied", report);
             setUpdates((current) => current.filter((item) => !ids.includes(item.id)));
             await refreshWorkspace();
-        });
+        }, "Apply updates");
     };
 
     /** Open the user-skill import drawer after loading its contents. */
@@ -415,10 +416,12 @@ export function SkillsPanel()
     {
         void runCommand(async () =>
         {
-            setUserSkills(await window.appApi.workspace.listUserSkills());
+            const skills = await window.appApi.workspace.listUserSkills();
+            setUserSkills(skills);
+            writeLog("info", "User skills listed", JSON.stringify(skills, null, 2));
             setSelectedImport([]);
             setIsImportOpen(true);
-        });
+        }, "List user skills");
     };
 
     /** Import selected user skills and optionally overwrite matching ids. */
@@ -427,11 +430,11 @@ export function SkillsPanel()
         void runCommand(async () =>
         {
             const report = await window.appApi.workspace.importUserSkills(selectedImport, overwrite);
-            setOutput(report, "success", "Import completed");
+            showSuccess("Import completed", report);
             setIsImportOpen(false);
             setIsOverwriteOpen(false);
             await refreshWorkspace();
-        });
+        }, "Import");
     };
 
     const installedContent = filteredInstalled.length === 0
@@ -621,6 +624,7 @@ export function SkillsPanel()
                     void runMutation(async () =>
                     {
                         await window.appApi.workspace.removeSkill(removeId);
+                        showSuccess("Skill removed", `Removed ${removeId}`);
                         setRemoveId(undefined);
                         await refreshWorkspace();
                     });

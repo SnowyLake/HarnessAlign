@@ -14,6 +14,10 @@ import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { workspaceService } from "../src/main/services/WorkspaceService.js";
 import { uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
+import { useAppStore } from "../src/renderer/src/stores/AppStore.js";
+import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
+import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
+import type { LogChange } from "../src/shared/models/Console.js";
 import { checkSkillUpdates, discoverSkills, installSkills } from "../src/main/services/SkillRemoteService.js";
 import { applySync, connectSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, readSyncSnapshot, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
@@ -45,6 +49,59 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("session console retains ordered history across hydration and navigation, and clears without reviving old entries", () =>
+{
+    clearLogs();
+    const initialState = useAppStore.getState();
+    const changes: LogChange[] = [];
+    const unsubscribe = subscribeLogs((change) => changes.push(change));
+    try
+    {
+        const input = LOG_INPUT_SCHEMA.parse({ level: "success", title: "Generate completed", details: "generated/codex/AGENTS.md\n2 files written" });
+        appendLog(input);
+        appendLog(input);
+        const snapshot = readLogs();
+        logMainError("Window state save failed", new Error("window-state.json: EACCES"));
+        const state = useAppStore.getState();
+        state.setLogSnapshot(snapshot);
+        for (const change of changes) state.applyLogChange(change);
+        assert.equal(useAppStore.getState().logs.length, 3);
+        assert.equal(new Set(useAppStore.getState().logs.map((entry) => entry.id)).size, 3);
+        assert.equal(useAppStore.getState().logs[0]!.details, input.details);
+        assert.match(useAppStore.getState().logs[2]!.details, /window-state.json: EACCES/);
+        assert.ok(useAppStore.getState().logs.every((entry) => Number.isFinite(Date.parse(entry.timestamp))));
+        state.setSelection({ kind: "rule-new", scope: "root" });
+        state.setEditorDraft("rule-new:root", { selection: { kind: "rule-new", scope: "root" }, baseline: {}, current: { body: ["unsaved"] } });
+        state.setView("console");
+        assert.deepEqual(useAppStore.getState().selection, { kind: "rule-new", scope: "root" });
+        state.setView("settings");
+        state.setView("console");
+        assert.equal(useAppStore.getState().editorDrafts["rule-new:root"]!.current.body![0], "unsaved");
+        assert.equal(useAppStore.getState().logs.length, 3);
+        state.setLogSnapshot(readLogs());
+        assert.equal(useAppStore.getState().logs.length, 3);
+        clearLogs();
+        state.applyLogChange(changes.at(-1)!);
+        state.applyLogChange(changes[0]!);
+        assert.deepEqual(useAppStore.getState().logs, []);
+        appendLog(input);
+        state.applyLogChange(changes.at(-1)!);
+        assert.equal(useAppStore.getState().logs.length, 1);
+        assert.ok(useAppStore.getState().logs[0]!.id > snapshot.revision);
+        assert.equal(snapshot.entries.length, 2);
+        for (const invalid of [{ level: "debug", title: "Invalid", details: "x" }, { level: "error", title: " ", details: "x" }, { level: "info", title: "x", details: {} }])
+        {
+            assert.equal(LOG_INPUT_SCHEMA.safeParse(invalid).success, false);
+        }
+    }
+    finally
+    {
+        unsubscribe();
+        clearLogs();
+        useAppStore.setState(initialState, true);
+    }
+});
 
 /** Small valid GitHub-shaped archive used by remote discovery checks. */
 const TEST_SKILL_ARCHIVE = Buffer.from(

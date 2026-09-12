@@ -5,6 +5,10 @@
 
 /** Channel names for the typed Main / Preload IPC contract. */
 export const IPC_CHANNELS = {
+    consoleRead: "console:read",
+    consoleAppend: "console:append",
+    consoleClear: "console:clear",
+    consoleChanged: "console:changed",
     syncStatus: "sync:status",
     syncConnect: "sync:connect",
     syncDisconnect: "sync:disconnect",

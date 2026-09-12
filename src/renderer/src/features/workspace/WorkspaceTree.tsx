@@ -213,7 +213,7 @@ async function renameRuleFromTree(workspace: Workspace, rule: RuleInput | Shared
         }
         await refreshWorkspace({ kind: "rule", path: nextPath });
     });
-    if (result.ok) showSuccess(`Renamed to ${fileName(nextPath)}`);
+    if (result.ok) showSuccess("Rule renamed", `Renamed to ${nextPath}`);
     return result.ok;
 }
 
@@ -258,7 +258,7 @@ async function renameLayerOptionFromTree(option: LayerOption, name: string): Pro
         const nextPath = await persistLayerOptionRename(option.layer, option.name, nextName);
         await refreshWorkspace({ kind: "layer-option", path: nextPath });
     });
-    if (result.ok) showSuccess(`Renamed to ${nextName}.md`);
+    if (result.ok) showSuccess("Layer option renamed", `Renamed to ${nextName}.md`);
     return result.ok;
 }
 
@@ -280,7 +280,7 @@ async function renameAgentFromTree(workspace: Workspace, path: string, name: str
         }
         await refreshWorkspace({ kind: "agent", path: nextPath });
     });
-    if (result.ok) showSuccess(`Renamed to ${fileName(nextPath)}`);
+    if (result.ok) showSuccess("Agent renamed", `Renamed to ${nextPath}`);
     return result.ok;
 }
 
@@ -325,7 +325,7 @@ function LayerGroupEditor({ name, isBusy }: LayerGroupEditorProps)
         if (result.ok)
         {
             setIsOpen(false);
-            showSuccess(`Renamed layer to ${trimmed}`);
+            showSuccess("Layer renamed", `Renamed layer to ${trimmed}`);
         }
     };
 
@@ -349,7 +349,7 @@ function LayerGroupEditor({ name, isBusy }: LayerGroupEditorProps)
         if (result.ok)
         {
             setIsDeleteOpen(false);
-            showSuccess(`Deleted layer ${name}`);
+            showSuccess("Layer deleted", `Deleted layer ${name}`);
         }
     };
 

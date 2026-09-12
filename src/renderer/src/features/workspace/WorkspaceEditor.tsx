@@ -125,8 +125,8 @@ async function persistEditorForm(workspace: Workspace, selection: Selection, sna
     const state = useAppStore.getState();
     state.clearEditorDraft(selectionKey(selection));
     state.clearEditorDraft(selectionKey(result.selection));
+    showSuccess("Saved", `${result.message}\n${selectionKey(result.selection)}`);
     await refreshWorkspace(result.selection);
-    showSuccess(result.message);
 }
 
 /** Render the harness allowlist for a rule or layer option. */
@@ -148,7 +148,7 @@ function TargetBoxes({ selected }: { selected: string[] | undefined })
     );
 }
 
-/** Render a full mutation error in an Ant Design Alert. */
+/** Render the short failure summary while Console retains diagnostic details. */
 function FormError({ message }: { message: string | undefined })
 {
     if (!message) return null;
@@ -348,7 +348,7 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                         await window.appApi.workspace.removeHarness(original);
                         useAppStore.getState().clearEditorDraft(editorKey);
                         await refreshWorkspace();
-                        showSuccess(`Deleted harness ${original}`);
+                        showSuccess("Harness deleted", `Deleted harness ${original}`);
                         onDone();
                     }).then((result) =>
                     {
@@ -474,7 +474,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                             await window.appApi.workspace.deleteSource(existingPath);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace();
-                            showSuccess(`Deleted ${fileName(existingPath)}`);
+                            showSuccess("Rule deleted", `Deleted ${existingPath}`);
                         }).then((result) =>
                         {
                             if (!result.ok) setFormError(result.message);
@@ -558,7 +558,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                             await window.appApi.workspace.removeLayerOption(existing.layer, existing.name);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace({ kind: "layer", name: existing.layer });
-                            showSuccess(`Deleted ${existing.name}`);
+                            showSuccess("Layer option deleted", `Deleted ${existing.path}`);
                         }).then((result) =>
                         {
                             if (!result.ok) setFormError(result.message);
@@ -663,7 +663,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                             await window.appApi.workspace.deleteSource(existing.path);
                             useAppStore.getState().clearEditorDraft(editorKey);
                             await refreshWorkspace();
-                            showSuccess(`Deleted ${fileName(existing.path)}`);
+                            showSuccess("Agent deleted", `Deleted ${existing.path}`);
                         }).then((result) =>
                         {
                             if (!result.ok) setFormError(result.message);
