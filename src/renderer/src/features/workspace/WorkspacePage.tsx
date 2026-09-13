@@ -6,7 +6,7 @@ import { Splitter } from "antd";
 import { HarnessesPanel, WorkspaceEditor } from "@/features/workspace/WorkspaceEditor";
 import { SkillsPanel } from "@/features/workspace/SkillsPanel";
 import { WorkspaceTree } from "@/features/workspace/WorkspaceTree";
-import { selectionKey, useAppStore, type WorkspaceView } from "@/stores/AppStore";
+import type { WorkspaceView } from "@/stores/AppStore";
 
 /** Props for the split workspace module page. */
 export interface WorkspacePageProps
@@ -17,8 +17,6 @@ export interface WorkspacePageProps
 /** Render a full-width module or the Ant Design split list and editor view. */
 export function WorkspacePage({ view }: WorkspacePageProps)
 {
-    const selection = useAppStore((state) => state.selection);
-
     if (view === "project" || view === "skills")
     {
         return (
@@ -36,7 +34,7 @@ export function WorkspacePage({ view }: WorkspacePageProps)
                         <WorkspaceTree view={view} />
                     </Splitter.Panel>
                     <Splitter.Panel min="55%">
-                        <WorkspaceEditor key={selectionKey(selection)} />
+                        <WorkspaceEditor />
                     </Splitter.Panel>
                 </Splitter>
             </div>

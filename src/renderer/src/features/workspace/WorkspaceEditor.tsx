@@ -538,7 +538,12 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
 }
 
 /** Render a subagent source and per-harness metadata editors. */
-function AgentForm({ workspace, selection }: { workspace: Workspace; selection: Extract<Selection, { kind: "agent" } | { kind: "agent-new" }> })
+function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessChange }: {
+    workspace: Workspace;
+    selection: Extract<Selection, { kind: "agent" } | { kind: "agent-new" }>;
+    metadataHarness: string | undefined;
+    onMetadataHarnessChange: (name: string) => void;
+})
 {
     const isBusy = useAppStore((state) => state.isBusy);
     const existing = selection.kind === "agent" ? workspace.agents.find((agent) => agent.path === selection.path) : undefined;
@@ -546,10 +551,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
     const editorKey = selectionKey(selection);
     const editor = useEditorForm(workspace, selection, existing ? () => setIsDeleteOpen(true) : undefined);
     const [agentName, setAgentName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-agent"));
-    const [activeMetadataName, setActiveMetadataName] = useState(workspace.config.harnesses[0]!.name);
-    const selectedMetadataName = workspace.config.harnesses.some((harness) => harness.name === activeMetadataName)
-        ? activeMetadataName
-        : workspace.config.harnesses[0]!.name;
+    const selectedMetadataName = workspace.config.harnesses.find((harness) => harness.name === metadataHarness)?.name ?? workspace.config.harnesses[0]!.name;
 
     return (
         <>
@@ -577,7 +579,7 @@ function AgentForm({ workspace, selection }: { workspace: Workspace; selection: 
                         <input type="hidden" name="enabledHarnesses" value="" />
                         <Tabs
                             activeKey={selectedMetadataName}
-                            onChange={setActiveMetadataName}
+                            onChange={onMetadataHarnessChange}
                             items={workspace.config.harnesses.map((harness) => ({
                                 key: harness.name,
                                 label: harness.name,
@@ -738,6 +740,27 @@ export function WorkspaceEditor()
     const editorKey = selectionKey(selection);
     const hasDraft = useAppStore((state) => Boolean(state.editorDrafts[editorKey]));
     const [revision, setRevision] = useState(0);
+    const [agentMetadataHarness, setAgentMetadataHarness] = useState<string>();
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const scrollTopRef = useRef(0);
+    const restoreKey = `${editorKey}:${revision}`;
+    const restoreKeyRef = useRef(restoreKey);
+    if (restoreKeyRef.current !== restoreKey)
+    {
+        // Snapshot before React replaces the form and the scroller clamps to 0.
+        if (scrollRef.current) scrollTopRef.current = scrollRef.current.scrollTop;
+        restoreKeyRef.current = restoreKey;
+    }
+
+    useLayoutEffect(() =>
+    {
+        const scroller = scrollRef.current;
+        if (!scroller) return;
+        const top = scrollTopRef.current;
+        scroller.scrollTop = top;
+        const timer = window.setTimeout(() => { scroller.scrollTop = top; }, 0);
+        return () => window.clearTimeout(timer);
+    }, [restoreKey]);
 
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
     let editor: ReactNode = <GeneratedEmpty />;
@@ -760,7 +783,7 @@ export function WorkspaceEditor()
     else if (selection.kind === "agent" || selection.kind === "agent-new")
     {
         const source = selection.kind === "agent" ? workspace.agents.find((item) => item.path === selection.path) : undefined;
-        editor = <AgentForm key={JSON.stringify(source)} workspace={workspace} selection={selection} />;
+        editor = <AgentForm key={JSON.stringify(source)} workspace={workspace} selection={selection} metadataHarness={agentMetadataHarness} onMetadataHarnessChange={setAgentMetadataHarness} />;
     }
     else if (selection.kind === "generated-file") editor = <GeneratedFileView workspace={workspace} path={selection.path} />;
 
@@ -782,7 +805,7 @@ export function WorkspaceEditor()
                             onClick={() => useAppStore.getState().requestEditorAction(selection, "save")}>{isNew ? "Create" : "Save file"}</Button>
                 </Space> : selection.kind !== "layer" ? <Typography.Text type="secondary">Read only</Typography.Text> : null}
             </Flex>
-            <div className="workspace-scroll">
+            <div className="workspace-scroll" ref={scrollRef}>
                 <div key={revision} className="workspace-editor-page">{editor}</div>
             </div>
         </div>

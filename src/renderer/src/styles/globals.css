@@ -188,6 +188,12 @@ select {
     min-width: 0;
     min-height: 0;
     flex-direction: column;
+    overflow: hidden;
+}
+
+.workspace-editor > .workspace-scroll {
+    height: auto;
+    flex: 1;
 }
 
 .workspace-editor-toolbar,
