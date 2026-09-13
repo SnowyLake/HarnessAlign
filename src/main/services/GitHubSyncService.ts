@@ -12,11 +12,12 @@ import { applySyncSources, validateSyncSources } from "../../engine/Edit.js";
 import { atomicWrite, ensureRegularSource, lstatIfExists } from "../../engine/FsSafe.js";
 import { HalignError } from "../../engine/Model.js";
 import {
-    assertSyncPath, emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash,
+    assertSyncPath, emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash,
     SYNC_MAX_ENTRIES, SYNC_MAX_FILE_BYTES, SYNC_MAX_TOTAL_BYTES, type SyncSnapshot,
 } from "../../engine/Sync.js";
 import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncDiscardInput, SyncFileView, SyncPreview, SyncResult, SyncStatus } from "../../shared/models/Sync.js";
 import { fetchRemote, readResponseBytes } from "./RemoteFetch.js";
+import { hydrateSyncSkills } from "./SkillRemoteService.js";
 
 /** Stored connection includes only an OS-encrypted token. */
 interface SyncConnection extends Omit<SyncConnectionInput, "token">
@@ -382,7 +383,7 @@ async function readRemote(connection: SyncConnection, token: string, baseline?: 
     const manifest = z.object({ version: z.literal(1), directories: z.array(z.string()) }).parse(JSON.parse(marker.toString("utf8")));
     snapshot.directories.push(...manifest.directories);
     const checked = parseSyncSnapshot(snapshot);
-    await validateSyncSources(checked);
+    await validateSyncSources(checked, true);
     const remote = { head, rootTree, snapshot: checked, blobs, empty: false };
     cachedRemote = { connectionKey: key, remote };
     return remote;
@@ -419,7 +420,8 @@ async function createSyncCommit(connection: SyncConnection, token: string, remot
 /** Save a common baseline only after local sources match the accepted snapshot. */
 async function finishSync(root: string, directory: string, state: SyncState, before: SyncSnapshot, snapshot: SyncSnapshot, head: string): Promise<void>
 {
-    await applySyncSources(root, before, snapshot);
+    const hydrated = await hydrateSyncSkills(snapshot, before);
+    await applySyncSources(root, before, hydrated);
     state.base = { connectionKey: connectionKey(state.connection!), head, snapshot, syncedAt: new Date().toISOString() };
     state.pending = null;
     await writeState(directory, state);
@@ -439,7 +441,8 @@ async function recoverUpload(root: string, directory: string, state: SyncState, 
         published = comparison.status === "ahead" || comparison.status === "identical";
     }
     const local = await readSyncSnapshot(root);
-    if (published && [syncSnapshotHash(pending.before), syncSnapshotHash(pending.snapshot)].includes(syncSnapshotHash(local)))
+    if (published && (syncSnapshotHash(pending.before) === syncSnapshotHash(local)
+        || syncSnapshotHash(portableSyncSnapshot(pending.snapshot)) === syncSnapshotHash(portableSyncSnapshot(local))))
     {
         await finishSync(root, directory, state, local, pending.snapshot, pending.head);
         return "Recovered an earlier upload. The local workspace was refreshed; review any newer remote changes below.";
@@ -465,7 +468,7 @@ export async function previewSync(root: string, directory: string, token: string
     const notice = await recoverUpload(root, directory, state, token, remote);
     const local = await readSyncSnapshot(root);
     const base = state.base?.connectionKey === key ? state.base : null;
-    const merged = mergeSyncSnapshots(base?.snapshot ?? emptySyncSnapshot(), local, remote.snapshot);
+    const merged = mergeSyncSnapshots(portableSyncSnapshot(base?.snapshot ?? emptySyncSnapshot()), portableSyncSnapshot(local), portableSyncSnapshot(remote.snapshot));
     const preview: SyncPreview = {
         id: randomUUID(), head: remote.head, firstSync: base === null, remoteEmpty: remote.empty,
         uploadCount: merged.changes.filter((change) => change.direction === "upload" || change.direction === "conflict").length,
@@ -529,12 +532,12 @@ export async function discardSync(root: string, directory: string, token: string
     if (!change || !["upload", "conflict"].includes(change.direction)) throw new HalignError(`sync change ${input.key}: expected a preview entry with local changes`);
     if (change.key.endsWith("/") && change.paths.length === 0) throw new HalignError(`sync change ${input.key}: discard individual files instead of a directory entry`);
     const { state, connection, local } = await readPreviewSources(root, directory, preview);
-    const next = restoreSyncChange(preview.base, local, preview.remote.snapshot, input.key);
-    await validateSyncSources(next);
+    const next = restoreSyncChange(portableSyncSnapshot(preview.base), portableSyncSnapshot(local), portableSyncSnapshot(preview.remote.snapshot), input.key);
+    await validateSyncSources(next, true);
     await checkRepository(connection, token);
     const head = REFERENCE_SCHEMA.parse(await github(connection, token, `/git/ref/heads/${encodeURIComponent(connection.branch)}`)).object.sha;
     if (head !== preview.remote.head) throw new HalignError("The remote branch changed after preview; preview again");
-    await applySyncSources(root, local, next);
+    await applySyncSources(root, local, await hydrateSyncSkills(next, local));
     retainedPreview = undefined;
     return { status: publicStatus(state), message: `${input.key}: restored to the remote version. Other local changes were kept; a local backup is available.` };
 }
@@ -546,10 +549,10 @@ export async function applySync(root: string, directory: string, token: string, 
     const { state, connection, local } = await readPreviewSources(root, directory, preview);
     if (input.mode !== "merge" && !preview.public.firstSync) throw new HalignError("Whole-workspace adoption is only available on the first sync");
     if (input.mode === "remote" && preview.remote.empty) throw new HalignError("The remote has no Harness Align configuration to adopt");
-    const merged = mergeSyncSnapshots(preview.base, local, preview.remote.snapshot, input.choices);
+    const merged = mergeSyncSnapshots(portableSyncSnapshot(preview.base), portableSyncSnapshot(local), portableSyncSnapshot(preview.remote.snapshot), input.choices);
     if (input.mode === "merge" && merged.conflicts.length) throw new HalignError(`Resolve sync conflicts: ${merged.conflicts.join(", ")}`);
-    const next = input.mode === "local" ? local : input.mode === "remote" ? preview.remote.snapshot : merged.snapshot;
-    await validateSyncSources(next);
+    const next = portableSyncSnapshot(input.mode === "local" ? local : input.mode === "remote" ? preview.remote.snapshot : merged.snapshot);
+    await validateSyncSources(next, true);
     await checkRepository(connection, token);
     const currentHead = REFERENCE_SCHEMA.parse(await github(connection, token, `/git/ref/heads/${encodeURIComponent(connection.branch)}`)).object.sha;
     if (currentHead !== preview.remote.head) throw new HalignError("The remote branch changed after preview; preview again");

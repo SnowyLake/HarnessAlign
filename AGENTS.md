@@ -45,7 +45,7 @@
 - 错误信息必须包含足以定位问题的文件路径, 字段, 实际值和期望约束.
 - 保持 UTF-8 without BOM, LF 和确定性排序.
 - 保持 symbolic link, junction, 路径逃逸, manifest 管理范围和单文件原子写入安全检查. 路径 containment 使用 `path.relative()`, 不要用 `path.startsWith(root)`.
-- Skills 上游仓库的下载和发现只存在于 Main 的 `SkillRemoteService`. GitHub 配置快照的读写只存在于 Main 的 `GitHubSyncService`, 不触发 Skills 上游更新.
+- Skills 上游仓库的下载和发现只存在于 Main 的 `SkillRemoteService`. GitHub 配置快照的读写只存在于 Main 的 `GitHubSyncService`, 同步恢复可调用 `SkillRemoteService` 补齐指定版本内容, 不触发 Skills 上游更新.
 - 本仓库根目录不包含 `.harness-align`. 不得用 package script 包装 `generate` 或 `setup`.
 - 不得手工编辑 `dist/`, `out/`, `release/` 或 `node_modules/`.
 
@@ -117,6 +117,7 @@
 - 所有新文件写入与 stale 删除成功后, 才写入新的 manifest. 若 stale 删除失败, 保留旧 manifest.
 - 写回 `.harness-align` 源文件必须经 `src/engine/Edit.ts` 先校验再原子写入. 多文件更新不是单一磁盘事务.
 - 同步替换源文件前写入 `.sync-backup.json` 和 `.sync-recovery.json`, 后者在工作区初始化之前恢复. 恢复只能处理属于中断操作的内容, 检测到外部后续编辑时保留恢复记录并失败. 同步快照只包含配置源白名单, 不包含生成文件, 本机恢复记录或同步凭据.
+- 上传快照保留本地和来源不明的 Skill 文件; GitHub Skill 只上传来源记录. 本地预览守卫和恢复备份仍使用完整快照. 新下载记录固定 commit, 旧记录按分支恢复时必须匹配原内容哈希. 下载内容先在内存补齐并完整校验, 再经 `Edit.ts` 应用, 失败时保留工作区和待恢复同步. GitHub Skill 文件视为可重建缓存, 不做本地修改保护, 上传始终省略其内容; 本机内容哈希不匹配时按来源重新下载并替换.
 - GitHub 同步使用单个 commit 更新专用源目录, 保留仓库其他路径, 分支引用更新必须 `force: false`. 上传前保留待确认提交, 上传结果不确定时先查询提交归属, 本地应用成功后才推进共同基线. 同步连接, 凭据和基线保存在 Electron `userData`.
 - Harness 编辑统一走 `updateHarness`; 名称变化时级联更新 Rule 与 Layer Option `targets` 以及 Agent `harnesses` 键, 不保留独立 rename IPC.
 

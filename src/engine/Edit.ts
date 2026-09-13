@@ -28,7 +28,7 @@ import {
     valueText,
 } from "./Model.js";
 import { loadSkills, parseGitHubSkillSource } from "./Skills.js";
-import { parseSyncSnapshot, readSyncSnapshot, syncSnapshotHash, type SyncSnapshot } from "./Sync.js";
+import { parseSyncSnapshot, readSyncSnapshot, syncSkillIndex, syncSnapshotHash, type SyncSnapshot } from "./Sync.js";
 
 /** Default `.harness-align/config.json` written when the user workspace does not exist yet. */
 const DEFAULT_USER_CONFIG = {
@@ -326,9 +326,19 @@ async function replaceSyncSources(root: string, before: SyncSnapshot, after: Syn
 }
 
 /** Validate a complete source candidate in an isolated temporary workspace before changing live data. */
-export async function validateSyncSources(snapshot: SyncSnapshot): Promise<void>
+export async function validateSyncSources(snapshot: SyncSnapshot, allowRemoteSkills = false): Promise<void>
 {
     const checked = parseSyncSnapshot(snapshot);
+    if (allowRemoteSkills && checked.files["skills/index.json"] !== undefined)
+    {
+        const index = syncSkillIndex(checked);
+        for (const [id, entry] of Object.entries(index))
+        {
+            if (entry.origin === "github" && !Object.keys(checked.files).some((path) => path.startsWith(`skills/${id}/`))
+                && !checked.directories.some((path) => path === `skills/${id}` || path.startsWith(`skills/${id}/`))) delete index[id];
+        }
+        checked.files["skills/index.json"] = Buffer.from(JSON.stringify({ skills: index })).toString("base64");
+    }
     const staging = await fs.mkdtemp(join(tmpdir(), "halign-sync-"));
     try
     {

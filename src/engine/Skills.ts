@@ -26,7 +26,7 @@ import {
 
 /** Index provenance persisted in `.harness-align/skills/index.json`. */
 export type SkillIndexEntry =
-    | { origin: "github"; owner: string; name: string; branch: string; sourcePath: string; contentHash: string }
+    | { origin: "github"; owner: string; name: string; branch: string; sourcePath: string; contentHash: string; commit?: string }
     | { origin: "local"; contentHash: string };
 
 /** Parsed skill index keyed by skill id. */
@@ -206,14 +206,23 @@ export async function loadSkillIndex(root: string): Promise<SkillIndex>
     {
         throw new HalignError(`.harness-align/skills/index.json: invalid JSON: ${errorText(error)}`);
     }
+    return parseSkillIndex(parsed);
+}
+
+/** Validate portable provenance before using it for filesystem or network operations. */
+export function parseSkillIndex(parsed: unknown): SkillIndex
+{
     if (!isRecord(parsed) || !Object.hasOwn(parsed, "skills") || !isRecord(parsed.skills))
     {
         throw new HalignError(".harness-align/skills/index.json: expected a mapping with skills");
     }
     const index: SkillIndex = {};
+    const ids = new Set<string>();
     for (const [id, entry] of Object.entries(parsed.skills))
     {
         assertSkillName(id, `.harness-align/skills/index.json: skills.${id}`);
+        if (ids.has(id.toLowerCase())) throw new HalignError(`skills/index.json: skill ids must be unique without case sensitivity, got ${valueText(id)}`);
+        ids.add(id.toLowerCase());
         if (!isRecord(entry) || typeof entry.origin !== "string")
         {
             throw new HalignError(`.harness-align/skills/index.json: skills.${id} must be a mapping with origin`);
@@ -231,6 +240,15 @@ export async function loadSkillIndex(root: string): Promise<SkillIndex>
             {
                 throw new HalignError(`.harness-align/skills/index.json: skills.${id}.sourcePath must be a non-blank string or "" for the repository root, got ${valueText(entry.sourcePath)}`);
             }
+            if (!/^[A-Za-z0-9-]+$/u.test(String(entry.owner)) || !/^[A-Za-z0-9_.-]+$/u.test(String(entry.name)) || entry.name === "." || entry.name === "..")
+            {
+                throw new HalignError(`skills.${id}: expected safe GitHub owner and repository names`);
+            }
+            if (entry.sourcePath !== "") assertSafeZipEntry(entry.sourcePath);
+            if (entry.commit !== undefined && (typeof entry.commit !== "string" || !/^[a-f0-9]{40}$/u.test(entry.commit)))
+            {
+                throw new HalignError(`skills.${id}.commit: expected a 40-character lowercase commit SHA`);
+            }
             index[id] = {
                 origin: "github",
                 owner: entry.owner as string,
@@ -238,6 +256,7 @@ export async function loadSkillIndex(root: string): Promise<SkillIndex>
                 branch: entry.branch as string,
                 sourcePath: entry.sourcePath,
                 contentHash: entry.contentHash as string,
+                ...(entry.commit === undefined ? {} : { commit: entry.commit as string }),
             };
         }
         else if (entry.origin === "local")
@@ -435,6 +454,7 @@ export async function installSkillFromDirectory(
                 branch: origin.branch,
                 sourcePath: origin.sourcePath,
                 contentHash,
+                ...(origin.commit === undefined ? {} : { commit: origin.commit }),
             }
             : { origin: "local", contentHash };
         await writeSkillIndex(root, index);

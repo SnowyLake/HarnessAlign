@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { assertContained, ensureRegularSource, isAtomicWriteTemporary, lstatIfExists } from "./FsSafe.js";
 import { assertWindowsSafeName, codePointCompare, HalignError, isRecord } from "./Model.js";
-import { assertSkillName } from "./Skills.js";
+import { assertSkillName, parseSkillIndex, type SkillIndex } from "./Skills.js";
 
 /** Portable snapshot with base64 file bytes and explicit empty directories. */
 export interface SyncSnapshot
@@ -152,6 +152,43 @@ export async function readSyncSnapshot(root: string): Promise<SyncSnapshot>
 export function syncSnapshotHash(snapshot: SyncSnapshot): string
 {
     return createHash("sha256").update(JSON.stringify(parseSyncSnapshot(snapshot))).digest("hex");
+}
+
+/** Read validated skill provenance from an in-memory snapshot. */
+export function syncSkillIndex(snapshot: SyncSnapshot): SkillIndex
+{
+    const encoded = snapshot.files["skills/index.json"];
+    return encoded === undefined ? {} : parseSkillIndex(JSON.parse(Buffer.from(encoded, "base64").toString("utf8")));
+}
+
+/** Hash visible skill files with the same ordering and framing as installed skills. */
+export function syncSkillHash(snapshot: SyncSnapshot, id: string): string
+{
+    const prefix = `skills/${id}/`;
+    const hash = createHash("sha256");
+    for (const path of Object.keys(snapshot.files).sort(codePointCompare))
+    {
+        if (!path.startsWith(prefix)) continue;
+        const relative = path.slice(prefix.length);
+        if (relative.split("/").some((part) => part.startsWith("."))) continue;
+        hash.update(relative).update("\0").update(Buffer.from(snapshot.files[path]!, "base64")).update("\0");
+    }
+    return hash.digest("hex");
+}
+
+/** Omit disposable GitHub skill caches while retaining local and unknown-origin skill files. */
+export function portableSyncSnapshot(snapshot: SyncSnapshot): SyncSnapshot
+{
+    const next = parseSyncSnapshot(snapshot);
+    for (const [id, entry] of Object.entries(syncSkillIndex(next)))
+    {
+        if (entry.origin !== "github") continue;
+        const prefix = `skills/${id}/`;
+        const paths = Object.keys(next.files).filter((path) => path.startsWith(prefix));
+        for (const path of paths) delete next.files[path];
+        next.directories = next.directories.filter((path) => path !== `skills/${id}` && !path.startsWith(prefix));
+    }
+    return next;
 }
 
 /** One merge unit includes complete skill content and its provenance record. */

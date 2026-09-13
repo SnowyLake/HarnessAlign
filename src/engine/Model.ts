@@ -85,7 +85,7 @@ export interface Config
 
 /** Provenance recorded for an installed project skill. */
 export type SkillOrigin =
-    | { kind: "github"; owner: string; name: string; branch: string; sourcePath: string; contentHash: string }
+    | { kind: "github"; owner: string; name: string; branch: string; sourcePath: string; contentHash: string; commit?: string }
     | { kind: "local"; contentHash: string }
     | { kind: "unknown" };
 

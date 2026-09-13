@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
 import { loadConfig } from "../../engine/Load.js";
-import { codePointCompare, errorText, HalignError, type SkillOrigin, valueText } from "../../engine/Model.js";
+import { codePointCompare, errorText, HalignError, isRecord, type SkillOrigin, valueText } from "../../engine/Model.js";
+import { parseSyncSnapshot, syncSkillHash, syncSkillIndex, type SyncSnapshot } from "../../engine/Sync.js";
 import {
     assertSafeZipEntry,
     assertSkillName,
@@ -45,6 +46,7 @@ interface CachedSkill extends RemoteSkill
 {
     files: Map<string, Uint8Array>;
     contentHash: string;
+    commit: string;
 }
 
 /** Session cache of the last successful discover for a workspace root. */
@@ -58,21 +60,36 @@ interface DiscoverCache
 /** Last discover cache used to avoid re-downloading before install. */
 let discoverCache: DiscoverCache | undefined;
 
-/** Build the GitHub archive URL for one branch. */
-function archiveUrl(owner: string, name: string, branch: string): string
+/** Build the GitHub archive URL for one immutable commit. */
+function archiveUrl(owner: string, name: string, commit: string): string
 {
-    return `https://github.com/${owner}/${name}/archive/refs/heads/${encodeURIComponent(branch)}.zip`;
+    return `https://github.com/${owner}/${name}/archive/${commit}.zip`;
 }
 
 /** Download a GitHub branch zip with size and timeout limits. */
-async function fetchZip(owner: string, name: string, branch: string): Promise<Uint8Array>
+async function fetchZip(owner: string, name: string, branch: string, pinnedCommit?: string): Promise<{ bytes: Uint8Array; commit: string }>
 {
-    const url = archiveUrl(owner, name, branch);
-    const location = `${owner}/${name}@${branch} (${url})`;
+    const location = `${owner}/${name}@${pinnedCommit ?? branch}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try
     {
+        let commit = pinnedCommit;
+        if (commit === undefined)
+        {
+            const response = await fetchRemote(`https://api.github.com/repos/${owner}/${name}/commits/${encodeURIComponent(branch)}`, {
+                signal: controller.signal, headers: { "User-Agent": "HarnessAlign/1.0", Accept: "application/vnd.github+json" }, redirect: "error",
+            });
+            if (!response.ok)
+            {
+                await response.body?.cancel();
+                throw new ArchiveHttpError(response.status, location);
+            }
+            const value: unknown = JSON.parse((await readResponseBytes(response, 1024 * 1024, `skill commit ${location}`)).toString("utf8"));
+            if (!isRecord(value) || typeof value.sha !== "string" || !/^[a-f0-9]{40}$/u.test(value.sha)) throw new HalignError(`skill commit ${location}: expected a 40-character SHA`);
+            commit = value.sha;
+        }
+        const url = archiveUrl(owner, name, commit);
         const response = await fetchRemote(url, {
             signal: controller.signal,
             headers: { "User-Agent": "HarnessAlign/1.0", Accept: "application/zip" },
@@ -83,7 +100,7 @@ async function fetchZip(owner: string, name: string, branch: string): Promise<Ui
             await response.body?.cancel();
             throw new ArchiveHttpError(response.status, location);
         }
-        return await readResponseBytes(response, MAX_COMPRESSED_BYTES, `skill archive ${location}`);
+        return { bytes: await readResponseBytes(response, MAX_COMPRESSED_BYTES, `skill archive ${location}`), commit };
     }
     catch (error)
     {
@@ -169,6 +186,7 @@ function discoverInArchive(
     owner: string,
     name: string,
     branch: string,
+    commit: string,
 ): Array<Omit<CachedSkill, "conflict">>
 {
     const skillFiles = [...files.keys()].filter((path) => path === "SKILL.md" || path.endsWith("/SKILL.md"));
@@ -196,7 +214,7 @@ function discoverInArchive(
         assertSkillName(id, `${owner}/${name}:${sourcePath || "."}`);
         const meta = readSkillFrontmatter(new TextDecoder().decode(skillMap.get("SKILL.md")));
         return { id, title: meta.name ?? id, description: meta.description ?? "", owner, name, branch, sourcePath,
-            files: skillMap, contentHash: hashSkillFiles(skillMap) };
+            files: skillMap, contentHash: hashSkillFiles(skillMap), commit };
     });
 }
 
@@ -250,20 +268,20 @@ export async function discoverSkills(root: string): Promise<RemoteSkill[]>
     for (const source of config.skillSources)
     {
         let branch = source.branch;
-        let bytes: Uint8Array;
+        let archive: { bytes: Uint8Array; commit: string };
         try
         {
-            bytes = await fetchZip(source.owner, source.name, branch);
+            archive = await fetchZip(source.owner, source.name, branch);
         }
         catch (error)
         {
             const canFallback = error instanceof ArchiveHttpError && error.status === 404 && (branch === "main" || branch === "master");
             if (!canFallback) throw error;
             const fallback = branch === "main" ? "master" : "main";
-            bytes = await fetchZip(source.owner, source.name, fallback);
+            archive = await fetchZip(source.owner, source.name, fallback);
             branch = fallback;
         }
-        discovered.push(...discoverInArchive(unzipSkillArchive(bytes), source.owner, source.name, branch));
+        discovered.push(...discoverInArchive(unzipSkillArchive(archive.bytes), source.owner, source.name, branch, archive.commit));
     }
     const skills = withConflicts(discovered);
     discoverCache = { root, sources: JSON.stringify(config.skillSources), skills };
@@ -298,7 +316,7 @@ export async function installSkills(root: string, ids: readonly string[]): Promi
         }
         const skill = matches[0]!;
         const origin: Exclude<SkillOrigin, { kind: "unknown" }> = {
-            kind: "github", owner: skill.owner, name: skill.name, branch: skill.branch, sourcePath: skill.sourcePath, contentHash: skill.contentHash,
+            kind: "github", owner: skill.owner, name: skill.name, branch: skill.branch, sourcePath: skill.sourcePath, contentHash: skill.contentHash, commit: skill.commit,
         };
         assertSkillReplacement(existing.find((item) => item.id.toLowerCase() === id.toLowerCase()), id, origin);
         selected.push({ skill, origin });
@@ -318,6 +336,46 @@ export async function installSkills(root: string, ids: readonly string[]): Promi
         }
     }
     return `Installed ${installed.length} skill(s):\n${installed.map((id) => `  ${id}`).join("\n")}\n`;
+}
+
+/** Restore referenced skill bytes in memory, leaving the live workspace untouched on download failure. */
+export async function hydrateSyncSkills(snapshot: SyncSnapshot, local: SyncSnapshot): Promise<SyncSnapshot>
+{
+    const next = parseSyncSnapshot(snapshot);
+    const archives = new Map<string, Array<Omit<CachedSkill, "conflict">>>();
+    for (const [id, origin] of Object.entries(syncSkillIndex(next)))
+    {
+        if (origin.origin !== "github" || next.files[`skills/${id}/SKILL.md`] !== undefined) continue;
+        const prefix = `skills/${id}/`;
+        if (local.files[`${prefix}SKILL.md`] !== undefined && syncSkillHash(local, id) === origin.contentHash)
+        {
+            for (const [path, bytes] of Object.entries(local.files)) if (path.startsWith(prefix)) next.files[path] = bytes;
+            next.directories.push(...local.directories.filter((path) => path === `skills/${id}` || path.startsWith(prefix)));
+            continue;
+        }
+        try
+        {
+            const key = JSON.stringify([origin.owner, origin.name, origin.branch, origin.commit]);
+            let skills = archives.get(key);
+            if (!skills)
+            {
+                const archive = await fetchZip(origin.owner, origin.name, origin.branch, origin.commit);
+                skills = discoverInArchive(unzipSkillArchive(archive.bytes), origin.owner, origin.name, origin.branch, archive.commit);
+                archives.set(key, skills);
+            }
+            const skill = skills.find((item) => item.sourcePath === origin.sourcePath);
+            if (!skill || skill.contentHash !== origin.contentHash)
+            {
+                throw new HalignError(`expected sourcePath ${JSON.stringify(origin.sourcePath)} with contentHash ${origin.contentHash}; got ${skill?.contentHash ?? "missing skill"}`);
+            }
+            for (const [path, bytes] of skill.files) next.files[`${prefix}${path}`] = Buffer.from(bytes).toString("base64");
+        }
+        catch (error)
+        {
+            throw new HalignError(`skills/${id}: download pending; local files were preserved. Refresh sync preview to retry. ${errorText(error)}`);
+        }
+    }
+    return parseSyncSnapshot(next);
 }
 
 /** Compare installed GitHub skills against rediscovered remote hashes. */
