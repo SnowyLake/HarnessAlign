@@ -316,13 +316,13 @@ select {
     overflow-wrap: anywhere;
 }
 
-.harness-card-path {
+.harness-card-path.ant-btn {
     display: flex;
+    height: auto;
     align-items: center;
-    gap: 8px;
     margin-top: 4px;
+    padding-inline: 0;
     font-size: 13px;
-    color: var(--ant-color-text-secondary);
 }
 
 .harness-card-path code {

@@ -43,8 +43,8 @@ export function withWorkspace<T>(work: (root: string) => Promise<T>): Promise<T>
     return operation;
 }
 
-/** Privileged workspace operations that wrap the engine. */
-export const workspaceService: AppApi["workspace"] = {
+/** Privileged workspace operations that wrap the engine. Folder opening stays in the IPC handler so this module stays Electron-free. */
+export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot"> = {
     /** Load and validate the user `.harness-align` workspace. */
     load: () => withWorkspace(async (root) =>
     {

@@ -3,11 +3,13 @@
  * The config root is always `%USERPROFILE%`; renderer input never chooses a directory.
  */
 
-import { ipcMain } from "electron";
+import { ipcMain, shell } from "electron";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import { z } from "zod";
+import { HalignError } from "../../engine/Model.js";
+import { resolveExistingHarnessRoot } from "../../engine/Setup.js";
 import { AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA } from "../../shared/models/Schemas.js";
-import { workspaceService } from "../services/WorkspaceService.js";
+import { withWorkspace, workspaceService } from "../services/WorkspaceService.js";
 import { runIpc } from "../utils/Ipc.js";
 
 /** Register workspace IPC handlers. */
@@ -96,6 +98,17 @@ export function registerWorkspaceHandlers(): void
     ipcMain.handle(IPC_CHANNELS.workspaceUpdateHarness, (event, from: unknown, harness: unknown) => runIpc(event, async () =>
     {
         return workspaceService.updateHarness(z.string().parse(from), HARNESS_SCHEMA.parse(harness));
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceOpenHarnessRoot, (event, name: unknown) => runIpc(event, async () =>
+    {
+        const harnessName = z.string().parse(name);
+        await withWorkspace(async (root) =>
+        {
+            const target = await resolveExistingHarnessRoot(root, harnessName);
+            const errorMessage = await shell.openPath(target);
+            if (errorMessage) throw new HalignError(`${harnessName} target root: failed to open folder: ${target}: ${errorMessage}`);
+        });
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceAddSkillSource, (event, input: unknown) => runIpc(event, async () =>

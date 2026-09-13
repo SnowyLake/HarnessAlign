@@ -29,7 +29,7 @@ import { readResponseBytes } from "../src/main/services/RemoteFetch.js";
 import { loadConfig, validateConfig } from "../src/engine/Load.js";
 import { HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
-import { reportSetup, setup } from "../src/engine/Setup.js";
+import { reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
 import { assertSafeZipEntry, importUserSkills, listUserSkills, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
@@ -1676,6 +1676,30 @@ test("setup rejects target reparse points before replacing an existing root", as
         await assert.rejects(setup(root, undefined, userProfile), /reparse points are not allowed/u);
         assert.equal(await readFile(join(targetRoot, "AGENTS.md"), "utf8"), "keep this file\n");
         assert.equal(await readFile(join(redirected, "sentinel.txt"), "utf8"), "must remain\n");
+    });
+});
+
+test("resolveExistingHarnessRoot returns configured directories and rejects missing, unknown, and reparse targets", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const userProfile = join(root, "isolated-userprofile");
+        const nestedRoot = join(userProfile, ".config", "opencode");
+        await mkdir(join(userProfile, ".codex"), { recursive: true });
+        await mkdir(nestedRoot, { recursive: true });
+        assert.equal(await resolveExistingHarnessRoot(root, "codex", userProfile), join(userProfile, ".codex"));
+        assert.equal(await resolveExistingHarnessRoot(root, "opencode", userProfile), nestedRoot);
+        await assert.rejects(resolveExistingHarnessRoot(root, "cursor", userProfile), /cursor target root: directory does not exist/u);
+        await assert.rejects(readdir(join(userProfile, ".cursor")), /ENOENT/u);
+        await assert.rejects(resolveExistingHarnessRoot(root, "Codex", userProfile), /harness is not configured, got "Codex"/u);
+        await assert.rejects(resolveExistingHarnessRoot(root, "missing", userProfile), /harness is not configured, got "missing"/u);
+        await writeFile(join(userProfile, ".cursor"), "not a directory\n", "utf8");
+        await assert.rejects(resolveExistingHarnessRoot(root, "cursor", userProfile), /cursor target root: expected a directory/u);
+        const redirected = join(root, "redirected-codex");
+        await mkdir(redirected, { recursive: true });
+        await rm(join(userProfile, ".codex"), { recursive: true });
+        await symlink(redirected, join(userProfile, ".codex"), "junction");
+        await assert.rejects(resolveExistingHarnessRoot(root, "codex", userProfile), /reparse points are not allowed/u);
     });
 });
 

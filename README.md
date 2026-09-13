@@ -62,7 +62,7 @@ Generate 和 Setup 使用当前 Layer 顺序与选项. 有未保存的源文件�
 窗口可以:
 
 - 自动加载当前用户配置. 配置根目录固定, 界面不显示或提供修改入口.
-- 在 Harnesses 页通过居中单列卡片查看名称和配置路径, 点击 Edit 在侧边面板中编辑单个 Harness, 或使用 Add harness 新建. 卡片使用 `~/.codex` 这样的形式表示用户目录下的路径, 编辑时填写 `.codex` 等相对路径. Setup 跳过尚不存在的目标目录.
+- 在 Harnesses 页通过居中单列卡片查看名称和配置路径, 点击 Edit 在侧边面板中编辑单个 Harness, 或使用 Add harness 新建. 卡片使用 `~/.codex` 这样的形式表示用户目录下的路径, 点击路径会打开当前用户下已经存在的对应文件夹; 目录不存在时不会创建. 编辑时填写 `.codex` 等相对路径. Setup 跳过尚不存在的目标目录.
 - 在 Layers 页按 Group 管理 Layer 及其选项. Group 标题行的序号, 名称, 展开箭头和操作按钮垂直居中对齐. Group 开关控制是否参与生成, Generate option 选择生成时使用的选项, 拖动 Group 名称或点击上下箭头调整顺序. 启用的 Group 按生成顺序排列, 未启用的 Group 排在后面. Add layer 创建空 Group, 添加 Option 后才能启用.
 - Rules 页的内部列表标题旁通过 Root / Shared 分段标签切换, 选中项高亮, 未选中项置灰且仍可点击. Root 编辑参与 `AGENTS.md` 的根规则, Shared 编辑独立部署的共享规则. 切换时保留列表宽度和未保存草稿. Rule 和 Layer Option 的 Targets 都是严格白名单, 未选择任何 Harness 时会显示提示, 该内容不会生成到任何 Harness.
 - 在 Agents 页编辑共享正文, 按 Harness 切换原生 metadata, 并通过 Enable 选择需要生成该 Agent 的 Harness.

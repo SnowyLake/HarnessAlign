@@ -6,7 +6,7 @@ import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined, SaveOutline
 import type { HarnessConfig, Workspace } from "@shared/models/Workspace";
 import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Tabs, Tag, Typography } from "antd";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
-import { showSuccess } from "@/components/common/Feedback";
+import { showError, showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
 import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { fileName, ruleDisplayName } from "@/lib/Utils";
@@ -680,7 +680,7 @@ export function HarnessesPanel()
     return (
         <div className="project-page">
             <Flex align="center" justify="space-between" gap={16} wrap>
-                <Typography.Title level={3} className="page-title">Harnesses <Typography.Text type="secondary">({workspace.config.harnesses.length})</Typography.Text></Typography.Title>
+                <Typography.Title level={3} className="page-title">Harnesses</Typography.Title>
                 <Button type="primary" icon={<PlusOutlined />} disabled={isBusy} onClick={() => openEditor({ kind: "harness-new" })}>
                     {drafts["harness-new"] ? "Continue new harness" : "Add harness"}
                 </Button>
@@ -692,7 +692,18 @@ export function HarnessesPanel()
                             <span className="harness-card-mark" aria-hidden="true">{harness.name.slice(0, 2).toUpperCase()}</span>
                             <div className="harness-card-heading">
                                 <Typography.Title level={4} className="harness-card-name">{harness.name}</Typography.Title>
-                                <div className="harness-card-path"><FolderOutlined aria-hidden="true" /><code>~/{harness.configPath}</code></div>
+                                <Button
+                                    type="link"
+                                    size="small"
+                                    className="harness-card-path"
+                                    icon={<FolderOutlined aria-hidden="true" />}
+                                    disabled={isBusy}
+                                    autoInsertSpace={false}
+                                    aria-label={`Open ${harness.name} folder`}
+                                    onClick={() => void window.appApi.workspace.openHarnessRoot(harness.name).catch((error: unknown) => showError(error, "Open folder failed"))}
+                                >
+                                    <code>~/{harness.configPath}</code>
+                                </Button>
                                 {drafts[selectionKey({ kind: "harness", name: harness.name })] ? <Tag color="gold">Unsaved</Tag> : null}
                             </div>
                             <Button icon={<EditOutlined />} disabled={isBusy} aria-label={`Edit ${harness.name}`} onClick={() => openEditor({ kind: "harness", name: harness.name })}>

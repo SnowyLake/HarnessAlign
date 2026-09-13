@@ -70,6 +70,7 @@ const appApi: AppApi = {
         addHarness: (harness: HarnessConfig) => ipcRenderer.invoke(IPC_CHANNELS.workspaceAddHarness, harness),
         removeHarness: (name) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRemoveHarness, name),
         updateHarness: (from, harness) => ipcRenderer.invoke(IPC_CHANNELS.workspaceUpdateHarness, from, harness),
+        openHarnessRoot: (name) => ipcRenderer.invoke(IPC_CHANNELS.workspaceOpenHarnessRoot, name),
         addSkillSource: (input) => ipcRenderer.invoke(IPC_CHANNELS.workspaceAddSkillSource, input),
         removeSkillSource: (owner, name) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRemoveSkillSource, owner, name),
         discoverSkills: () => ipcRenderer.invoke(IPC_CHANNELS.workspaceDiscoverSkills),

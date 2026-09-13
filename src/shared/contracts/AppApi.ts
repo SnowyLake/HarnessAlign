@@ -64,6 +64,7 @@ export interface AppApi
         addHarness(harness: HarnessConfig): Promise<Config>;
         removeHarness(name: string): Promise<void>;
         updateHarness(from: string, harness: HarnessConfig): Promise<Config>;
+        openHarnessRoot(name: string): Promise<void>;
         addSkillSource(input: { url: string; branch?: string }): Promise<Config>;
         removeSkillSource(owner: string, name: string): Promise<Config>;
         discoverSkills(): Promise<RemoteSkill[]>;

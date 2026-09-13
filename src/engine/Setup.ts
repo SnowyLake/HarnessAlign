@@ -1,6 +1,6 @@
 /**
  * Deploy generated harness files into existing USERPROFILE roots, shared-rules, and skills.
- * Missing harness roots are skipped. Preflight every target before any delete.
+ * Missing harness roots are skipped. Opening a harness folder uses the same existing-root checks.
  */
 
 import { promises as fs } from "node:fs";
@@ -210,6 +210,28 @@ async function listRelativeFiles(directory: string): Promise<string[]>
     return files;
 }
 
+/** Join USERPROFILE with a harness `config_path` using `/` segments. */
+function harnessDeploymentRoot(deploymentRoot: string, configPath: string): string
+{
+    return join(deploymentRoot, ...configPath.split("/"));
+}
+
+/** Resolve a configured harness root under USERPROFILE and require an existing regular directory. */
+export async function resolveExistingHarnessRoot(rootPath: string, name: string, userProfile = process.env.USERPROFILE): Promise<string>
+{
+    const harness = (await loadConfig(resolve(rootPath))).harnesses.find((item) => item.name === name);
+    if (!harness) throw new HalignError(`.harness-align/config.json: harness is not configured, got ${valueText(name)}`);
+    const deploymentRoot = resolveUserHome(userProfile);
+    await assertRegularDirectory(deploymentRoot, "USERPROFILE");
+    const targetRoot = await assertNoReparseComponents(
+        deploymentRoot,
+        harnessDeploymentRoot(deploymentRoot, harness.configPath),
+        `${harness.name} target root`,
+    );
+    await assertRegularDirectory(targetRoot, `${harness.name} target root`);
+    return targetRoot;
+}
+
 /** Format the setup success report for the desktop log. */
 export function reportSetup(result: SetupResult): string
 {
@@ -256,7 +278,7 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
 
     const targets: Array<{ harness: Harness; root: string }> = config.harnesses.map((harness) => ({
         harness: harness.name,
-        root: join(deploymentRoot, ...harness.configPath.split("/")),
+        root: harnessDeploymentRoot(deploymentRoot, harness.configPath),
     }));
     const installations: SetupInstallation[] = [];
     const reports: SetupTargetReport[] = [];
