@@ -12,6 +12,10 @@
 - [部署安全](#部署安全)
 - [修改流程](#修改流程)
 - [验证](#验证)
+- [发布流程](#发布流程)
+  - [交付物与版本](#交付物与版本)
+  - [发布步骤](#发布步骤)
+  - [失败与重试](#失败与重试)
 - [语言与代码](#语言与代码)
 
 ## 文档角色
@@ -166,6 +170,62 @@ npm run dev
 - `npm run build` 使用 electron-vite 构建桌面壳. `npm run build:win` 再打 NSIS 安装包.
 - 修改 Ant Design UI 后, 按 `.agents/skills/antd/SKILL.md` 对变更路径运行 `antd lint <path> --format json`. `@ant-design/cli` 是按需开发辅助工具, 不加入应用依赖.
 - Windows sandbox 可能阻止 Node test runner 创建子进程. 发生真实权限错误时在获得权限后复跑, 不修改测试绕过边界.
+
+## 发布流程
+
+### 交付物与版本
+
+- 采用本地 Windows x64 打包, 再用 GitHub CLI 上传 GitHub Release 的流程. 复用 `npm run build:win` 和 `electron-builder.yml`, 不需要额外发布脚本或 GitHub Actions.
+- 当前发布分支为 `main`, 不要求创建 `develop` 或额外的 merge commit. 所有发布产物与 tag 必须对应同一个已验证且已推送的 `main` commit.
+- `package.json` 的 `version` 是应用版本来源. 使用 `npm version <version> --no-git-tag-version` 同步更新它和 `package-lock.json`, 不手工修改 lockfile, 不让 npm 提前提交或创建 tag.
+- 用户提供 `X.Y.Z` 或 `vX.Y.Z` 时去掉前导 `v`, 使用 npm 校验版本. 支持 `X.Y.Z-beta.1` 等 SemVer 预发布版本; tag 固定为 `v<version>`, 带预发布标识的版本在 GitHub 标记为 prerelease.
+- 正式交付物为 `release/v<version>/HarnessAlign-<version>-setup.exe`, 是包含 Electron 运行环境的 NSIS 安装包. `win-unpacked/` 用于检查打包结果, 不能只取其中的 `HarnessAlign.exe` 当作独立程序分发. 不上传 `dist/`, `out/`, 整个 `release/` 或用户配置.
+- 打包固定传入 `--x64 --publish never`, 防止架构随构建机器变化或 electron-builder 自动发布. 版本目录通过命令行覆盖 `directories.output`, 普通本地打包仍使用默认的 `release/`.
+- 当前仓库未配置代码签名或应用自动更新. 发布时记录实际签名状态, 未签名安装包可能触发 Windows 安全提示; 用户通过下载新安装包升级. 不上传自动更新元数据作为可用自动更新功能, 不在仓库或 Release Notes 保存签名凭据.
+
+### 发布步骤
+
+只有用户要求发布指定版本时才执行以下流程. 单纯修改代码, 打包验证或维护本文档不触发提交, tag 或远端发布; push 仍须符合共享 Git 规则中的明确授权要求. 下文 `<version>` 和 `<tag>` 是占位符, 执行时替换为已确认的版本和 `v<version>`. PowerShell 中逐条检查原生命令退出码, 任一步失败立即停止后续步骤.
+
+1. 读取共享 Git 规则, 检查 `git status --short --branch`, `git remote -v` 和 `gh auth status`, 确认目标为本仓库的 `origin`. 使用 `git fetch origin --tags` 刷新远端状态, 确认发布分支为 `main`, 区分本次修改和用户已有修改. 若远端有本地未包含的提交, 按 Git 规则停止并报告, 不自动 pull, rebase 或 merge.
+2. 确认本地与远端目标 tag 均不存在, 并通过 `gh release view <tag>` 检查是否已有同名 Release, 包括草稿. 只有明确的不存在结果才可继续; 网络或权限错误不能当作不存在. 已有发布相关修改先按主题提交, 不混入无关修改或生成产物.
+3. 执行 `npm version <version> --no-git-tag-version`, 确认 `package.json`, `package-lock.json` 顶层及 `packages[""].version` 一致. 仅将两个版本文件以 `upgrade: <version>` 单独提交. 首次发布若版本已经一致, 保留现有版本, 不使用 `--allow-same-version` 制造空升级提交.
+4. 确认工作区干净, 记录 `git rev-parse HEAD` 为本次发布 commit. 在 Windows 上确认 Node 24 与 npm 11, 依次执行以下命令. `build:win` 已包含 `npm run build`, 不需要再重复构建. 安装依赖及首次打包可能下载 Electron 和 NSIS 工具, 下载失败必须解决后重跑, 不跳过验证.
+
+```powershell
+npm ci
+npm run verify
+npm run build:win -- --x64 --publish never --config.directories.output=release/v<version>
+```
+
+5. 确认本次命令成功生成非空的 `release/v<version>/HarnessAlign-<version>-setup.exe`, `release/v<version>/win-unpacked/HarnessAlign.exe` 和 `release/v<version>/win-unpacked/resources/app.asar`. 检查打包后应用的版本与目标一致, 不以旧产物存在代替本次构建成功. 在干净的 Windows 测试账户或虚拟机中验证安装, 启动, 基本页面和卸载; 有上一版时补查覆盖安装后配置保留. 不在开发机真实用户目录执行 Setup 作为发布测试, 不把未执行的安装测试报告为通过.
+6. 从上一个已发布版本 tag 到发布 commit 检查 commit 和实际 diff; 首次发布则依据当前功能编写首次版本说明. 由 AI 合并同类改动, 编写面向用户的 Markdown Release Notes, 去除纯发布, 格式化和内部维护噪声. 不直接复制 commit 列表, 不使用 `--generate-notes`, 不写入 diff 未确认的功能. 保存到本次 `.agent-sessions/<YYYYMMDD>-release-v<version>/release-notes.md`, 并在说明中交代 Windows x64 安装包和实际签名状态.
+7. 再次确认工作区干净, HEAD 仍为已验证的发布 commit. 在有明确 push 授权后执行 `git push origin main`, 并确认远端 `main` 指向该 commit. 创建 annotated tag 后只推送该 tag, 不使用 `git push --tags`.
+
+```powershell
+git tag -a v<version> -m "Harness Align v<version>"
+git push origin v<version>
+```
+
+8. 使用显式安装包路径和 Release Notes 文件创建 Release. `--verify-tag` 要求远端 tag 已存在. 正式版本使用下列命令; 预发布版本另加 `--prerelease --latest=false`.
+
+```powershell
+gh release create v<version> `
+  "release/v<version>/HarnessAlign-<version>-setup.exe" `
+  --title "Harness Align v<version>" `
+  --notes-file ".agent-sessions/<YYYYMMDD>-release-v<version>/release-notes.md" `
+  --verify-tag
+```
+
+9. 用 `gh release view v<version> --json url,tagName,isDraft,isPrerelease,assets` 核对 Release URL, tag, 发布状态和安装包名称及大小. 下载该安装包至本次会话目录, 用 `Get-FileHash -Algorithm SHA256` 与本地产物比对. 确认 tag 指向已验证的 commit, `main` 与 `origin/main` 同步且工作区干净, 再报告发布成功和 Release 链接.
+
+### 失败与重试
+
+- 验证或打包失败时不创建 tag 或 Release. 不修改测试, 关闭安全检查或屏蔽真实错误以换取通过.
+- tag 或 Release 已存在时停止并报告状态, 不覆盖或移动 tag. 只有用户明确同意才使用 `gh release upload --clobber` 替换附件.
+- push 被 non-fast-forward 拒绝时遵守共享 Git 规则, 不 force push. 不自动删除已推送的 tag 或撤销已公开的 Release.
+- tag 推送成功但 Release 创建或上传失败时, 先查询远端实际状态. 恢复时确认 tag commit 和安装包来源一致, 只补齐缺失步骤; 不盲目重复创建 Release, 不把基于后续源码重建的包上传到旧 tag.
+- 命令语义参考 [npm version](https://docs.npmjs.com/cli/v11/commands/npm-version/), [electron-builder CLI](https://www.electron.build/cli/) 和 [gh release create](https://cli.github.com/manual/gh_release_create). 修改发布命令时核对项目已安装版本的帮助和官方文档.
 
 ## 语言与代码
 
