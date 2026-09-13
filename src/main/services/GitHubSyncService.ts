@@ -341,14 +341,14 @@ async function readRemote(connection: SyncConnection, token: string, baseline?: 
     }
     const root = TREE_SCHEMA.parse(await github(connection, token, `/git/trees/${rootTree}`));
     if (root.truncated) throw new HalignError("GitHub root tree is truncated; use a smaller dedicated sync repository");
-    const source = root.tree.find((entry) => entry.path === REMOTE_DIRECTORY);
+    const source = root.tree.find((entry) => entry.path.toLowerCase() === REMOTE_DIRECTORY);
     if (!source)
     {
         const remote = { head, rootTree, snapshot: emptySyncSnapshot(), blobs: new Set<string>(), empty: true };
         cachedRemote = { connectionKey: key, remote };
         return remote;
     }
-    if (source.type !== "tree" || source.mode !== "040000") throw new HalignError(`${REMOTE_DIRECTORY}: expected a Git directory`);
+    if (source.path !== REMOTE_DIRECTORY || source.type !== "tree" || source.mode !== "040000") throw new HalignError(`${source.path}: expected the Git directory ${REMOTE_DIRECTORY} with exact casing`);
     const tree = TREE_SCHEMA.parse(await github(connection, token, `/git/trees/${source.sha}?recursive=1`));
     if (tree.truncated || tree.tree.length > SYNC_MAX_ENTRIES) throw new HalignError(`GitHub sync tree is truncated or exceeds ${SYNC_MAX_ENTRIES} entries`);
     const snapshot = emptySyncSnapshot();
@@ -441,6 +441,7 @@ async function recoverUpload(root: string, directory: string, state: SyncState, 
         published = comparison.status === "ahead" || comparison.status === "identical";
     }
     const local = await readSyncSnapshot(root);
+    if (published && remote.empty) throw new HalignError(`${REMOTE_DIRECTORY}: the published archive is missing; restore it before recovering sync`);
     if (published && (syncSnapshotHash(pending.before) === syncSnapshotHash(local)
         || syncSnapshotHash(portableSyncSnapshot(pending.snapshot)) === syncSnapshotHash(portableSyncSnapshot(local))))
     {
@@ -465,6 +466,7 @@ export async function previewSync(root: string, directory: string, token: string
     if (known && cachedRemote?.connectionKey !== key) rememberSnapshotBlobs(known.snapshot);
     await checkRepository(state.connection, token);
     const remote = await readRemote(state.connection, token, known ?? undefined);
+    if (known && remote.empty) throw new HalignError(`${REMOTE_DIRECTORY}: the previously synced archive is missing; restore it before syncing`);
     const notice = await recoverUpload(root, directory, state, token, remote);
     const local = await readSyncSnapshot(root);
     const base = state.base?.connectionKey === key ? state.base : null;
@@ -528,6 +530,7 @@ async function readPreviewSources(root: string, directory: string, preview: Reta
 export async function discardSync(root: string, directory: string, token: string, input: SyncDiscardInput): Promise<SyncResult>
 {
     const preview = requirePreview(input.previewId);
+    if (preview.remote.empty) throw new HalignError("The remote archive is not initialized; local restoration is unavailable");
     const change = preview.public.changes.find((entry) => entry.key === input.key);
     if (!change || !["upload", "conflict"].includes(change.direction)) throw new HalignError(`sync change ${input.key}: expected a preview entry with local changes`);
     if (change.key.endsWith("/") && change.paths.length === 0) throw new HalignError(`sync change ${input.key}: discard individual files instead of a directory entry`);
@@ -547,6 +550,11 @@ export async function applySync(root: string, directory: string, token: string, 
 {
     const preview = requirePreview(input.previewId);
     const { state, connection, local } = await readPreviewSources(root, directory, preview);
+    if (preview.remote.empty)
+    {
+        if (!preview.public.firstSync || input.mode !== "initialize") throw new HalignError("The remote archive is not initialized; use Initialize archive explicitly before syncing");
+    }
+    else if (input.mode === "initialize") throw new HalignError("The remote archive already exists; initialization cannot replace it");
     if (input.mode !== "merge" && !preview.public.firstSync) throw new HalignError("Whole-workspace adoption is only available on the first sync");
     if (input.mode === "remote" && preview.remote.empty) throw new HalignError("The remote has no Harness Align configuration to adopt");
     const merged = mergeSyncSnapshots(portableSyncSnapshot(preview.base), portableSyncSnapshot(local), portableSyncSnapshot(preview.remote.snapshot), input.choices);

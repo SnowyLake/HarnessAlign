@@ -119,7 +119,7 @@ export function SyncPanel()
         if (next.notice) await reloadSyncedWorkspace();
         setPreview(next);
         setChoices({});
-        setMode("merge");
+        setMode(next.remoteEmpty ? "initialize" : "merge");
         writeLog("success", "Sync preview ready", JSON.stringify(next, null, 2));
     }
 
@@ -164,7 +164,7 @@ export function SyncPanel()
                            <Button disabled={isBusy} onClick={handleClose}>Close</Button>
                            <Button disabled={isBusy || dirtyCount > 0} loading={isBusy} onClick={() => void run(handlePreview)}>Refresh preview</Button>
                            <Button type="primary" icon={<SyncOutlined />} disabled={!preview || isBusy || dirtyCount > 0 || mode === "merge" && unresolved > 0}
-                                   onClick={() => void run(handleApply)}>Sync now</Button>
+                                   onClick={() => void run(handleApply)}>{preview?.remoteEmpty ? "Initialize archive" : "Sync now"}</Button>
                        </Space>
                    ) : null}>
                 <div inert={isBusy} aria-busy={isBusy}>
@@ -231,6 +231,8 @@ export function SyncPanel()
                         {!isConnection && preview ? (
                             <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
                                 {preview.notice ? <Alert type="info" showIcon title="Sync recovery completed. See Console for details." /> : null}
+                                {preview.remoteEmpty ? <Alert type="warning" showIcon title="No Harness Align archive exists in this repository."
+                                    description="Initialize archive uploads this device's saved configuration to the selected repository. Other repository files are kept. Normal sync and local restoration are unavailable until initialization completes." /> : null}
                                 {preview.firstSync && !preview.remoteEmpty ? (
                                     <Form layout="vertical" requiredMark={false}>
                                         <Form.Item label="First sync" extra="Merge combines independent changes. Adopting one side also applies its deletions after you click Sync now.">
@@ -243,10 +245,10 @@ export function SyncPanel()
                                     </Form>
                                 ) : null}
                                 <Typography.Text>{preview.uploadCount} to upload · {preview.downloadCount} to download · {unresolved} unresolved conflicts</Typography.Text>
-                                <Typography.Text type="secondary">
+                                {!preview.remoteEmpty ? <Typography.Text type="secondary">
                                     Discard local changes immediately restores that source to the remote version, or removes it if absent remotely. Skills and structural conflicts are restored as a group.
-                                </Typography.Text>
-                                {mode !== "merge" ? <Alert type="warning" showIcon title={mode === "local"
+                                </Typography.Text> : null}
+                                {mode === "local" || mode === "remote" ? <Alert type="warning" showIcon title={mode === "local"
                                     ? "The remote configuration will be replaced by this device's configuration."
                                     : "This device's configuration will be replaced by the remote configuration. A local backup is kept."} /> : null}
                                 <Table<SyncChange> size="small" rowKey="key" dataSource={preview.changes.filter((change) => change.direction !== "same")}
@@ -263,7 +265,7 @@ export function SyncPanel()
                                             View versions
                                         </Button>
                                     ) },
-                                    { title: "Local changes", align: "center", width: 210, render: (_, change) => (change.direction === "upload" || change.direction === "conflict")
+                                    { title: "Local changes", align: "center", width: 210, render: (_, change) => !preview.remoteEmpty && (change.direction === "upload" || change.direction === "conflict")
                                         && (!change.key.endsWith("/") || change.paths.length > 0) ? (
                                         <Button type="link" danger disabled={isBusy || dirtyCount > 0 || mode !== "merge"} aria-label={`Discard local changes for ${change.key}`}
                                                 onClick={() => void run(() => handleDiscard(change.key))}>Discard local changes</Button>

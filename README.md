@@ -224,10 +224,12 @@ GitHub 仓库根目录和子目录中的 `SKILL.md` 均可发现, 安装和检�
 2. 在 Settings 点击 Connect GitHub, 使用 Create token on GitHub 打开[创建链接模板](https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write). 模板预填名称 `HarnessAlign-Sync`, 90 天有效期和 `Contents: Read and write` 权限. 在 GitHub 选择正确的 Resource owner, 在 Repository access 中选择 Only select repositories 并仅勾选同步仓库, 然后创建 fine-grained personal access token. 可为名称追加设备名以便单独管理; 组织仓库可能需要管理员批准 Token.
 3. 回到连接界面, 填写 Owner, Private repository, Existing branch 和 Token, 点击 Connect. Token 使用本机系统加密保存, 不写入同步仓库, 不会在界面中回显. Manage tokens 打开 GitHub 的 Fine-grained tokens 管理页.
 4. 保存所有工作区草稿, 点击顶部 Sync 查看上传, 下载和冲突项. Refresh preview 会向 GitHub 核对当前提交, 并和本机上次成功同步的基线比较; 提交未变化时只重读本地源, 提交变化时复用缓存中的文件内容, 下载缺失内容, 不会整包重拉. 下载失败时停止启动新请求, 已启动请求结束后才返回错误. View versions 可以对照本地与远端内容; 大文件只显示部分文本, 二进制文件显示大小和哈希.
-5. 首次接入已有配置时, 选择合并, 使用本机完整配置, 或使用远端完整配置. 选择某一方的完整配置会同时应用该方的删除操作. 确认后点击 Sync now.
+5. 仓库尚未建立存档时, 确认界面显示的仓库和分支, 点击 Initialize archive 将本机已保存的配置创建为远端存档. 首次接入已有有效存档时, 选择合并, 使用本机完整配置, 或使用远端完整配置. 选择某一方的完整配置会同时应用该方的删除操作. 确认后点击 Sync now.
 6. 在其他设备连接相同仓库及分支. 同步完成后按需执行 Generate 或 Setup, 更新本机生成结果或助手目录.
 
 同步使用仓库内的 `harness-align/` 目录, 保留 README 等其他仓库内容. 该目录中的 `sync.json` 记录同步格式版本和目录信息, 包括空 Layer. 不要删除或手工修改该文件. 如果该目录已有内容但没有同步标记, 应用会拒绝覆盖.
+
+只有通过路径, 格式版本和配置内容校验的存档才能正常同步或还原本地文件. 首次连接且不存在 `harness-align/` 时视为未初始化, 只能显式执行 Initialize archive, 不能普通同步或 Discard local changes. 已存在但无效的存档会阻止同步, 不允许通过初始化覆盖. 本机已有该仓库及分支的同步基线时, 存档目录消失会作为异常拒绝处理, 必须先恢复远端存档; 初始化已经发布但尚未完成本地应用时, 也不会自动重建后来被删除的存档.
 
 | 数据 | 同步行为 |
 | --- | --- |

@@ -23,7 +23,7 @@ export const SYNC_CONNECTION_SCHEMA = z.strictObject({
 /** Accept decisions about an existing preview, never arbitrary source bytes or paths. */
 export const SYNC_APPLY_SCHEMA = z.strictObject({
     previewId: z.uuid(),
-    mode: z.enum(["merge", "local", "remote"]),
+    mode: z.enum(["initialize", "merge", "local", "remote"]),
     choices: z.record(z.string().min(1).max(241), z.enum(["local", "remote"])).refine((choices) => Object.keys(choices).length <= 5000, "Too many conflict decisions"),
 });
 

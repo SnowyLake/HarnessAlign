@@ -64,7 +64,7 @@ export interface SyncDetail
 export interface SyncApplyInput
 {
     previewId: string;
-    mode: "merge" | "local" | "remote";
+    mode: "initialize" | "merge" | "local" | "remote";
     choices: Record<string, SyncChoice>;
 }
 
