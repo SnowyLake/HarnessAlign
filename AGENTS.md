@@ -198,7 +198,7 @@ npm run verify
 npm run build:win -- --x64 --publish never --config.directories.output=release/v<version>
 ```
 
-5. 确认本次命令成功生成非空的 `release/v<version>/HarnessAlign-<version>-setup.exe`, `release/v<version>/win-unpacked/HarnessAlign.exe` 和 `release/v<version>/win-unpacked/resources/app.asar`. 检查打包后应用的版本与目标一致, 不以旧产物存在代替本次构建成功. 在干净的 Windows 测试账户或虚拟机中验证安装, 启动, 基本页面和卸载; 有上一版时补查覆盖安装后配置保留. 不在开发机真实用户目录执行 Setup 作为发布测试, 不把未执行的安装测试报告为通过.
+5. 确认本次命令成功生成非空的 `release/v<version>/HarnessAlign-<version>-setup.exe`, `release/v<version>/win-unpacked/HarnessAlign.exe` 和 `release/v<version>/win-unpacked/resources/app.asar`. 检查打包后应用的版本与目标一致, 不以旧产物存在代替本次构建成功. 干净环境中的安装, 启动, 页面, 升级和卸载测试为可选验证, 不作为发布前置条件. 不在开发机真实用户目录执行 Setup 作为发布测试, 不把未执行的安装测试报告为通过.
 6. 从上一个已发布版本 tag 到发布 commit 检查 commit 和实际 diff; 首次发布则依据当前功能编写首次版本说明. 由 AI 合并同类改动, 编写面向用户的 Markdown Release Notes, 去除纯发布, 格式化和内部维护噪声. 不直接复制 commit 列表, 不使用 `--generate-notes`, 不写入 diff 未确认的功能. 保存到本次 `.agent-sessions/<YYYYMMDD>-release-v<version>/release-notes.md`, 并在说明中交代 Windows x64 安装包和实际签名状态.
 7. 再次确认工作区干净, HEAD 仍为已验证的发布 commit. 在有明确 push 授权后执行 `git push origin main`, 并确认远端 `main` 指向该 commit. 创建 annotated tag 后只推送该 tag, 不使用 `git push --tags`.
 
