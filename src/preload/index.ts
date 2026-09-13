@@ -30,6 +30,7 @@ const appApi: AppApi = {
         preview: () => ipcRenderer.invoke(IPC_CHANNELS.syncPreview),
         inspect: (previewId, key) => ipcRenderer.invoke(IPC_CHANNELS.syncInspect, previewId, key),
         apply: (input) => ipcRenderer.invoke(IPC_CHANNELS.syncApply, input),
+        discard: (input) => ipcRenderer.invoke(IPC_CHANNELS.syncDiscard, input),
     },
     app: {
         getVersion: () => ipcRenderer.invoke(IPC_CHANNELS.appGetVersion),

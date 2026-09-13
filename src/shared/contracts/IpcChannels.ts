@@ -15,6 +15,7 @@ export const IPC_CHANNELS = {
     syncPreview: "sync:preview",
     syncInspect: "sync:inspect",
     syncApply: "sync:apply",
+    syncDiscard: "sync:discard",
     appGetVersion: "app:get-version",
     appOpenExternal: "app:open-external",
     settingsGet: "settings:get",

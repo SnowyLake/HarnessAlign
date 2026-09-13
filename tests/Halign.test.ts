@@ -19,8 +19,9 @@ import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
 import { checkSkillUpdates, discoverSkills, installSkills } from "../src/main/services/SkillRemoteService.js";
-import { applySync, connectSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
-import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, readSyncSnapshot, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
+import { applySync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
+import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
+import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
 import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
 import { buildOutputs, generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
@@ -205,6 +206,7 @@ function createSyncRemote()
             if (path === "/git/trees")
             {
                 assert.ok(Array.isArray(body.tree));
+                if (body.tree.some((entry) => entry.type === "blob" && entry.content === undefined && !blobs.has(entry.sha))) return response({ message: "missing blob" }, 422);
                 const entries = body.tree.map((entry) => ({ ...entry, sha: entry.content === undefined ? entry.sha : blob(Buffer.from(entry.content)) }));
                 const next = id();
                 trees.set(next, [...(trees.get(body.base_tree) ?? []).filter((entry) => !entries.some((next) => next.path === entry.path)), ...entries]);
@@ -326,6 +328,38 @@ test("sync surfaces case and file-directory aliases as selectable source groups"
     assert.equal(selected.snapshot.files["rules/asset.md/child.md"], "Yg==");
     assert.ok(selected.snapshot.directories.includes("layers/foo"));
     assert.ok(!selected.snapshot.directories.includes("layers/Foo"));
+});
+
+test("sync restores one source group with binary skill provenance and structural aliases intact", () =>
+{
+    const local = parseSyncSnapshot({ version: 1, directories: ["layers/Foo"], files: {
+        "rules/keep.md": Buffer.from("Keep local").toString("base64"),
+        "layers/Foo/a.md": "YQ==",
+        "skills/demo/SKILL.md": "YQ==",
+        "skills/demo/asset.bin": "AP8=",
+        "skills/index.json": Buffer.from('{"skills":{"demo":{"origin":"local","contentHash":"local"},"kept":{"origin":"local","contentHash":"keep"}}}').toString("base64"),
+    } });
+    const remote = parseSyncSnapshot({ version: 1, directories: ["layers/foo"], files: {
+        "rules/keep.md": Buffer.from("Remote edit").toString("base64"),
+        "layers/foo/b.md": "Yg==",
+        "skills/demo/SKILL.md": "Yg==",
+        "skills/demo/asset.bin": "AIA=",
+        "skills/index.json": Buffer.from('{"skills":{"demo":{"origin":"local","contentHash":"remote"}}}').toString("base64"),
+    } });
+    const restored = restoreSyncChange(emptySyncSnapshot(), local, remote, "skills/demo");
+    assert.equal(restored.files["skills/demo/asset.bin"], remote.files["skills/demo/asset.bin"]);
+    assert.equal(restored.files["rules/keep.md"], local.files["rules/keep.md"]);
+    assert.deepEqual(JSON.parse(Buffer.from(restored.files["skills/index.json"]!, "base64").toString()), {
+        skills: { demo: { origin: "local", contentHash: "remote" }, kept: { origin: "local", contentHash: "keep" } },
+    });
+    const alias = restoreSyncChange(emptySyncSnapshot(), local, remote, "layers/foo/");
+    assert.equal(alias.files["layers/Foo/a.md"], undefined);
+    assert.equal(alias.files["layers/foo/b.md"], "Yg==");
+    assert.equal(alias.files["skills/index.json"], local.files["skills/index.json"]);
+    const removed = restoreSyncChange(emptySyncSnapshot(), local, emptySyncSnapshot(), "skills/demo");
+    assert.equal(removed.files["skills/demo/SKILL.md"], undefined);
+    assert.ok(!removed.directories.includes("skills/demo"));
+    assert.doesNotMatch(Buffer.from(removed.files["skills/index.json"]!, "base64").toString(), /demo/u);
 });
 
 test("sync preserves inherited-property skill names and rejects invalid provenance ids", async () =>
@@ -568,6 +602,96 @@ test("GitHub sync round-trips two devices, binary skills, empty layers, and inde
     }));
 });
 
+test("GitHub sync discards one local change to the current remote without uploading or advancing the baseline", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const initial = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: initial.id, mode: "merge", choices: {} });
+            const savedState = await readFile(join(state, "github-sync.json"), "utf8");
+            const external = await readSyncSnapshot(root);
+            external.files["rules/base.md"] = Buffer.from("---\npriority: 100\ntargets: []\n---\n# Current remote\n").toString("base64");
+            external.files["layers/soul/kei.md"] = Buffer.from("# Unrelated remote change\n").toString("base64");
+            remote.publish(external);
+            await writeRule(root, "base.md", 100, "# Unwanted local edit");
+            await writeRule(root, "keep.md", 20, "# Keep this local edit");
+            const before = await readSyncSnapshot(root);
+            const preview = await previewSync(root, state, input.token);
+            const calls = mocked.mock.callCount();
+            await discardSync(root, state, input.token, { previewId: preview.id, key: "rules/base.md" });
+            const expected = structuredClone(before);
+            expected.files["rules/base.md"] = external.files["rules/base.md"]!;
+            assert.equal(syncSnapshotHash(await readSyncSnapshot(root)), syncSnapshotHash(expected));
+            assert.equal(await readFile(join(state, "github-sync.json"), "utf8"), savedState);
+            assert.ok(mocked.mock.calls.slice(calls).every((call) => (call.arguments[1] as RequestInit | undefined)?.method === "GET"));
+            assert.equal(syncSnapshotHash(parseSyncSnapshot(JSON.parse(await readFile(join(root, ".harness-align/.sync-backup.json"), "utf8")))), syncSnapshotHash(before));
+            await assert.rejects(discardSync(root, state, input.token, { previewId: preview.id, key: "rules/keep.md" }), /expired/u);
+            let next = await previewSync(root, state, input.token);
+            assert.ok(next.changes.some((change) => change.key === "rules/keep.md" && change.direction === "upload"));
+            await discardSync(root, state, input.token, { previewId: next.id, key: "rules/keep.md" });
+            await assert.rejects(readFile(join(root, ".harness-align/rules/keep.md")), { code: "ENOENT" });
+            await unlink(join(root, ".harness-align/rules/base.md"));
+            next = await previewSync(root, state, input.token);
+            await discardSync(root, state, input.token, { previewId: next.id, key: "rules/base.md" });
+            assert.equal((await readSyncSnapshot(root)).files["rules/base.md"], external.files["rules/base.md"]);
+            assert.equal(remote.controls.patchCount, 1);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("GitHub sync refuses stale, unknown, and invalid single-source restorations before writing", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const initial = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: initial.id, mode: "merge", choices: {} });
+            const external = await readSyncSnapshot(root);
+            await writeRule(root, "base.md", 100, "# Local change");
+            let preview = await previewSync(root, state, input.token);
+            assert.equal(SYNC_DISCARD_SCHEMA.safeParse({ previewId: preview.id, key: "rules/base.md", content: "injected" }).success, false);
+            await assert.rejects(discardSync(root, state, input.token, { previewId: preview.id, key: "../config.json" }), /expected a preview entry/u);
+            await writeRule(root, "base.md", 100, "# Later local change");
+            await assert.rejects(discardSync(root, state, input.token, { previewId: preview.id, key: "rules/base.md" }), /Local sources changed/u);
+            preview = await previewSync(root, state, input.token);
+            remote.publish(external);
+            await assert.rejects(discardSync(root, state, input.token, { previewId: preview.id, key: "rules/base.md" }), /remote branch changed/u);
+            await addLayerOption(root, "soul", "new");
+            await writeFile(join(root, ".harness-align/config.json"), JSON.stringify({ ...config, layers: [{ name: "soul", selected: "new" }] }));
+            await mkdir(join(root, ".harness-align/rules/added"));
+            await writeRule(root, "added/keep.md", 50, "# Keep directory contents");
+            preview = await previewSync(root, state, input.token);
+            const before = await snapshot(join(root, ".harness-align"));
+            assert.ok(preview.changes.some((change) => change.key === "rules/added/" && change.paths.length === 0));
+            await assert.rejects(discardSync(root, state, input.token, { previewId: preview.id, key: "rules/added/" }), /discard individual files/u);
+            await assert.rejects(discardSync(root, state, input.token, { previewId: preview.id, key: "layers/soul/new.md" }));
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+            assert.equal(remote.controls.patchCount, 1);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
 test("GitHub sync detects stale remote previews and rejects racing non-fast-forward uploads", async (t) =>
 {
     await withProject(async (root) =>
@@ -654,6 +778,11 @@ test("GitHub sync refuses public, truncated, and linked remote data before sourc
             await assert.rejects(connectSync(state, input, "encrypted"), /private/u);
             remote.controls.isPrivate = true;
             await connectSync(state, input, "encrypted");
+            remote.controls.isPrivate = false;
+            const beforeRejectedPreview = mocked.mock.callCount();
+            await assert.rejects(previewSync(root, state, input.token), /private/u);
+            assert.equal(mocked.mock.callCount(), beforeRejectedPreview + 1);
+            remote.controls.isPrivate = true;
             remote.publish(before);
             remote.controls.truncated = true;
             await assert.rejects(previewSync(root, state, input.token), /truncated/u);
@@ -665,6 +794,191 @@ test("GitHub sync refuses public, truncated, and linked remote data before sourc
         }
         finally
         {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("GitHub sync reuses an unchanged remote commit and fetches only new blobs after it moves", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        /** Count GitHub GET mock requests whose URL contains the given path fragment. */
+        const count = (part: string): number => mocked.mock.calls.filter((call) =>
+        {
+            const method = (call.arguments[1] as RequestInit | undefined)?.method ?? "GET";
+            return method === "GET" && String(call.arguments[0]).includes(part);
+        }).length;
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const empty = await previewSync(root, state, input.token);
+            assert.equal(empty.remoteEmpty, true);
+            const afterEmpty = { blobs: count("/git/blobs/"), trees: count("/git/trees/") };
+            const emptyAgain = await previewSync(root, state, input.token);
+            assert.equal(emptyAgain.remoteEmpty, true);
+            assert.notEqual(emptyAgain.id, empty.id);
+            assert.throws(() => inspectSync(empty.id, "config.json"), /expired/u);
+            assert.ok(inspectSync(emptyAgain.id, "config.json").files.length > 0);
+            assert.equal(count("/git/blobs/"), afterEmpty.blobs);
+            assert.equal(count("/git/trees/"), afterEmpty.trees);
+            await applySync(root, state, input.token, { previewId: emptyAgain.id, mode: "merge", choices: {} });
+            const uploaded = await previewSync(root, state, input.token);
+            assert.equal(uploaded.remoteEmpty, false);
+            assert.equal(count("/git/blobs/"), afterEmpty.blobs);
+            assert.equal(count("/git/trees/"), afterEmpty.trees);
+            await connectSync(state, input, "encrypted");
+            const restarted = await previewSync(root, state, input.token);
+            assert.equal(restarted.head, uploaded.head);
+            assert.throws(() => inspectSync(uploaded.id, "config.json"), /expired/u);
+            assert.equal(count("/git/blobs/"), afterEmpty.blobs);
+            assert.equal(count("/git/trees/"), afterEmpty.trees);
+            const baseline = await readSyncSnapshot(root);
+            await writeRule(root, "local.md", 50, "# Local only");
+            const localEdit = await previewSync(root, state, input.token);
+            assert.ok(localEdit.changes.some((change) => change.key === "rules/local.md" && change.direction === "upload"));
+            assert.equal(count("/git/blobs/"), afterEmpty.blobs);
+            baseline.files["rules/from-remote.md"] = Buffer.from("---\npriority: 40\ntargets:\n  - codex\n---\n\n# From remote\n").toString("base64");
+            remote.publish(parseSyncSnapshot(baseline));
+            const moved = await previewSync(root, state, input.token);
+            assert.ok(moved.changes.some((change) => change.key === "rules/from-remote.md" && change.direction === "download"));
+            assert.ok(moved.changes.some((change) => change.key === "rules/local.md" && change.direction === "upload"));
+            const added = count("/git/blobs/") - afterEmpty.blobs;
+            assert.ok(added >= 1 && added <= 2);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("GitHub sync uploads after adopting a differently serialized manifest, including after reconnect", async (t) =>
+{
+    for (const reconnect of [false, true]) await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            remote.publish(await readSyncSnapshot(root));
+            await connectSync(state, input, "encrypted");
+            const adoption = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: adoption.id, mode: "remote", choices: {} });
+            assert.equal(remote.controls.patchCount, 0);
+            if (reconnect) await connectSync(state, input, "encrypted");
+            await writeRule(root, "base.md", 100, "# Local edit after adoption");
+            const upload = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: upload.id, mode: "merge", choices: {} });
+            assert.equal(remote.controls.patchCount, 1);
+            assert.equal((await getSyncStatus(state)).hasPendingUpload, false);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("GitHub sync evicts historical local blobs while retaining current snapshot content", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            const original = await readSyncSnapshot(root);
+            await connectSync(state, input, "encrypted");
+            for (let version = 0; version < 3; version++)
+            {
+                if (version > 0) await writeRule(root, "base.md", 100, `# Local version ${version}`);
+                const preview = await previewSync(root, state, input.token);
+                await applySync(root, state, input.token, { previewId: preview.id, mode: "merge", choices: {} });
+            }
+            const beforeRevert = mocked.mock.callCount();
+            remote.publish(original);
+            const reverted = await previewSync(root, state, input.token);
+            assert.ok(reverted.downloadCount > 0);
+            const downloaded = mocked.mock.calls.slice(beforeRevert).filter((call) => String(call.arguments[0]).includes("/git/blobs/"));
+            const bytes = Buffer.from(original.files["rules/base.md"]!, "base64");
+            const sha = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+            assert.ok(downloaded.some((call) => String(call.arguments[0]).endsWith(`/git/blobs/${sha}`)));
+            assert.equal(downloaded.length, 2);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("GitHub sync drains active downloads after failure without scheduling more or retaining partial blobs", { timeout: 10_000 }, async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        let markStarted!: () => void;
+        let failDownload!: () => void;
+        let releaseDownloads!: () => void;
+        const started = new Promise<void>((resolve) => { markStarted = resolve; });
+        const fail = new Promise<void>((resolve) => { failDownload = resolve; });
+        const release = new Promise<void>((resolve) => { releaseDownloads = resolve; });
+        let failing = true;
+        let requests = 0;
+        const mocked = t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+        {
+            if (String(url).includes("/git/blobs/"))
+            {
+                const request = ++requests;
+                if (failing)
+                {
+                    if (request === 6) markStarted();
+                    if (request === 1)
+                    {
+                        await fail;
+                        throw new TypeError("simulated blob failure");
+                    }
+                    await release;
+                }
+            }
+            return remote.request(url, init);
+        });
+        let completion: Promise<void> | undefined;
+        try
+        {
+            for (let index = 0; index < 8; index++) await writeRule(root, `extra-${index}.md`, index, `# Extra ${index}`);
+            const snapshot = await readSyncSnapshot(root);
+            remote.publish(snapshot);
+            const state = join(root, "app-state");
+            const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+            await connectSync(state, input, "encrypted");
+            let finished = false;
+            completion = assert.rejects(previewSync(root, state, input.token), /network/u).finally(() => { finished = true; });
+            await started;
+            failDownload();
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            assert.equal(finished, false);
+            releaseDownloads();
+            await completion;
+            assert.equal(requests, 6);
+            failing = false;
+            await previewSync(root, state, input.token);
+            assert.equal(requests, 6 + Object.keys(snapshot.files).length + 1);
+        }
+        finally
+        {
+            failDownload();
+            releaseDownloads();
+            await completion;
             mocked.mock.restore();
         }
     });

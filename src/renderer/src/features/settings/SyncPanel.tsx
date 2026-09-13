@@ -142,6 +142,19 @@ export function SyncPanel()
         }
     }
 
+    /** Restore only the selected source and refresh both the editor and sync preview immediately. */
+    async function handleDiscard(key: string): Promise<void>
+    {
+        if (!preview) return;
+        if (workspaceChangeCount(useAppStore.getState())) throw new Error("Save or discard workspace drafts, then preview again.");
+        const result = await window.appApi.sync.discard({ previewId: preview.id, key });
+        setPreview(undefined);
+        setDetail(undefined);
+        await reloadSyncedWorkspace();
+        showSuccess("Local changes discarded", result.message);
+        await handlePreview();
+    }
+
     return (
         <>
             <Modal open={dialog !== undefined} title={isConnection ? "GitHub connection" : "Sync configuration"} width={isConnection ? 680 : 1000}
@@ -230,23 +243,31 @@ export function SyncPanel()
                                     </Form>
                                 ) : null}
                                 <Typography.Text>{preview.uploadCount} to upload · {preview.downloadCount} to download · {unresolved} unresolved conflicts</Typography.Text>
+                                <Typography.Text type="secondary">
+                                    Discard local changes immediately restores that source to the remote version, or removes it if absent remotely. Skills and structural conflicts are restored as a group.
+                                </Typography.Text>
                                 {mode !== "merge" ? <Alert type="warning" showIcon title={mode === "local"
                                     ? "The remote configuration will be replaced by this device's configuration."
                                     : "This device's configuration will be replaced by the remote configuration. A local backup is kept."} /> : null}
                                 <Table<SyncChange> size="small" rowKey="key" dataSource={preview.changes.filter((change) => change.direction !== "same")}
-                                                   locale={{ emptyText: "Configuration is up to date" }} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 620 }} columns={[
+                                                   locale={{ emptyText: "Configuration is up to date" }} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 900 }} columns={[
                                     { title: "Source", dataIndex: "key", render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
-                                    { title: "Change", dataIndex: "direction" },
-                                    { title: "Decision", render: (_, change) => change.direction === "conflict" ? (
+                                    { title: "Change", dataIndex: "direction", align: "center", width: 100 },
+                                    { title: "Decision", align: "center", width: 190, render: (_, change) => change.direction === "conflict" ? (
                                         <Select<SyncChoice> aria-label={`Resolve ${change.key}`} placeholder="Choose a version" value={choices[change.key] ?? null} disabled={mode !== "merge"}
                                                             style={{ minWidth: 170 }} onChange={(value) => setChoices((current) => ({ ...current, [change.key]: value }))}
                                                             options={[{ value: "local", label: "Keep local" }, { value: "remote", label: "Keep remote" }]} />
                                     ) : <Typography.Text type="secondary">Automatic</Typography.Text> },
-                                    { title: "Compare", render: (_, change) => (
+                                    { title: "Compare", align: "center", width: 140, render: (_, change) => (
                                         <Button type="link" onClick={() => void run(async () => setDetail({ key: change.key, content: await window.appApi.sync.inspect(preview.id, change.key) }))}>
                                             View versions
                                         </Button>
                                     ) },
+                                    { title: "Local changes", align: "center", width: 210, render: (_, change) => (change.direction === "upload" || change.direction === "conflict")
+                                        && (!change.key.endsWith("/") || change.paths.length > 0) ? (
+                                        <Button type="link" danger disabled={isBusy || dirtyCount > 0 || mode !== "merge"} aria-label={`Discard local changes for ${change.key}`}
+                                                onClick={() => void run(() => handleDiscard(change.key))}>Discard local changes</Button>
+                                    ) : null },
                                 ]} />
                             </Space>
                         ) : null}

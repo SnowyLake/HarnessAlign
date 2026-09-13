@@ -27,6 +27,12 @@ export const SYNC_APPLY_SCHEMA = z.strictObject({
     choices: z.record(z.string().min(1).max(241), z.enum(["local", "remote"])).refine((choices) => Object.keys(choices).length <= 5000, "Too many conflict decisions"),
 });
 
+/** Restore only a server-owned preview entry, never renderer-supplied file contents. */
+export const SYNC_DISCARD_SCHEMA = z.strictObject({
+    previewId: z.uuid(),
+    key: z.string().min(1).max(241),
+});
+
 /** Zod schema for persisted theme mode values. */
 export const THEME_MODE_SCHEMA = z.enum(["system", "light", "dark"]);
 

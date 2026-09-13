@@ -7,8 +7,8 @@ import { app, ipcMain, safeStorage } from "electron";
 import { z } from "zod";
 import { HalignError } from "../../engine/Model.js";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
-import { SYNC_APPLY_SCHEMA, SYNC_CONNECTION_SCHEMA } from "../../shared/models/Schemas.js";
-import { applySync, connectSync, disconnectSync, getSyncEncryptedToken, getSyncStatus, inspectSync, previewSync } from "../services/GitHubSyncService.js";
+import { SYNC_APPLY_SCHEMA, SYNC_CONNECTION_SCHEMA, SYNC_DISCARD_SCHEMA } from "../../shared/models/Schemas.js";
+import { applySync, connectSync, discardSync, disconnectSync, getSyncEncryptedToken, getSyncStatus, inspectSync, previewSync } from "../services/GitHubSyncService.js";
 import { withWorkspace } from "../services/WorkspaceService.js";
 import { runIpc } from "../utils/Ipc.js";
 
@@ -68,6 +68,15 @@ export function registerSyncHandlers(): void
         {
             const directory = app.getPath("userData");
             return applySync(root, directory, await syncToken(directory), decisions);
+        });
+    }));
+    ipcMain.handle(IPC_CHANNELS.syncDiscard, (event, input: unknown) => runIpc(event, async () =>
+    {
+        const change = SYNC_DISCARD_SCHEMA.parse(input);
+        return withWorkspace(async (root) =>
+        {
+            const directory = app.getPath("userData");
+            return discardSync(root, directory, await syncToken(directory), change);
         });
     }));
 }

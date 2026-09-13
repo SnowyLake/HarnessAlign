@@ -216,14 +216,14 @@ GitHub 仓库根目录和子目录中的 `SKILL.md` 均可发现, 安装和检�
 
 ## GitHub 多设备同步
 
-在 Settings 的 GitHub connection 中, 可以把多台设备连接到同一个 GitHub 私有仓库和分支. 顶部 Sync 按钮在各工作页面都可用, 打开后自动预览变更, 在独立对话框中处理冲突并执行同步. 同步通过 GitHub API 完成, 不需要安装 Git, 不需要自建服务器.
+在 Settings 的 GitHub connection 中, 可以把多台设备连接到同一个 GitHub 私有仓库和分支. 顶部 Sync 按钮在各工作页面都可用, 打开后自动预览变更, 在独立对话框中处理冲突并执行同步. 同步通过 GitHub API 完成, 不在本机克隆仓库, 也不需要安装 Git 或自建服务器.
 
 首次连接:
 
 1. 在 GitHub 创建一个专用私有仓库, 勾选创建 README, 确保仓库已有分支.
 2. 在 Settings 点击 Connect GitHub, 使用 Create token on GitHub 打开[创建链接模板](https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write). 模板预填名称 `HarnessAlign-Sync`, 90 天有效期和 `Contents: Read and write` 权限. 在 GitHub 选择正确的 Resource owner, 在 Repository access 中选择 Only select repositories 并仅勾选同步仓库, 然后创建 fine-grained personal access token. 可为名称追加设备名以便单独管理; 组织仓库可能需要管理员批准 Token.
 3. 回到连接界面, 填写 Owner, Private repository, Existing branch 和 Token, 点击 Connect. Token 使用本机系统加密保存, 不写入同步仓库, 不会在界面中回显. Manage tokens 打开 GitHub 的 Fine-grained tokens 管理页.
-4. 保存所有工作区草稿, 点击顶部 Sync 查看上传, 下载和冲突项. Refresh preview 可以重新获取变更. View versions 可以对照本地与远端内容; 大文件只显示部分文本, 二进制文件显示大小和哈希.
+4. 保存所有工作区草稿, 点击顶部 Sync 查看上传, 下载和冲突项. Refresh preview 会向 GitHub 核对当前提交, 并和本机上次成功同步的基线比较; 提交未变化时只重读本地源, 提交变化时复用缓存中的文件内容, 下载缺失内容, 不会整包重拉. 下载失败时停止启动新请求, 已启动请求结束后才返回错误. View versions 可以对照本地与远端内容; 大文件只显示部分文本, 二进制文件显示大小和哈希.
 5. 首次接入已有配置时, 选择合并, 使用本机完整配置, 或使用远端完整配置. 选择某一方的完整配置会同时应用该方的删除操作. 确认后点击 Sync now.
 6. 在其他设备连接相同仓库及分支. 同步完成后按需执行 Generate 或 Setup, 更新本机生成结果或助手目录.
 
@@ -240,7 +240,9 @@ GitHub 仓库根目录和子目录中的 `SKILL.md` 均可发现, 安装和检�
 
 日常同步使用上次成功同步的版本作为共同基线. 不同文件的独立修改会自动合并, 同一文件的不同修改以及删除与修改之间的冲突需要选择 Keep local 或 Keep remote. 同一个 Skill 的所有文件和来源记录作为整体选择; 目录大小写别名或文件与目录之间的冲突也会连同相关子目录整体选择. 合并结果必须通过完整配置校验, 引用错误会阻止同步. 第一版不做逐行自动合并, 不提供设备专属配置覆盖或自动后台同步.
 
-同步预览显示的是当时的版本. 预览后如果本地源文件或远端分支变化, Sync now 会要求重新预览. 远端更新使用一次非强制 Git commit, 不覆盖其他设备抢先上传的提交. 分支保护或仓库规则可能拒绝直接提交, 应用会报告失败, 不会绕过这些规则.
+在合并模式下, upload 或 conflict 项旁的 Discard local changes 可以立即丢弃该项本地修改, 恢复为预览中的远端版本, 无需点击 Sync now. 远端不存在该项时会删除本地项, 本地删除的文件则从远端恢复. 普通文件逐文件处理; 同一个 Skill 及其来源记录, 结构冲突涉及的文件和目录仍整组处理. 操作保留其他本地修改和本地备份, 不上传内容或推进同步基线, 完成后刷新工作区与同步预览. 如果还原结果导致配置引用失效, 操作会在写入前失败.
+
+同步预览显示的是当时的版本. 预览后如果本地源文件或远端分支变化, Sync now 和 Discard local changes 都会要求重新预览. 远端更新使用一次非强制 Git commit, 不覆盖其他设备抢先上传的提交. 分支保护或仓库规则可能拒绝直接提交, 应用会报告失败, 不会绕过这些规则.
 
 上传响应丢失或程序退出后, 应用保留待确认提交的信息. 再次打开顶部 Sync 或点击 Refresh preview 会查询提交是否已经发布, 避免直接重复上传. 已发布且本地没有后续修改时, 会恢复本地应用步骤并刷新工作区; 检测到后续修改时保留这些修改并重新展示合并预览.
 

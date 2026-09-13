@@ -5,7 +5,7 @@
 
 import type { AppSettings } from "../models/AppSettings.js";
 import type { LogChange, LogInput, LogSnapshot } from "../models/Console.js";
-import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncPreview, SyncResult, SyncStatus } from "../models/Sync.js";
+import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncDiscardInput, SyncPreview, SyncResult, SyncStatus } from "../models/Sync.js";
 import type {
     Agent,
     Config,
@@ -35,6 +35,7 @@ export interface AppApi
         preview(): Promise<SyncPreview>;
         inspect(previewId: string, key: string): Promise<SyncDetail>;
         apply(input: SyncApplyInput): Promise<SyncResult>;
+        discard(input: SyncDiscardInput): Promise<SyncResult>;
     };
     app: {
         getVersion(): Promise<string>;

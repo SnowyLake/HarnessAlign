@@ -239,6 +239,31 @@ function structuralSyncUnits(snapshots: SyncSnapshot[]): Map<string, SyncUnit>[]
     });
 }
 
+/** Restore one remote unit while preserving unrelated local bytes and whole-skill provenance. */
+export function restoreSyncChange(base: SyncSnapshot, local: SyncSnapshot, remote: SyncSnapshot, key: string): SyncSnapshot
+{
+    const [, localUnits, remoteUnits] = structuralSyncUnits([base, local, remote].map((snapshot) => parseSyncSnapshot(snapshot)));
+    const here = localUnits!.get(key);
+    const there = remoteUnits!.get(key);
+    if (!here && !there) throw new HalignError(`sync change ${key}: expected an existing local or remote source group`);
+    const result = parseSyncSnapshot(local);
+    for (const path of Object.keys(here?.files ?? {})) delete result.files[path];
+    Object.assign(result.files, there?.files);
+    const removedDirectories = new Set(here?.directories);
+    result.directories = result.directories.filter((path) => !removedDirectories.has(path));
+    result.directories.push(...there?.directories ?? []);
+    if (here?.provenance || there?.provenance)
+    {
+        const encoded = result.files["skills/index.json"];
+        const index: unknown = encoded === undefined ? { skills: {} } : JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+        if (!isRecord(index) || !isRecord(index.skills)) throw new HalignError("skills/index.json: expected a skills mapping");
+        if (here?.provenance) delete index.skills[here.provenance.id];
+        if (there?.provenance) index.skills[there.provenance.id] = there.provenance.value;
+        result.files["skills/index.json"] = Buffer.from(`${JSON.stringify(index, null, 2)}\n`).toString("base64");
+    }
+    return parseSyncSnapshot(result);
+}
+
 /** Merge independent edits, keeping divergent file and skill changes explicit. */
 export function mergeSyncSnapshots(base: SyncSnapshot, local: SyncSnapshot, remote: SyncSnapshot, choices: Record<string, SyncChoice> = {}): SyncMerge
 {

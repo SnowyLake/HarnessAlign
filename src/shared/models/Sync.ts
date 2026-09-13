@@ -68,7 +68,14 @@ export interface SyncApplyInput
     choices: Record<string, SyncChoice>;
 }
 
-/** Completion report delivered after local sources and the common baseline are saved. */
+/** One source group selected from a retained preview for immediate local restoration. */
+export interface SyncDiscardInput
+{
+    previewId: string;
+    key: string;
+}
+
+/** Completion report delivered after a sync or local restoration operation. */
 export interface SyncResult
 {
     status: SyncStatus;
