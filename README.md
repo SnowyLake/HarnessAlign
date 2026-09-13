@@ -91,6 +91,7 @@ Setup 先准备完整的替换内容, 再更新部署目标. 替换失败时尝�
 
 ```text
 .harness-align\
+├─ AGENTS.md
 ├─ config.json
 ├─ rules\
 │  └─ shared\
@@ -105,6 +106,7 @@ Setup 先准备完整的替换内容, 再更新部署目标. 替换失败时尝�
 └─ generated\
 ```
 
+- `AGENTS.md` 是自动生成的配置编辑指引, 介绍目录结构, 逐项标明文件是否可直接修改, 说明 Rules 与 Layer 拼装助手规则文档的过程及子代理配置的转换和部署关系, 并附[项目源码链接](https://github.com/SnowyLake/HarnessAlign). 可以直接在此目录指挥 Agent 修改配置源, 再由用户生成和部署, 不要求 Agent 操作 GUI. 应用访问工作区时补齐缺失文件, 刷新带生成标记的指引, 保留已有的无标记文件; 内容不变时不重写. 它不参与助手规则生成, 部署或 GitHub 同步.
 - `config.json` 声明输出标题, 当前项目选用的 Layer, 以及要生成的 Harness.
 - `rules/` 保存写入各 Harness `AGENTS.md` 的公共规则.
 - `layers/` 保存可切换的 Markdown 选项. `config.json` 不必覆盖这里的全部目录.
