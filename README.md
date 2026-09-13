@@ -57,7 +57,7 @@ Generate 和 Setup 使用当前 Layer 顺序与选项. 有未保存的源文件�
 
 应用使用白色圆角底板搭配黑色三段折带标志, 圆角外部透明, 深浅主题均保持白底黑标. 顶部品牌图标, 窗口, Windows 可执行文件和安装包使用同一标志.
 
-桌面应用使用顶部命令栏和主从编辑布局. 侧栏导航无横向分割线, 依次提供 Harnesses, Rules, Layers, Agents, Generated 和 Skills, 底部提供 Console 和 Settings. 窄窗口下侧栏自动收起为图标, 文件列表可调整宽度或折叠. Layers, Rules 和 Agents 的列表默认宽度统一为 28%, 可在 20% 到 45% 之间调整. Markdown 与 JSON 编辑器支持长文本和结构化内容.
+桌面应用使用顶部命令栏和主从编辑布局. 侧栏导航无横向分割线, 依次提供 Harnesses, Rules, Layers, Agents 和 Skills, 底部提供 Generated, Console 和 Settings. 窄窗口下侧栏自动收起为图标, 文件列表可调整宽度或折叠. Layers, Rules 和 Agents 的列表默认宽度统一为 28%, 可在 20% 到 45% 之间调整. Markdown 与 JSON 编辑器支持长文本和结构化内容.
 
 窗口可以:
 
@@ -67,13 +67,13 @@ Generate 和 Setup 使用当前 Layer 顺序与选项. 有未保存的源文件�
 - Rules 页的内部列表标题旁通过 Root / Shared 分段标签切换, 选中项高亮, 未选中项置灰且仍可点击. Root 编辑参与 `AGENTS.md` 的根规则, Shared 编辑独立部署的共享规则. 切换时保留列表宽度和未保存草稿. Rule 和 Layer Option 的 Targets 都是严格白名单, 未选择任何 Harness 时会显示提示, 该内容不会生成到任何 Harness.
 - 在 Agents 页编辑共享正文, 按 Harness 切换原生 metadata, 并通过 Enable 选择需要生成该 Agent 的 Harness.
 - 在 Generated 页查看最近一次生成结果. 不要手工改这些文件.
-- Skills 位于侧栏 Generated 下方. 在 Skills 页面点击 Sources 管理 GitHub 仓库, 移除来源需要确认并保留已安装的 Skills. Installed 页签用于检查更新和管理已安装项, Discover 页签用于发现和安装远端 Skills; 点击 Import 从 `%USERPROFILE%\.agents\skills` 导入.
+- Skills 位于侧栏 Agents 下方. 在 Skills 页面点击 Sources 管理 GitHub 仓库, 移除来源需要确认并保留已安装的 Skills. Installed 页签用于检查更新和管理已安装项, Discover 页签用于发现和安装远端 Skills; 点击 Import 从 `%USERPROFILE%\.agents\skills` 导入.
 - 使用当前未保存的 Layer 选择执行 Generate 和 Setup.
 - 在 Settings 页设置生成 `AGENTS.md` 的一级标题, 切换主题.
 
 Settings 页的 `AGENTS.md title` 只控制生成文档的一级标题. 点击顶部 Save all 或按 Ctrl+S 后, 所有页面的草稿以及当前 Layer 顺序与选择会统一写回. 文件列表顶部的 Add 新建对应内容, 编辑区顶部的 Create 或 Save file 只保存当前项, Discard changes 恢复当前文件的已保存内容. 文件行操作菜单和右键菜单中的 Save 同样只保存当前文件. 切换页面会保留草稿, 关闭有未保存修改的窗口时会提示确认.
 
-关闭 Group 开关会立即移出当前生成序列, 保留源文件和编辑能力. 顶部弹出提示只显示简短结果; 侧边栏 Settings 上方的 Console 独立页面按时间累计操作记录, 完整报告和错误详情. 日志仅保留在本次应用运行的内存中, 切换页面或刷新窗口不会丢失, 关闭应用后清空. Console 支持自动滚动和手动清空, 操作进行中或工作区加载失败时也可查看. 工作区加载失败时可点击 Retry 重试.
+关闭 Group 开关会立即移出当前生成序列, 保留源文件和编辑能力. 顶部弹出提示只显示简短结果; 侧边栏 Generated 下方, Settings 上方的 Console 独立页面按时间累计操作记录, 完整报告和错误详情. 日志仅保留在本次应用运行的内存中, 切换页面或刷新窗口不会丢失, 关闭应用后清空. Console 支持自动滚动和手动清空, 操作进行中或工作区加载失败时也可查看. 工作区加载失败时可点击 Retry 重试.
 
 Harness 编辑面板的 Save harness 只保存当前项. 关闭面板会保留草稿, 卡片用 Unsaved 标记未保存项; Discard changes 放弃当前草稿. 新建草稿关闭后可通过 Continue new harness 继续编辑. 删除操作位于编辑面板内, 并需要再次确认. 保存 Harness 后再运行 Generate 或 Setup.
 
