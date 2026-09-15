@@ -551,7 +551,7 @@ function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessCha
     const editorKey = selectionKey(selection);
     const editor = useEditorForm(workspace, selection, existing ? () => setIsDeleteOpen(true) : undefined);
     const [agentName, setAgentName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-agent"));
-    const selectedMetadataName = workspace.config.harnesses.find((harness) => harness.name === metadataHarness)?.name ?? workspace.config.harnesses[0]!.name;
+    const selectedMetadataName = workspace.config.harnesses.find((harness) => harness.name === metadataHarness)?.name ?? workspace.config.harnesses[0]?.name ?? "";
 
     return (
         <>

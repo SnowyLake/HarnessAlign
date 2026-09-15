@@ -2185,17 +2185,74 @@ test("ensureUserWorkspace creates a default user config once", async () =>
         assert.equal(root, resolve(home));
         const created = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string; harnesses: unknown[] };
         assert.equal(created.name, "AGENTS");
-        assert.ok(created.harnesses.length > 0);
+        assert.deepEqual(created.harnesses, []);
+        assert.equal(CONFIG_SCHEMA.safeParse(await loadConfig(home)).success, true);
+        assert.deepEqual([...await buildOutputs(home)].map(([path]) => path), [".manifest.json"]);
         const guide = await readFile(join(home, ".harness-align", "AGENTS.md"), "utf8");
         assert.match(guide, /https:\/\/github.com\/SnowyLake\/HarnessAlign/u);
         assert.match(guide, /Setup/u);
         assert.equal(guide.includes("\r"), false);
         await loadWorkspace(home);
         created.name = "KEEP";
+        await mkdir(join(home, ".codex"));
         await writeFile(join(home, ".harness-align", "config.json"), `${JSON.stringify(created, null, 2)}\n`, "utf8");
         await ensureUserWorkspace(home);
         const kept = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string };
         assert.equal(kept.name, "KEEP");
+        assert.deepEqual((await loadConfig(home)).harnesses, []);
+        await addHarness(home, { name: "codex", configPath: ".codex", agentFormat: "toml", agentExtension: "toml", instructionsField: "developer_instructions" });
+        await removeHarness(home, "codex");
+        assert.deepEqual((await loadConfig(home)).harnesses, []);
+    }
+    finally
+    {
+        await rm(home, { recursive: true, force: true });
+    }
+});
+
+test("first initialization detects only regular default harness directories in candidate order", async () =>
+{
+    const home = await mkdtemp(join(tmpdir(), "halign-detection-"));
+    try
+    {
+        for (const path of [".config/opencode", ".grok", ".cursor", ".codex", ".other"])
+        {
+            await mkdir(join(home, path), { recursive: true });
+        }
+        await ensureUserWorkspace(home);
+        const detected = (await loadConfig(home)).harnesses;
+        assert.deepEqual(detected.map((harness) => harness.name), ["codex", "cursor", "grok", "opencode"]);
+        assert.deepEqual(detected[2], { name: "grok", configPath: ".grok", agentFormat: "yaml", agentExtension: "md" });
+        assert.equal(detected[0]?.instructionsField, "developer_instructions");
+        await fs.rmdir(join(home, ".cursor"));
+        await ensureUserWorkspace(home);
+        assert.deepEqual((await loadConfig(home)).harnesses, detected);
+        await unlink(join(home, ".harness-align", "config.json"));
+        await writeFile(join(home, ".cursor"), "not a directory");
+        await fs.rmdir(join(home, ".config", "opencode"));
+        await fs.rmdir(join(home, ".config"));
+        await writeFile(join(home, ".config"), "not a directory");
+        await ensureUserWorkspace(home);
+        assert.deepEqual((await loadConfig(home)).harnesses.map((harness) => harness.name), ["codex", "grok"]);
+    }
+    finally
+    {
+        await rm(home, { recursive: true, force: true });
+    }
+});
+
+test("first initialization excludes linked harness directories and linked parent directories", async () =>
+{
+    const home = await mkdtemp(join(tmpdir(), "halign-detection-links-"));
+    try
+    {
+        const target = join(home, "target");
+        await mkdir(join(target, "opencode"), { recursive: true });
+        await symlink(target, join(home, ".codex"), "junction");
+        await symlink(target, join(home, ".config"), "junction");
+        await ensureUserWorkspace(home);
+        assert.deepEqual((await loadConfig(home)).harnesses, []);
+        assert.deepEqual(await readdir(target), ["opencode"]);
     }
     finally
     {
@@ -2394,6 +2451,7 @@ test("workspace initialization uses USERPROFILE not the current working director
             harnesses: [{ name: "cursor", config_path: ".cursor", agent_format: "yaml", agent_extension: "md" }],
         }), "utf8");
         process.chdir(cwd);
+        await mkdir(join(home, ".cursor"));
         await generate(await ensureUserWorkspace(home));
         const generated = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string };
         assert.equal(generated.name, "AGENTS");
@@ -2413,14 +2471,16 @@ test("setup on a fresh user workspace deploys empty agents and skips missing har
     const home = await mkdtemp(join(tmpdir(), "halign-fresh-setup-"));
     try
     {
-        await ensureUserWorkspace(home);
         await mkdir(join(home, ".cursor"), { recursive: true });
+        await mkdir(join(home, ".codex"));
+        await ensureUserWorkspace(home);
+        await fs.rmdir(join(home, ".codex"));
         const result = await setup(home, undefined, home);
         const cursor = result.targets.find((target) => target.harness === "cursor");
         assert.ok(cursor);
         assert.equal(cursor.skipped, false);
         assert.deepEqual(cursor.files, ["AGENTS.md"]);
-        assert.equal(result.targets.filter((target) => target.skipped).length, 2);
+        assert.equal(result.targets.filter((target) => target.skipped).length, 1);
         assert.equal(await readFile(join(home, ".cursor", "AGENTS.md"), "utf8").then((content) => content.includes("Generated by Harness Align")), true);
         assert.deepEqual(await readdir(join(home, ".cursor", "agents")), []);
         assert.ok(await readdir(join(home, ".agents", "shared-rules")).then(() => true));

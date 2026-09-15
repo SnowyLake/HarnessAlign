@@ -65,7 +65,7 @@ export const CONFIG_SCHEMA = z.strictObject({
     version: z.literal(1),
     name: z.string(),
     layers: z.array(z.strictObject({ name: z.string(), selected: z.string() })),
-    harnesses: z.array(HARNESS_SCHEMA).min(1),
+    harnesses: z.array(HARNESS_SCHEMA),
     skillSources: z.array(z.strictObject({ owner: z.string(), name: z.string(), branch: z.string() })),
 });
 
