@@ -188,6 +188,7 @@ interface AppState
 {
     view: AppView;
     workspace: Workspace | undefined;
+    workspaceRevision: number;
     syncPreview: SyncPreview | undefined;
     syncStatus: SyncStatus | undefined;
     syncDialog: "review" | "connection" | undefined;
@@ -202,6 +203,7 @@ interface AppState
     nextEditorActionId: number;
     setView: (view: AppView) => void;
     setWorkspace: (workspace: Workspace | undefined) => void;
+    resetWorkspace: (workspace: Workspace) => void;
     setSyncPreview: (preview: SyncPreview | undefined) => void;
     setSyncStatus: (status: SyncStatus) => void;
     setSyncDialog: (dialog: "review" | "connection" | undefined) => void;
@@ -228,6 +230,7 @@ export function workspaceChangeCount(state: Pick<AppState, "workspace" | "layerS
 export const useAppStore = create<AppState>((set) => ({
     view: "project",
     workspace: undefined,
+    workspaceRevision: 0,
     syncPreview: undefined,
     syncStatus: undefined,
     syncDialog: undefined,
@@ -264,6 +267,18 @@ export const useAppStore = create<AppState>((set) => ({
         };
     }),
     setSelection: (selection) => set({ selection }),
+    resetWorkspace: (workspace) => set((state) => ({
+        workspace,
+        workspaceRevision: state.workspaceRevision + 1,
+        selection: state.view === "settings" || state.view === "console"
+            ? state.selection
+            : selectionForView(state.view, state.selection, workspace),
+        layerSelection: savedLayerSelection(workspace),
+        editorDrafts: {},
+        pendingEditorAction: undefined,
+        syncPreview: undefined,
+        syncDialog: undefined,
+    })),
     setLayerSelection: (layerSelection) => set({ layerSelection }),
     setLogSnapshot: (snapshot) => set({ logs: snapshot.entries, logRevision: snapshot.revision }),
     applyLogChange: (change) => set((state) => change.revision <= state.logRevision ? state : {

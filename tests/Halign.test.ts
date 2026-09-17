@@ -3006,6 +3006,65 @@ test("Layer selection keeps local choices and falls back only when the selected 
     });
 });
 
+test("workspace reload replaces drafts and Layer choices only after a valid disk read and reconciles removed selections", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        try
+        {
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [] };
+            initial.setWorkspace(undefined);
+            initial.setWorkspace(workspace);
+            initial.setView("rules");
+            const rule = workspace.rootRules[0]!;
+            const selection = { kind: "rule" as const, path: rule.path };
+            initial.setSelection(selection);
+            initial.setEditorDraft(`rule:${rule.path}`, { selection, baseline: { body: [rule.body] }, current: { body: ["unsaved"] } });
+            initial.setLayerSelection([]);
+            initial.requestEditorAction(selection, "delete");
+            initial.setSyncPreview({ id: "stale", head: "old", firstSync: false, remoteEmpty: false, uploadCount: 0, downloadCount: 0, changes: [], notice: "" });
+            initial.setSyncDialog("review");
+            const before = useAppStore.getState();
+            const configPath = join(root, ".harness-align/config.json");
+            const savedConfig = await readFile(configPath, "utf8");
+            await writeFile(configPath, "invalid JSON");
+            await assert.rejects(loadWorkspace(root).then((loaded) => initial.resetWorkspace({ ...loaded, generatedFiles: [] })));
+            assert.equal(useAppStore.getState(), before);
+            await writeFile(configPath, savedConfig);
+            await writeRule(root, rule.path.split("/").at(-1)!, rule.priority, "Changed outside the app");
+            await saveConfig(root, { ...await loadConfig(root), layers: [{ name: "soul", selected: "kei" }] });
+            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [] });
+            const reloaded = useAppStore.getState();
+            assert.match(reloaded.workspace!.rootRules.find((item) => item.path === rule.path)!.body, /Changed outside the app/u);
+            assert.deepEqual(reloaded.layerSelection, [{ name: "soul", option: "kei" }]);
+            assert.deepEqual(reloaded.editorDrafts, {});
+            assert.equal(reloaded.pendingEditorAction, undefined);
+            assert.equal(reloaded.syncPreview, undefined);
+            assert.equal(reloaded.syncDialog, undefined);
+            assert.equal(reloaded.view, "rules");
+            assert.deepEqual(reloaded.selection, selection);
+            assert.equal(reloaded.workspaceRevision, before.workspaceRevision + 1);
+            assert.equal(workspaceChangeCount(reloaded), 0);
+            initial.resetWorkspace(reloaded.workspace!);
+            assert.equal(useAppStore.getState().workspaceRevision, reloaded.workspaceRevision + 1);
+            await unlink(join(root, rule.path));
+            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [] });
+            assert.notDeepEqual(useAppStore.getState().selection, selection);
+            assert.equal(useAppStore.getState().view, "rules");
+            initial.setView("console");
+            initial.resetWorkspace(useAppStore.getState().workspace!);
+            assert.equal(useAppStore.getState().view, "console");
+            assert.deepEqual(useAppStore.getState().logs, initial.logs);
+            assert.equal(useAppStore.getState().theme, initial.theme);
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+        }
+    });
+});
+
 test("skill batches reject later origin and case conflicts before installing the first item", async (t) =>
 {
     await withProject(async (root) =>

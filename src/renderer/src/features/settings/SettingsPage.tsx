@@ -30,6 +30,7 @@ export function SettingsPage()
     const theme = useAppStore((state) => state.theme);
     const setTheme = useAppStore((state) => state.setTheme);
     const workspace = useAppStore((state) => state.workspace);
+    const workspaceRevision = useAppStore((state) => state.workspaceRevision);
     const syncStatus = useAppStore((state) => state.syncStatus);
     const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const [version, setVersion] = useState("");
@@ -63,7 +64,7 @@ export function SettingsPage()
                     </Flex>
                 </Card>
                 <Card title={<Space><FileTextOutlined />Generated instructions</Space>}>
-                    {workspace ? <AgentDocumentTitleForm workspace={workspace} /> : <Typography.Text type="secondary">The user workspace is not loaded yet.</Typography.Text>}
+                    {workspace ? <AgentDocumentTitleForm key={workspaceRevision} workspace={workspace} /> : <Typography.Text type="secondary">The user workspace is not loaded yet.</Typography.Text>}
                 </Card>
                 <Card title={<Space><GithubOutlined />GitHub connection</Space>}>
                     <Flex align="center" justify="space-between" gap={24} wrap>
