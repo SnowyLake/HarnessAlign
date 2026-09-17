@@ -92,6 +92,8 @@
 
 每个 Harness 声明名称, 相对用户主目录的配置路径, 以及 Subagent 输出格式.
 
+`harnesses` 可以为 `[]`, 之后可在 Harnesses 页面手动添加. 新建配置的默认候选和检测方式见[安装与首次启动](usage.md#安装与首次启动).
+
 | 字段 | 约束与用途 |
 | --- | --- |
 | `name` | 匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`, 忽略大小写后唯一. 用于 Rule `targets`, Agent `harnesses` 键和生成目录名 |

@@ -1,6 +1,6 @@
 {
   "name": "harness-align",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Desktop application to manage, generate, and deploy coding assistant configurations.",
   "author": "Harness Align",

@@ -379,6 +379,13 @@ export async function refreshWorkspace(next?: Selection): Promise<void>
     if (next) useAppStore.getState().setSelection(next);
 }
 
+/** Read local files successfully before discarding all renderer workspace drafts. */
+export async function reloadWorkspace(): Promise<void>
+{
+    const workspace = await window.appApi.workspace.load();
+    useAppStore.getState().resetWorkspace(workspace);
+}
+
 /** Log the operation start and retain failures while holding the workspace busy boundary. */
 export async function runCommand(work: () => Promise<void>, operation = "Command"): Promise<void>
 {

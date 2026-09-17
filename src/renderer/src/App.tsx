@@ -10,7 +10,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { ConsolePage } from "@/features/console/ConsolePage";
 import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
-import { refreshWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
+import { refreshWorkspace, reloadWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 
 /** Root React tree for the desktop shell. */
@@ -19,6 +19,7 @@ export function App()
     const view = useAppStore((state) => state.view);
     const themeMode = useAppStore((state) => state.theme);
     const workspace = useAppStore((state) => state.workspace);
+    const workspaceRevision = useAppStore((state) => state.workspaceRevision);
     const [loadError, setLoadError] = useState<string>();
     const [loadAttempt, setLoadAttempt] = useState(0);
     const [prefersDark, setPrefersDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -87,6 +88,17 @@ export function App()
     /** Save every retained workspace change from the header. */
     const handleSave = (): void => void saveWorkspaceChanges();
 
+    /** Replace workspace drafts with local files after the shell's discard confirmation. */
+    const handleReload = (): void =>
+    {
+        if (!useAppStore.getState().workspace) return;
+        void runCommand(async () =>
+        {
+            await reloadWorkspace();
+            showSuccess("Workspace reloaded");
+        }, "Reload");
+    };
+
     useEffect(() =>
     {
         /** Persist retained drafts using the standard desktop save shortcut. */
@@ -132,7 +144,7 @@ export function App()
         ? <ConsolePage />
         : view === "settings"
             ? <SettingsPage />
-            : <WorkspacePage view={view} />;
+            : <WorkspacePage key={workspaceRevision} view={view} />;
 
     return (
         <ConfigProvider
@@ -177,7 +189,7 @@ export function App()
         >
             <AntApp className="app-root">
                 <FeedbackBridge />
-                <AppShell onSave={handleSave} onGenerate={handleGenerate} onSetup={handleSetup}>
+                <AppShell onSave={handleSave} onReload={handleReload} onGenerate={handleGenerate} onSetup={handleSetup}>
                     {workspace || view === "console" ? page : (
                         <div className="workspace-load-state">
                             {loadError ? <Result status="error" title="Unable to load workspace" subTitle={loadError}

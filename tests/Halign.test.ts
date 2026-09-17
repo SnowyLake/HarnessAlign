@@ -2185,17 +2185,74 @@ test("ensureUserWorkspace creates a default user config once", async () =>
         assert.equal(root, resolve(home));
         const created = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string; harnesses: unknown[] };
         assert.equal(created.name, "AGENTS");
-        assert.ok(created.harnesses.length > 0);
+        assert.deepEqual(created.harnesses, []);
+        assert.equal(CONFIG_SCHEMA.safeParse(await loadConfig(home)).success, true);
+        assert.deepEqual([...await buildOutputs(home)].map(([path]) => path), [".manifest.json"]);
         const guide = await readFile(join(home, ".harness-align", "AGENTS.md"), "utf8");
         assert.match(guide, /https:\/\/github.com\/SnowyLake\/HarnessAlign/u);
         assert.match(guide, /Setup/u);
         assert.equal(guide.includes("\r"), false);
         await loadWorkspace(home);
         created.name = "KEEP";
+        await mkdir(join(home, ".codex"));
         await writeFile(join(home, ".harness-align", "config.json"), `${JSON.stringify(created, null, 2)}\n`, "utf8");
         await ensureUserWorkspace(home);
         const kept = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string };
         assert.equal(kept.name, "KEEP");
+        assert.deepEqual((await loadConfig(home)).harnesses, []);
+        await addHarness(home, { name: "codex", configPath: ".codex", agentFormat: "toml", agentExtension: "toml", instructionsField: "developer_instructions" });
+        await removeHarness(home, "codex");
+        assert.deepEqual((await loadConfig(home)).harnesses, []);
+    }
+    finally
+    {
+        await rm(home, { recursive: true, force: true });
+    }
+});
+
+test("first initialization detects only regular default harness directories in candidate order", async () =>
+{
+    const home = await mkdtemp(join(tmpdir(), "halign-detection-"));
+    try
+    {
+        for (const path of [".config/opencode", ".grok", ".cursor", ".codex", ".other"])
+        {
+            await mkdir(join(home, path), { recursive: true });
+        }
+        await ensureUserWorkspace(home);
+        const detected = (await loadConfig(home)).harnesses;
+        assert.deepEqual(detected.map((harness) => harness.name), ["codex", "cursor", "grok", "opencode"]);
+        assert.deepEqual(detected[2], { name: "grok", configPath: ".grok", agentFormat: "yaml", agentExtension: "md" });
+        assert.equal(detected[0]?.instructionsField, "developer_instructions");
+        await fs.rmdir(join(home, ".cursor"));
+        await ensureUserWorkspace(home);
+        assert.deepEqual((await loadConfig(home)).harnesses, detected);
+        await unlink(join(home, ".harness-align", "config.json"));
+        await writeFile(join(home, ".cursor"), "not a directory");
+        await fs.rmdir(join(home, ".config", "opencode"));
+        await fs.rmdir(join(home, ".config"));
+        await writeFile(join(home, ".config"), "not a directory");
+        await ensureUserWorkspace(home);
+        assert.deepEqual((await loadConfig(home)).harnesses.map((harness) => harness.name), ["codex", "grok"]);
+    }
+    finally
+    {
+        await rm(home, { recursive: true, force: true });
+    }
+});
+
+test("first initialization excludes linked harness directories and linked parent directories", async () =>
+{
+    const home = await mkdtemp(join(tmpdir(), "halign-detection-links-"));
+    try
+    {
+        const target = join(home, "target");
+        await mkdir(join(target, "opencode"), { recursive: true });
+        await symlink(target, join(home, ".codex"), "junction");
+        await symlink(target, join(home, ".config"), "junction");
+        await ensureUserWorkspace(home);
+        assert.deepEqual((await loadConfig(home)).harnesses, []);
+        assert.deepEqual(await readdir(target), ["opencode"]);
     }
     finally
     {
@@ -2394,6 +2451,7 @@ test("workspace initialization uses USERPROFILE not the current working director
             harnesses: [{ name: "cursor", config_path: ".cursor", agent_format: "yaml", agent_extension: "md" }],
         }), "utf8");
         process.chdir(cwd);
+        await mkdir(join(home, ".cursor"));
         await generate(await ensureUserWorkspace(home));
         const generated = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string };
         assert.equal(generated.name, "AGENTS");
@@ -2413,14 +2471,16 @@ test("setup on a fresh user workspace deploys empty agents and skips missing har
     const home = await mkdtemp(join(tmpdir(), "halign-fresh-setup-"));
     try
     {
-        await ensureUserWorkspace(home);
         await mkdir(join(home, ".cursor"), { recursive: true });
+        await mkdir(join(home, ".codex"));
+        await ensureUserWorkspace(home);
+        await fs.rmdir(join(home, ".codex"));
         const result = await setup(home, undefined, home);
         const cursor = result.targets.find((target) => target.harness === "cursor");
         assert.ok(cursor);
         assert.equal(cursor.skipped, false);
         assert.deepEqual(cursor.files, ["AGENTS.md"]);
-        assert.equal(result.targets.filter((target) => target.skipped).length, 2);
+        assert.equal(result.targets.filter((target) => target.skipped).length, 1);
         assert.equal(await readFile(join(home, ".cursor", "AGENTS.md"), "utf8").then((content) => content.includes("Generated by Harness Align")), true);
         assert.deepEqual(await readdir(join(home, ".cursor", "agents")), []);
         assert.ok(await readdir(join(home, ".agents", "shared-rules")).then(() => true));
@@ -2943,6 +3003,65 @@ test("Layer selection keeps local choices and falls back only when the selected 
         await saveConfig(root, { ...await loadConfig(root), layers: [] });
         await rm(join(root, ".harness-align", "layers"), { recursive: true });
         await assert.rejects(removeLayer(root, "constructor"), /layer does not exist/u);
+    });
+});
+
+test("workspace reload replaces drafts and Layer choices only after a valid disk read and reconciles removed selections", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        try
+        {
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [] };
+            initial.setWorkspace(undefined);
+            initial.setWorkspace(workspace);
+            initial.setView("rules");
+            const rule = workspace.rootRules[0]!;
+            const selection = { kind: "rule" as const, path: rule.path };
+            initial.setSelection(selection);
+            initial.setEditorDraft(`rule:${rule.path}`, { selection, baseline: { body: [rule.body] }, current: { body: ["unsaved"] } });
+            initial.setLayerSelection([]);
+            initial.requestEditorAction(selection, "delete");
+            initial.setSyncPreview({ id: "stale", head: "old", firstSync: false, remoteEmpty: false, uploadCount: 0, downloadCount: 0, changes: [], notice: "" });
+            initial.setSyncDialog("review");
+            const before = useAppStore.getState();
+            const configPath = join(root, ".harness-align/config.json");
+            const savedConfig = await readFile(configPath, "utf8");
+            await writeFile(configPath, "invalid JSON");
+            await assert.rejects(loadWorkspace(root).then((loaded) => initial.resetWorkspace({ ...loaded, generatedFiles: [] })));
+            assert.equal(useAppStore.getState(), before);
+            await writeFile(configPath, savedConfig);
+            await writeRule(root, rule.path.split("/").at(-1)!, rule.priority, "Changed outside the app");
+            await saveConfig(root, { ...await loadConfig(root), layers: [{ name: "soul", selected: "kei" }] });
+            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [] });
+            const reloaded = useAppStore.getState();
+            assert.match(reloaded.workspace!.rootRules.find((item) => item.path === rule.path)!.body, /Changed outside the app/u);
+            assert.deepEqual(reloaded.layerSelection, [{ name: "soul", option: "kei" }]);
+            assert.deepEqual(reloaded.editorDrafts, {});
+            assert.equal(reloaded.pendingEditorAction, undefined);
+            assert.equal(reloaded.syncPreview, undefined);
+            assert.equal(reloaded.syncDialog, undefined);
+            assert.equal(reloaded.view, "rules");
+            assert.deepEqual(reloaded.selection, selection);
+            assert.equal(reloaded.workspaceRevision, before.workspaceRevision + 1);
+            assert.equal(workspaceChangeCount(reloaded), 0);
+            initial.resetWorkspace(reloaded.workspace!);
+            assert.equal(useAppStore.getState().workspaceRevision, reloaded.workspaceRevision + 1);
+            await unlink(join(root, rule.path));
+            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [] });
+            assert.notDeepEqual(useAppStore.getState().selection, selection);
+            assert.equal(useAppStore.getState().view, "rules");
+            initial.setView("console");
+            initial.resetWorkspace(useAppStore.getState().workspace!);
+            assert.equal(useAppStore.getState().view, "console");
+            assert.deepEqual(useAppStore.getState().logs, initial.logs);
+            assert.equal(useAppStore.getState().theme, initial.theme);
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+        }
     });
 });
 

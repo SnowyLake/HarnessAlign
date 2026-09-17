@@ -30,7 +30,7 @@ import {
 import { loadSkills, parseGitHubSkillSource } from "./Skills.js";
 import { parseSyncSnapshot, readSyncSnapshot, syncSkillIndex, syncSnapshotHash, type SyncSnapshot } from "./Sync.js";
 
-/** Default `.harness-align/config.json` written when the user workspace does not exist yet. */
+/** Default candidates filtered by existing user configuration directories on first initialization. */
 const DEFAULT_USER_CONFIG = {
     version: 1,
     name: "AGENTS",
@@ -38,6 +38,7 @@ const DEFAULT_USER_CONFIG = {
     harnesses: [
         { name: "codex", config_path: ".codex", agent_format: "toml", agent_extension: "toml", instructions_field: "developer_instructions" },
         { name: "cursor", config_path: ".cursor", agent_format: "yaml", agent_extension: "md" },
+        { name: "grok", config_path: ".grok", agent_format: "yaml", agent_extension: "md" },
         { name: "opencode", config_path: ".config/opencode", agent_format: "yaml", agent_extension: "md" },
     ],
 };
@@ -505,8 +506,22 @@ export async function ensureUserWorkspace(userProfile = process.env.USERPROFILE)
     const configPath = join(halign, "config.json");
     if (!(await lstatIfExists(configPath)))
     {
+        const detected = await Promise.all(DEFAULT_USER_CONFIG.harnesses.map(async (harness) =>
+        {
+            // ponytail: directory presence detects initialized tools; use executable discovery if install verification becomes necessary.
+            let current = root;
+            for (const part of harness.config_path.split("/"))
+            {
+                current = join(current, part);
+                assertContained(root, current, "default harness detection");
+                const stats = await lstatIfExists(current);
+                if (!stats?.isDirectory() || stats.isSymbolicLink()) return false;
+            }
+            return true;
+        }));
+        const config = validateConfig({ ...DEFAULT_USER_CONFIG, harnesses: DEFAULT_USER_CONFIG.harnesses.filter((_, index) => detected[index]) });
         await fs.mkdir(join(halign, "rules", "shared"), { recursive: true });
-        await writeConfig(root, validateConfig(DEFAULT_USER_CONFIG));
+        await writeConfig(root, config);
     }
     if (!guideStats || (await fs.readFile(guidePath, "utf8")).startsWith(WORKSPACE_GUIDE_MARKER))
     {
@@ -875,10 +890,6 @@ export async function removeHarness(rootPath: string, name: string): Promise<voi
     if (!config.harnesses.some((harness) => harness.name === name))
     {
         throw new HalignError(`.harness-align/config.json: harness is not configured, got ${valueText(name)}`);
-    }
-    if (config.harnesses.length === 1)
-    {
-        throw new HalignError(`.harness-align/config.json: harnesses must be a non-empty mapping array, got []`);
     }
     const nextConfig: Config = { ...config, harnesses: config.harnesses.filter((harness) => harness.name !== name) };
     validateConfig(configDocument(nextConfig));

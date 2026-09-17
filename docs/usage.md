@@ -14,11 +14,13 @@
 
 应用会自动加载 `%USERPROFILE%\.harness-align` 中的配置. 首次启动时, 如果存在旧的 `.halign` 目录, 应用会迁移它; 没有配置时会创建目录和默认 `config.json`. 配置目录固定, 与应用安装位置无关, 界面不提供修改入口. 迁移规则见[配置目录](configuration.md#配置目录).
 
+新建配置时, 应用依次检测用户目录下的 `.codex`, `.cursor`, `.grok` 和 `.config/opencode`, 只将已有配置目录的 Codex, Cursor, Grok Build 和 OpenCode 加入 Harnesses. 文件, 符号链接和 junction 不计入检测结果. 检测依据是配置目录, 卸载后的残留目录仍可能被识别; 已安装但尚未初始化目录的工具需要先启动一次, 再通过 Add harness 手动添加. 全部未检测到时列表为空, 应用仍可正常使用. 已有配置和迁移配置保持原样, 后续启动不会自动增删 Harnesses.
+
 应用同时只运行一个窗口, 再次启动会聚焦已有窗口. Settings 中可以切换主题. 主题和窗口位置保存在本机.
 
 ## 编辑和保存
 
-侧栏提供 Harnesses, Rules, Layers, Agents 和 Skills, 底部是 Generated, Console 和 Settings. 窄窗口下侧栏会收起为图标. 文件列表可以折叠或调整宽度, Layers, Rules 和 Agents 的列表默认占 28%, 可在 20% 到 45% 之间调整.
+侧栏提供 Harnesses, Rules, Layers, Agents 和 Skills, 底部是 Generated, Console 和 Settings. 窄窗口下侧栏会收起为图标. 文件列表可以折叠或调整宽度, Layers, Rules 和 Agents 的列表默认占 28%, 可在 20% 到 45% 之间调整. 在 Rules, Layers 和 Agents 中切换条目时, 右侧编辑区会保持滚动位置.
 
 日常修改按以下顺序进行:
 
@@ -29,6 +31,10 @@
 文件列表顶部的 Add 用于新建内容. 编辑区的 Create 或 Save file, 文件行菜单和右键菜单中的 Save, 都只保存当前项. Discard changes 会恢复当前项的已保存内容.
 
 Save all 和 `Ctrl+S` 会保存所有页面的草稿, 以及当前 Layer 顺序与选项. 切换页面会保留草稿, 关闭有未保存修改的窗口时会提示确认. Skills 操作直接生效, 不需要再点 Save all.
+
+在软件外修改本地文件后, 点击顶部 Reload 重新读取文件. 没有未保存修改时会直接刷新; 有草稿或未保存的 Layer 顺序与选项时, 可以 Cancel 保留当前内容, 或选择 Discard and reload 丢弃软件内全部未保存修改, 以本地文件为准. 读取或校验失败时保留原有页面内容和草稿, 详情见 Console. 重载后保留当前页面和仍存在的选中项; 选中项被外部删除时会选择该页面的其他可用项.
+
+Reload 不会自动合并软件内外的修改. 同一文件在软件内外都被修改时, 先确认要保留的内容再选择保存或重载; 保存仍使用现有写回行为, 不会检测或提示外部修改冲突.
 
 Settings 中的 `AGENTS.md title` 只控制生成文档的一级标题, 随 Save all 一起保存.
 
@@ -52,7 +58,7 @@ Add layer 创建空 Group, 添加 Option 后才能启用. 关闭 Group 开关会
 
 ### Agents 与 Skills
 
-在 Agents 页编辑 Subagent 的共享正文, 按 Harness 切换各自的 metadata, 用 Enable 选择需要生成该 Agent 的助手. 字段和文件格式见[配置参考](configuration.md).
+在 Agents 页编辑 Subagent 的共享正文, 按 Harness 切换各自的 metadata, 用 Enable 选择需要生成该 Agent 的助手. 切换 Agent 时会保持当前 Harness 标签页. 字段和文件格式见[配置参考](configuration.md).
 
 Skills 页可以安装 GitHub Skills, 检查更新和导入本机内容. 具体操作见[Skills 管理](skills.md).
 

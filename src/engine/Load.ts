@@ -257,9 +257,9 @@ export function validateConfig(value: unknown): Config
         assertWindowsSafeName(selected, `${context}: selected`);
         return { name: layerName, selected };
     });
-    if (!Array.isArray(value.harnesses) || value.harnesses.length === 0)
+    if (!Array.isArray(value.harnesses))
     {
-        throw new HalignError(`${path}: harnesses must be a non-empty mapping array, got ${valueText(value.harnesses)}`);
+        throw new HalignError(`${path}: harnesses must be a mapping array, got ${valueText(value.harnesses)}`);
     }
     const harnesses = value.harnesses.map((harness, index) => validateHarnessConfig(harness, path, index));
     const skillSources: SkillSource[] = [];

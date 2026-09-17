@@ -9,6 +9,7 @@ import {
     FileDoneOutlined,
     FileTextOutlined,
     RobotOutlined,
+    ReloadOutlined,
     RocketOutlined,
     SaveOutlined,
     SettingOutlined,
@@ -45,12 +46,13 @@ export interface AppShellProps
 {
     children: ReactNode;
     onSave: () => void;
+    onReload: () => void;
     onGenerate: () => void;
     onSetup: () => void;
 }
 
 /** Render the Ant Design application shell and top-level commands. */
-export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProps)
+export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: AppShellProps)
 {
     const view = useAppStore((state) => state.view);
     const setView = useAppStore((state) => state.setView);
@@ -60,6 +62,7 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
     const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const dirtyCount = useAppStore(workspaceChangeCount);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
+    const [isReloadOpen, setIsReloadOpen] = useState(false);
     const navigationView = view === "shared-rules" ? "rules" : view;
     const currentNav = navigationView === "settings" || navigationView === "console" ? undefined : WORKSPACE_NAV_ITEMS[navigationView];
     const pageLabel = currentNav?.label ?? (view === "console" ? "Console" : "Settings");
@@ -82,6 +85,15 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
         if (key !== navigationView) setView(key as AppView);
     };
 
+    /** Confirm discarding every workspace draft before reading local files. */
+    const handleReload = (): void =>
+    {
+        const state = useAppStore.getState();
+        if (!state.workspace || state.isBusy) return;
+        if (workspaceChangeCount(state) > 0) setIsReloadOpen(true);
+        else onReload();
+    };
+
     return (
         <Layout className="app-shell">
             <Header className="app-topbar">
@@ -99,6 +111,10 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
                     <Tooltip title="Save all changes (Ctrl+S)">
                         <Button icon={<SaveOutlined />} disabled={!workspace || isBusy || dirtyCount === 0}
                                 aria-label="Save all changes" aria-keyshortcuts="Control+S" onClick={onSave}>Save all</Button>
+                    </Tooltip>
+                    <Tooltip title="Reload local files">
+                        <Button icon={<ReloadOutlined />} disabled={!workspace || isBusy || isReloadOpen}
+                                aria-label="Reload local files" onClick={handleReload}>Reload</Button>
                     </Tooltip>
                     <Tooltip title={dirtyCount > 0 ? "Save all changes before syncing" : "Preview and sync configuration"}>
                         <Button icon={<SyncOutlined />} disabled={!workspace || isBusy || dirtyCount > 0}
@@ -136,6 +152,25 @@ export function AppShell({ children, onSave, onGenerate, onSetup }: AppShellProp
                 </Layout>
             </Layout>
             <SyncPanel />
+            <Modal
+                open={isReloadOpen}
+                title="Discard changes and reload?"
+                okText="Discard and reload"
+                cancelText="Cancel"
+                okButtonProps={{ danger: true, disabled: isBusy }}
+                onCancel={() => setIsReloadOpen(false)}
+                onOk={() =>
+                {
+                    if (useAppStore.getState().isBusy) return;
+                    setIsReloadOpen(false);
+                    onReload();
+                }}
+            >
+                <Typography.Paragraph>
+                    Reload discards all unsaved changes in the app, including drafts on other pages and Layer order and options, and loads the current local files.
+                    If loading fails, your current workspace and unsaved changes are kept.
+                </Typography.Paragraph>
+            </Modal>
             <Modal
                 open={isSetupOpen}
                 title="Deploy configuration?"
