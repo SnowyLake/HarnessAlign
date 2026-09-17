@@ -1,6 +1,13 @@
 /** Workspace labels and source paths with Windows-safe collision checks. */
 
-import type { LayerConfig, LayerSelection, Workspace } from "../../../shared/models/Workspace.js";
+import type { LayerConfig, LayerSelection, ProjectSkill, RemoteSkill, Workspace } from "../../../shared/models/Workspace.js";
+
+/** Return discovered ids that have no source conflict or installed case-insensitive match. */
+export function selectableRemoteSkillIds(discovered: readonly RemoteSkill[], installed: readonly ProjectSkill[]): Set<string>
+{
+    const installedIds = new Set(installed.map((skill) => skill.id.toLowerCase()));
+    return new Set(discovered.filter((skill) => !skill.conflict && !installedIds.has(skill.id.toLowerCase())).map((skill) => skill.id));
+}
 
 /** Return the final path segment of a `/`-separated workspace-relative path. */
 export function fileName(path: string): string

@@ -13,7 +13,8 @@ import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { workspaceService } from "../src/main/services/WorkspaceService.js";
-import { defaultLayerOption, moveLayerSelection, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
+import { defaultLayerOption, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
+import type { ProjectSkill, RemoteSkill } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
 import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
@@ -51,6 +52,23 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("Discover excludes installed skill ids across origins and casing, and allows removed skills again", () =>
+{
+    const discovered: RemoteSkill[] = ["downloaded", "imported", "unknown", "available", "conflict"].map((id) => ({
+        id, title: id, description: "", owner: "example", name: "repo", branch: "main", sourcePath: id, conflict: id === "conflict",
+    }));
+    const installed: ProjectSkill[] = [
+        { id: "Downloaded", title: "", description: "", origin: { kind: "github", owner: "other", name: "source", branch: "old", sourcePath: "", contentHash: "hash" } },
+        { id: "imported", title: "", description: "", origin: { kind: "local", contentHash: "hash" } },
+        { id: "unknown", title: "", description: "", origin: { kind: "unknown" } },
+    ];
+    const selected = ["downloaded", "available", "conflict"];
+    const selectable = selectableRemoteSkillIds(discovered, installed);
+    assert.deepEqual([...selectable], ["available"]);
+    assert.deepEqual(selected.filter((id) => selectable.has(id)), ["available"]);
+    assert.deepEqual([...selectableRemoteSkillIds(discovered, [])], ["downloaded", "imported", "unknown", "available"]);
+});
 
 test("session console retains ordered history across hydration and navigation, and clears without reviving old entries", () =>
 {

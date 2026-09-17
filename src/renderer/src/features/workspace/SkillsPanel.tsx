@@ -17,9 +17,10 @@ import {
 } from "@ant-design/icons";
 import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, UserSkill, Workspace } from "@shared/models/Workspace";
 import { Alert, Avatar, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Listy, Modal, Select, Space, Tabs, Tag, Tooltip, Typography, type TabsProps } from "antd";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
 import { refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { selectableRemoteSkillIds } from "@/lib/Utils";
 import { useAppStore } from "@/stores/AppStore";
 
 /** Which list the panel currently shows. */
@@ -328,6 +329,15 @@ export function SkillsPanel()
     const [removeId, setRemoveId] = useState<string>();
     const [filter, setFilter] = useState("");
 
+    const selectableRemoteIds = selectableRemoteSkillIds(discovered, workspace?.skills ?? []);
+    const selectedRemoteIds = selectedRemote.filter((id) => selectableRemoteIds.has(id));
+
+    useEffect(() =>
+    {
+        const selectableIds = selectableRemoteSkillIds(discovered, workspace?.skills ?? []);
+        setSelectedRemote((current) => current.filter((id) => selectableIds.has(id)));
+    }, [discovered, workspace]);
+
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
 
     const installed = workspace.skills;
@@ -345,6 +355,7 @@ export function SkillsPanel()
     /** Toggle a remote skill id in the installation selection. */
     const toggleRemote = (id: string): void =>
     {
+        if (isBusy || !selectableRemoteIds.has(id)) return;
         setSelectedRemote((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
     };
 
@@ -373,9 +384,10 @@ export function SkillsPanel()
     /** Download the selected discovered skills into this project. */
     const handleDownload = (): void =>
     {
+        if (selectedRemoteIds.length === 0) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.installSkills(selectedRemote);
+            const report = await window.appApi.workspace.installSkills(selectedRemoteIds);
             showSuccess("Install completed", report);
             setSelectedRemote([]);
             setListView("installed");
@@ -471,12 +483,13 @@ export function SkillsPanel()
                         id={skill.id}
                         title={skill.id}
                         description={skill.description}
-                        disabled={isBusy || skill.conflict}
-                        checked={selectedRemote.includes(skill.id)}
+                        disabled={isBusy || !selectableRemoteIds.has(skill.id)}
+                        checked={selectedRemoteIds.includes(skill.id)}
                         onToggle={toggleRemote}
                         detail={skill.conflict
                             ? <Tag color="error">Conflict</Tag>
-                            : <Tag>{skill.owner}/{skill.name}@{skill.branch}</Tag>}
+                            : <Space size={8}><Tag>{skill.owner}/{skill.name}@{skill.branch}</Tag>
+                                {!selectableRemoteIds.has(skill.id) ? <Tag>Installed</Tag> : null}</Space>}
                     />
                 )}
             />
@@ -520,8 +533,8 @@ export function SkillsPanel()
                                     onClick={() => handleApplyUpdates(outdated.map((item) => item.id))}>Update {outdated.length}</Button> : null}
                             </> : hasDiscovered ? <>
                                 <Button icon={<ReloadOutlined />} disabled={isBusy || workspace.config.skillSources.length === 0} onClick={handleDiscover}>Refresh</Button>
-                                <Button type="primary" icon={<CloudDownloadOutlined />} disabled={isBusy || selectedRemote.length === 0}
-                                        onClick={handleDownload}>Install selected ({selectedRemote.length})</Button>
+                                <Button type="primary" icon={<CloudDownloadOutlined />} disabled={isBusy || selectedRemoteIds.length === 0}
+                                        onClick={handleDownload}>Install selected ({selectedRemoteIds.length})</Button>
                             </> : null}
                         </Space>
                     </Flex>

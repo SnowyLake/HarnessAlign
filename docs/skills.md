@@ -11,6 +11,8 @@
 
 在侧栏打开 Skills, 点击 Sources 登记 GitHub 仓库. 关闭弹窗后, 在 Discover 页签发现并安装 Skills. Installed 页签用于检查更新和管理已安装项.
 
+当前项目已安装的 Skill 在 Discover 中显示 Installed, 不能再次勾选. 判定按 id 匹配且不区分大小写, 包括本地导入或其他来源的同名项; 移除已安装项后可以重新选择.
+
 应用可以发现仓库根目录和子目录中的 `SKILL.md`. 根目录 Skill 使用仓库名作为 id, 同样支持安装和检查更新. 移除来源需要确认, 已安装的 Skills 会保留.
 
 安装后的内容保存在 `.harness-align/skills/<id>/`. 每个 Skill 目录带有 `SKILL.md`, `skills/index.json` 记录来源, 请让应用维护这个文件. 根目录 Skill 的 `sourcePath` 为空字符串是正常记录.
