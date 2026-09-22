@@ -2889,6 +2889,35 @@ test("prototype-named harnesses and skills require explicit own metadata", async
     });
 });
 
+test("generated agent files omit disabled names and restore enabled names", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const original = (await loadWorkspace(root)).agents[0]!;
+        for (const name of [undefined, "custom-name", null, undefined])
+        {
+            const override = name === undefined ? {} : { name };
+            const harnesses = { ...original.harnesses,
+                opencode: { ...original.harnesses.opencode, ...override }, codex: { ...original.harnesses.codex, ...override } };
+            await saveAgent(root, { ...original, harnesses });
+            assert.deepEqual((await loadWorkspace(root)).agents[0]!.harnesses, harnesses);
+            await generate(root);
+            const yaml = await readFile(join(root, ".harness-align/generated/opencode/agents/explorer.md"), "utf8");
+            const toml = await readFile(join(root, ".harness-align/generated/codex/agents/explorer.toml"), "utf8");
+            for (const metadata of [parseYaml(yaml.split("---\n")[1]!), parseToml(toml)])
+            {
+                assert.equal(Object.hasOwn(metadata, "name"), name !== null);
+                assert.equal(metadata.name, name === null ? undefined : name ?? original.name);
+                assert.equal(metadata.description, original.description);
+            }
+            assert.equal(parseYaml(yaml.split("---\n")[1]!).model, original.harnesses.opencode!.model);
+            assert.equal(parseToml(toml).developer_instructions, original.body);
+            const cursor = await readFile(join(root, ".harness-align/generated/cursor/agents/explorer.md"), "utf8");
+            assert.equal(parseYaml(cursor.split("---\n")[1]!).name, original.name);
+        }
+    });
+});
+
 test("agent saves reject duplicate logical names before changing any sources", async () =>
 {
     await withProject(async (root) =>

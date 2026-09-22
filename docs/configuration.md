@@ -143,7 +143,7 @@ Shared 规则不参与上述组合, 它们会单独部署到用户共享规则�
 
 Subagent 源文件包含公共 `name`, `description`, `harnesses` 和 Markdown 正文. 各 Harness 共用正文, metadata 分别填写.
 
-每个 Harness 块中的 metadata 没有字段白名单, 会按该 Harness 的格式输出. 同名 metadata 可以覆盖输出中的公共 `name` 或 `description`. TOML Harness 的正文使用 `instructions_field`, 不要在 metadata 中重复声明该字段, 它也不能命名为 `name` 或 `description`.
+每个 Harness 块中的 metadata 没有字段白名单, 会按该 Harness 的格式输出. 同名 metadata 可以覆盖输出中的公共 `name` 或 `description`. 将 `name` 设为 `null` 会从该 Harness 的生成结果中省略 `name`; 省略该键则继承公共名称. OpenCode 的 Agent 编辑页提供 Generate name field 开关, 默认开启; 关闭后写入 `name: null`. TOML Harness 的正文使用 `instructions_field`, 不要在 metadata 中重复声明该字段, 它也不能命名为 `name` 或 `description`.
 
 保存前, 应用会检查公共 `name` 是否与其他 Agent 忽略大小写后重名. 存在冲突时保留原文件.
 

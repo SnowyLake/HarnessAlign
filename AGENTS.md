@@ -116,7 +116,7 @@
 - `Load.ts` 为兼容既有手写源文件, 将缺失的 Rule 或 Layer Option `targets` 规范化为 `[]`; `Edit.ts` 和 Shared DTO 的写入 payload 必须携带显式 `targets` 数组, 写回时保留空数组.
 - `.harness-align/rules/shared/` 是独立部署的共享规则, 不参与 `AGENTS.md` 渲染, 不出现在生成 manifest 中.
 - `.harness-align/skills/` 保存项目 Skills 与 `index.json` provenance; 不参与 `AGENTS.md` 渲染, 不出现在生成 manifest 中.
-- `.harness-align/agents/` 中的 Subagent 共享 Markdown body. 各 Harness 块中的 metadata 没有字段白名单, 由对应格式的序列化器输出. Harness metadata 在公共 `name` 和 `description` 之后合并, 同名字段可以覆盖该 Harness 输出中的公共值.
+- `.harness-align/agents/` 中的 Subagent 共享 Markdown body. 各 Harness 块中的 metadata 没有字段白名单, 由对应格式的序列化器输出. Harness metadata 在公共 `name` 和 `description` 之后合并, 同名字段可以覆盖该 Harness 输出中的公共值. `name: null` 表示该 Harness 输出省略 `name`; 缺失 `name` 则继承公共名称.
 - 生成的 `AGENTS.md` 只允许配置的 `name` 产生一个一级标题.
 - Rule 中 fenced code 之外的一至五级 ATX 标题必须降一级, 六级标题保持不变.
 - TOML Harness 的 `instructions_field` 使用多行字符串保存共享正文, 不得将正文换行写成字面量 `\n`, 也不允许 metadata 重复声明该字段.

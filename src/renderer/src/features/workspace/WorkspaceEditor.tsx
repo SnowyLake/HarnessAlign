@@ -65,6 +65,20 @@ function draftValues(draft: EditorDraft | undefined, name: string, fallback: str
     return draft ? draft.current[name] : fallback;
 }
 
+/** Parse one agent metadata JSON object, or `undefined` when the text is not a mapping. */
+function parseAgentMetadata(text: string): Record<string, unknown> | undefined
+{
+    try
+    {
+        const value: unknown = JSON.parse(text);
+        return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+    }
+    catch
+    {
+        return undefined;
+    }
+}
+
 /** Consume the next matching tree command with handlers owned by the mounted editor. */
 function useEditorAction(editorKey: string, onSave: (() => void) | undefined, onDelete: (() => void) | undefined): void
 {
@@ -551,6 +565,7 @@ function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessCha
     const editorKey = selectionKey(selection);
     const editor = useEditorForm(workspace, selection, existing ? () => setIsDeleteOpen(true) : undefined);
     const [agentName, setAgentName] = useState(draftText(editor.draft, "name", existing?.name ?? "new-agent"));
+    const [metadataRevision, setMetadataRevision] = useState(0);
     const selectedMetadataName = workspace.config.harnesses.find((harness) => harness.name === metadataHarness)?.name ?? workspace.config.harnesses[0]?.name ?? "";
 
     return (
@@ -580,22 +595,49 @@ function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessCha
                         <Tabs
                             activeKey={selectedMetadataName}
                             onChange={onMetadataHarnessChange}
-                            items={workspace.config.harnesses.map((harness) => ({
-                                key: harness.name,
-                                label: harness.name,
-                                forceRender: true,
-                                children: (<Space orientation="vertical" size="middle" className="full-width">
-                                    <Checkbox.Group name="enabledHarnesses" options={[{ label: `Enable for ${harness.name}`, value: harness.name }]}
-                                        defaultValue={draftValues(editor.draft, "enabledHarnesses", existing ? Object.keys(existing.harnesses) : workspace.config.harnesses.map((item) => item.name)) ?? []} />
-                                    <SourceEditor
-                                        name={`meta-${harness.name}`}
-                                        language="json"
-                                        aria-label={`${harness.name} metadata JSON`}
-                                        resizeKey={selectedMetadataName}
-                                        defaultValue={draftText(editor.draft, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2))}
-                                    />
-                                </Space>),
-                            }))}
+                            items={workspace.config.harnesses.map((harness) =>
+                            {
+                                const metadataField = `meta-${harness.name}`;
+                                const metadataText = draftText(editor.draft, metadataField, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2));
+                                const metadata = parseAgentMetadata(metadataText);
+                                const isOpenCode = harness.name.toLowerCase() === "opencode";
+                                return {
+                                    key: harness.name,
+                                    label: harness.name,
+                                    forceRender: true,
+                                    children: (<Space orientation="vertical" size="middle" className="full-width">
+                                        <Space size="middle">
+                                            <Checkbox.Group name="enabledHarnesses" options={[{ label: `Enable for ${harness.name}`, value: harness.name }]}
+                                                defaultValue={draftValues(editor.draft, "enabledHarnesses", existing ? Object.keys(existing.harnesses) : workspace.config.harnesses.map((item) => item.name)) ?? []} />
+                                            {isOpenCode ? (
+                                                <Checkbox
+                                                    checked={metadata?.name !== null}
+                                                    disabled={isBusy || metadata === undefined}
+                                                    onChange={(event) =>
+                                                    {
+                                                        event.stopPropagation();
+                                                        if (!metadata) return;
+                                                        if (event.target.checked) delete metadata.name;
+                                                        else metadata.name = null;
+                                                        editor.handleValueChange(metadataField, JSON.stringify(metadata, null, 2));
+                                                        setMetadataRevision((revision) => revision + 1);
+                                                    }}
+                                                >
+                                                    Generate name field
+                                                </Checkbox>
+                                            ) : null}
+                                        </Space>
+                                        <SourceEditor
+                                            key={isOpenCode ? metadataRevision : 0}
+                                            name={metadataField}
+                                            language="json"
+                                            aria-label={`${harness.name} metadata JSON`}
+                                            resizeKey={selectedMetadataName}
+                                            defaultValue={metadataText}
+                                        />
+                                    </Space>),
+                                };
+                            })}
                         />
                     </Form.Item>
                     <Form.Item label="Body">

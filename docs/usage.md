@@ -58,7 +58,7 @@ Add layer 创建空 Group, 添加 Option 后才能启用. 关闭 Group 开关会
 
 ### Agents 与 Skills
 
-在 Agents 页编辑 Subagent 的共享正文, 按 Harness 切换各自的 metadata, 用 Enable 选择需要生成该 Agent 的助手. 切换 Agent 时会保持当前 Harness 标签页. 字段和文件格式见[配置参考](configuration.md).
+在 Agents 页编辑 Subagent 的共享正文, 按 Harness 切换各自的 metadata, 用 Enable 选择需要生成该 Agent 的助手. OpenCode 标签页在 Enable 同行右侧提供相同样式的 Generate name field 勾选项, 默认勾选; 取消勾选后生成的 frontmatter 不包含 `name`. 切换 Agent 时会保持当前 Harness 标签页. 字段和文件格式见[配置参考](configuration.md).
 
 Skills 页可以安装 GitHub Skills, 检查更新和导入本机内容. 具体操作见[Skills 管理](skills.md).
 
