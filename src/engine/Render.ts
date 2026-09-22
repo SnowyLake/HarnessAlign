@@ -133,7 +133,7 @@ function renderTomlAgent(agent: Agent, harness: HarnessConfig, metadata: Metadat
         throw new HalignError(`${agent.path}: ${harness.name} TOML output requires instructions_field`);
     }
     const placeholder = "__HALIGN_MARKDOWN_BODY__";
-    const values: Metadata = { name: agent.name, description: agent.description, ...metadata, [instructionsField]: placeholder };
+    const values = { ...metadata, [instructionsField]: placeholder };
     let content: string;
     let assignment: string;
     try
@@ -155,14 +155,15 @@ function renderTomlAgent(agent: Agent, harness: HarnessConfig, metadata: Metadat
 /** Serialize one YAML subagent with frontmatter plus the shared markdown body. */
 function renderYamlAgent(agent: Agent, metadata: Metadata): Buffer
 {
-    const values: Metadata = { name: agent.name, description: agent.description, ...metadata };
-    return Buffer.from(`---\n${stringifyYaml(values, { lineWidth: 0, sortMapEntries: false })}---\n\n${agent.body}`, "utf8");
+    return Buffer.from(`---\n${stringifyYaml(metadata, { lineWidth: 0, sortMapEntries: false })}---\n\n${agent.body}`, "utf8");
 }
 
-/** Render one subagent file for a harness using TOML or YAML metadata. */
+/** Merge agent metadata and render TOML or YAML, omitting an explicit null name. */
 export function renderAgent(agent: Agent, harness: HarnessConfig, metadata: Metadata): Buffer
 {
+    const values: Metadata = { name: agent.name, description: agent.description, ...metadata };
+    if (values.name === null) delete values.name;
     return harness.agentFormat === "toml"
-        ? renderTomlAgent(agent, harness, metadata)
-        : renderYamlAgent(agent, metadata);
+        ? renderTomlAgent(agent, harness, values)
+        : renderYamlAgent(agent, values);
 }
