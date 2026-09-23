@@ -183,7 +183,7 @@ npm run dev
 - `package.json` 的 `version` 是应用版本来源. 使用 `npm version <version> --no-git-tag-version` 同步更新它和 `package-lock.json`, 不手工修改 lockfile, 不让 npm 提前提交或创建 tag.
 - 用户提供 `X.Y.Z` 或 `vX.Y.Z` 时去掉前导 `v`, 使用 npm 校验版本. 支持 `X.Y.Z-beta.1` 等 SemVer 预发布版本; tag 固定为 `v<version>`, 带预发布标识的版本在 GitHub 标记为 prerelease.
 - 正式交付物为 `release/v<version>/HarnessAlign-<version>-setup.exe`, 是包含 Electron 运行环境的 NSIS 安装包. `win-unpacked/` 用于检查打包结果, 不能只取其中的 `HarnessAlign.exe` 当作独立程序分发. 不上传 `dist/`, `out/`, 整个 `release/` 或用户配置.
-- 打包固定传入 `--x64 --publish never`, 防止架构随构建机器变化或 electron-builder 自动发布. 版本目录通过命令行覆盖 `directories.output`, 普通本地打包仍使用默认的 `release/`.
+- 打包固定传入 `--x64`. `npm run build:win` 已包含一次 `--publish never`, 防止架构随构建机器变化或 electron-builder 自动发布. 不要在同一次命令中再传 `--publish never`, 重复传入会变成数组并触发上传. 版本目录通过命令行覆盖 `directories.output`, 普通本地打包仍使用默认的 `release/`.
 - 当前仓库未配置代码签名. 发布时记录实际签名状态, 未签名安装包可能触发 Windows 安全提示. 不在仓库或 Release Notes 保存签名凭据.
 - 安装版通过 `electron-updater` 检查并安装 GitHub Release. 更新地址在打包时写入 `app-update.yml`, 固定为 `SnowyLake/HarnessAlign`. `win.verifyUpdateCodeSignature` 保持 `false`, 因为未签名安装包没有可核对的发行者; 下载完整性仍由同一次构建的 `latest.yml` sha512 校验. 配置代码签名后改为 `true`, 让打包写入发行者名称.
 - 每个正式 Release 必须同时上传同一次构建的 `HarnessAlign-<version>-setup.exe`, `latest.yml` 和 `HarnessAlign-<version>-setup.exe.blockmap`. 应用只跟随最新正式版. 早于该功能的已安装版本仍需手动安装一次包含更新器的版本.
@@ -202,7 +202,7 @@ npm run dev
 ```powershell
 npm ci
 npm run verify
-npm run build:win -- --x64 --publish never --config.directories.output=release/v<version>
+npm run build:win -- --x64 --config.directories.output=release/v<version>
 ```
 
 7. 确认本次命令成功生成非空的 `release/v<version>/HarnessAlign-<version>-setup.exe`, `release/v<version>/HarnessAlign-<version>-setup.exe.blockmap`, `release/v<version>/latest.yml`, `release/v<version>/win-unpacked/HarnessAlign.exe` 和 `release/v<version>/win-unpacked/resources/app.asar`. `latest.yml` 的 `version` 必须是本次版本, `path` 必须是本次安装包文件名. 检查打包后应用的版本与目标一致, 不以旧产物存在代替本次构建成功. 干净环境中的安装, 启动, 页面, 升级和卸载测试为可选验证, 不作为发布前置条件. 不在开发机真实用户目录执行 Setup 作为发布测试, 不把未执行的安装测试报告为通过.
