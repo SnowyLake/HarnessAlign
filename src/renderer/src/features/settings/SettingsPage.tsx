@@ -5,8 +5,8 @@
 import { DesktopOutlined, FileTextOutlined, GithubOutlined } from "@ant-design/icons";
 import type { ThemeMode } from "@shared/models/AppSettings";
 import { Button, Card, Flex, Segmented, Space, Typography } from "antd";
-import { useEffect, useState } from "react";
 import { showError, writeLog } from "@/components/common/Feedback";
+import { AppUpdateCard } from "@/features/settings/AppUpdateCard";
 import { AgentDocumentTitleForm } from "@/features/workspace/WorkspaceEditor";
 import { useAppStore } from "@/stores/AppStore";
 
@@ -33,12 +33,6 @@ export function SettingsPage()
     const workspaceRevision = useAppStore((state) => state.workspaceRevision);
     const syncStatus = useAppStore((state) => state.syncStatus);
     const setSyncDialog = useAppStore((state) => state.setSyncDialog);
-    const [version, setVersion] = useState("");
-
-    useEffect(() =>
-    {
-        void window.appApi.app.getVersion().then(setVersion).catch((error: unknown) => showError(error, "Version lookup failed"));
-    }, []);
 
     return (
         <div className="workspace-scroll">
@@ -80,7 +74,7 @@ export function SettingsPage()
                         <Button onClick={() => setSyncDialog("connection")}>{syncStatus?.connected ? "Manage connection" : "Connect GitHub"}</Button>
                     </Flex>
                 </Card>
-                <Typography.Text type="secondary" className="settings-about">Harness Align {version}</Typography.Text>
+                <AppUpdateCard />
             </div>
         </div>
     );

@@ -27,6 +27,10 @@ import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA,
 import { atomicWrite } from "../src/engine/FsSafe.js";
 import { buildOutputs, generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
 import { readResponseBytes } from "../src/main/services/RemoteFetch.js";
+import {
+    assertAppUpdateInstallable, assertReleaseVersion, beginAppUpdateCheck, beginAppUpdateDownload, environmentProxy, environmentProxyBypass,
+    failAppUpdate, initialAppUpdateStatus, markAppUpdateAvailable, markAppUpdateCurrent, markAppUpdateDownloaded, unavailableAppUpdateStatus, updateAppUpdateProgress,
+} from "../src/main/services/AppUpdateState.js";
 import { loadConfig, validateConfig } from "../src/engine/Load.js";
 import { HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
@@ -3142,4 +3146,52 @@ test("skill batches reject later origin and case conflicts before installing the
         await assert.rejects(importUserSkills(root, ["fresh", "demo"], true, home), /unique without case sensitivity/u);
         assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
     });
+});
+
+test("application update installs only a downloaded offered release and rejects unsafe proxy values", () =>
+{
+    const initial = initialAppUpdateStatus("1.2.1");
+    assert.throws(() => beginAppUpdateDownload(initial), /cannot download while idle/u);
+    assert.throws(() => assertAppUpdateInstallable(initial), /cannot install while idle/u);
+    assert.throws(() => markAppUpdateAvailable(initial, "1.3.0"), /cannot record an available update while idle/u);
+    assert.throws(() => beginAppUpdateCheck({ ...initial, phase: "checking" }), /cannot check while checking/u);
+    assert.throws(() => beginAppUpdateCheck({ ...initial, phase: "downloading" }), /cannot check while downloading/u);
+    assert.throws(() => assertReleaseVersion("01.2.3"), /SemVer/u);
+    assert.throws(() => assertReleaseVersion("v1.2.3"), /SemVer/u);
+
+    const checking = beginAppUpdateCheck(initial);
+    const available = markAppUpdateAvailable(checking, "1.3.0-beta.1");
+    assert.equal(available.availableVersion, "1.3.0-beta.1");
+    const downloading = beginAppUpdateDownload(available);
+    assert.equal(updateAppUpdateProgress(downloading, 140.2).percent, 100);
+    assert.throws(() => updateAppUpdateProgress(downloading, Number.NaN), /finite/u);
+    const failedDownload = failAppUpdate(updateAppUpdateProgress(downloading, 20), "  network reset  ");
+    assert.equal(failedDownload.phase, "available");
+    assert.equal(failedDownload.availableVersion, "1.3.0-beta.1");
+    assert.equal(failedDownload.percent, null);
+    assert.equal(failedDownload.message, "network reset");
+    assert.throws(() => failAppUpdate(downloading, " "), /1 to 500 characters, got 0/u);
+    assert.throws(() => failAppUpdate(downloading, "x".repeat(501)), /got 501/u);
+
+    const downloaded = markAppUpdateDownloaded(beginAppUpdateDownload(available));
+    assertAppUpdateInstallable(downloaded);
+    const installError = failAppUpdate(downloaded, "installer missing");
+    assert.equal(installError.phase, "error");
+    assert.equal(installError.availableVersion, "1.3.0-beta.1");
+    const current = markAppUpdateCurrent(beginAppUpdateCheck(initial));
+    assert.deepEqual(current, { phase: "current", currentVersion: "1.2.1", availableVersion: null, percent: null, message: null });
+    const unavailable = unavailableAppUpdateStatus("1.2.1");
+    assert.equal(unavailable.phase, "unavailable");
+    const checkError = failAppUpdate(beginAppUpdateCheck(unavailable), "missing latest.yml");
+    assert.equal(checkError.phase, "error");
+    assert.equal(checkError.availableVersion, null);
+    assert.equal(beginAppUpdateCheck(checkError).phase, "checking");
+
+    const authenticated = environmentProxy("http://user:p%40ss@127.0.0.1:8888");
+    assert.deepEqual(authenticated, { proxyRules: "http://127.0.0.1:8888", username: "user", password: "p@ss" });
+    assert.equal(authenticated.proxyRules.includes("p%40ss"), false);
+    assert.deepEqual(environmentProxy("127.0.0.1:8888"), { proxyRules: "http://127.0.0.1:8888", username: null, password: null });
+    assert.throws(() => environmentProxy("http://user:pass@127.0.0.1:8888 extra"), (error: unknown) => error instanceof HalignError && !error.message.includes("pass"));
+    assert.equal(environmentProxyBypass(" localhost, .github.com "), "localhost,.github.com");
+    assert.throws(() => environmentProxyBypass("localhost bad"), /host list/u);
 });

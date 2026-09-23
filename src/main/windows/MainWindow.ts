@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import appIcon from "../../../build/icon.ico?asset";
 import { loadWindowState, MIN_WINDOW_SIZE, trackWindowState } from "./WindowState.js";
+import { isAppUpdateInstallPending } from "../services/AppUpdateService.js";
 import { logMainError } from "../services/ConsoleService.js";
 
 let mainWindow: BrowserWindow | undefined;
@@ -96,6 +97,12 @@ async function openMainWindow(): Promise<BrowserWindow>
     mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     mainWindow.webContents.on("will-prevent-unload", (event) =>
     {
+        // The NSIS installer is already running. Cancelling quit cannot stop it.
+        if (isAppUpdateInstallPending())
+        {
+            event.preventDefault();
+            return;
+        }
         const window = getMainWindow();
         if (!window) return;
         const choice = dialog.showMessageBoxSync(window, {

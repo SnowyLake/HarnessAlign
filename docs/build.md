@@ -39,11 +39,13 @@ npm run build
 npm run build:win
 ```
 
-产物保存在 `release/`:
+产物保存在 `release/`. 这个命令固定 `--publish never`, 只在本地生成文件. `latest.yml` 和 `.blockmap` 需要与同一次构建的安装包一起上传, 安装版才能检查并下载更新. 发布步骤见 [AGENTS.md](../AGENTS.md).
 
 | 文件 | 用途 |
 | --- | --- |
 | `release/win-unpacked/HarnessAlign.exe` | 直接运行构建后的应用 |
 | `release/HarnessAlign-1.0.0-setup.exe` | Windows NSIS 安装包, 文件名中的版本随应用版本变化 |
+| `release/latest.yml` | 安装版检查更新时读取的版本和校验信息 |
+| `release/HarnessAlign-1.0.0-setup.exe.blockmap` | 增量下载用的块映射, 文件名中的版本随应用版本变化 |
 
 返回[项目首页](../README.md).
