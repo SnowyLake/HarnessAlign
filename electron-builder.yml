@@ -1,5 +1,9 @@
 appId: ai.harnessalign.desktop
 productName: Harness Align
+publish:
+  provider: github
+  owner: SnowyLake
+  repo: HarnessAlign
 directories:
   output: release
   buildResources: build
@@ -11,6 +15,9 @@ npmRebuild: false
 win:
   icon: build/icon.ico
   executableName: HarnessAlign
+  # Unsigned installers have no publisher identity, so Authenticode checks would reject every update.
+  # The sha512 in latest.yml still verifies the downloaded installer. Set this to true after code signing.
+  verifyUpdateCodeSignature: false
   target:
     - nsis
     - dir

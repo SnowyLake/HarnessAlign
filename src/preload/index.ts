@@ -5,6 +5,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { AppApi } from "../shared/contracts/AppApi.js";
 import { IPC_CHANNELS } from "../shared/contracts/IpcChannels.js";
+import type { AppUpdateStatus } from "../shared/models/AppUpdate.js";
 import type { AppSettings } from "../shared/models/AppSettings.js";
 import type { LogChange } from "../shared/models/Console.js";
 import type { Agent, Config, HarnessConfig, LayerOptionInput, RuleInput } from "../shared/models/Workspace.js";
@@ -35,6 +36,20 @@ const appApi: AppApi = {
     app: {
         getVersion: () => ipcRenderer.invoke(IPC_CHANNELS.appGetVersion),
         openExternal: (url) => ipcRenderer.invoke(IPC_CHANNELS.appOpenExternal, url),
+    },
+    appUpdate: {
+        status: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateStatus),
+        check: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateCheck),
+        download: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateDownload),
+        onChanged: (callback) =>
+        {
+            const listener = (_event: IpcRendererEvent, status: AppUpdateStatus): void => callback(status);
+            ipcRenderer.on(IPC_CHANNELS.appUpdateChanged, listener);
+            return () =>
+            {
+                ipcRenderer.removeListener(IPC_CHANNELS.appUpdateChanged, listener);
+            };
+        },
     },
     settings: {
         get: () => ipcRenderer.invoke(IPC_CHANNELS.settingsGet),

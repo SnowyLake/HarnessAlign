@@ -39,6 +39,7 @@
 - 引擎仅使用 `yaml` 和 `smol-toml`, 不依赖 Electron, React, Ant Design, CodeMirror, Zod 或 `fflate`.
 - Renderer 的通用界面框架固定为 Ant Design 6 与 `@ant-design/icons`. 标准控件和主题优先使用官方组件与 Design Token, CodeMirror 仅用于 Markdown 和 JSON 源码编辑. 不引入第二套通用 UI 组件或主题系统.
 - `fflate` 只允许 Electron Main 导入, 并且必须加入 `electron.vite.config.ts` 的 main `exclude`.
+- `electron-updater` 只允许 Electron Main 导入, 并且必须加入 `electron.vite.config.ts` 的 main `exclude`. 安装版用它检查固定的 GitHub Release, 不把更新地址或安装包路径交给 Renderer.
 - `src/shared/` 只保存可同时被 Main, Preload 和 Renderer 导入的契约. 不得导入 Electron, Node 副作用, DOM 或 React.
 - Renderer 只调用 `window.appApi`. 禁止向 Renderer 暴露通用 `ipcRenderer`.
 - BrowserWindow 默认 `nodeIntegration: false`, `contextIsolation: true`, `sandbox: true`, `webSecurity: true`.
@@ -87,11 +88,12 @@
 - `src/main/services/WorkspaceService.ts` 通过 `withWorkspace` 串行执行工作区读写, 失败后释放队列. 该模块不直接导入 Electron; 打开文件夹的 `shell.openPath` 调用留在 `WorkspaceHandlers.ts`.
 - `src/main/services/RemoteFetch.ts` 共享 Skills 与 GitHub 同步的网络请求和有界响应读取. Electron 中未设置环境变量代理时使用 `net.fetch`, 否则使用 Node `fetch`; Main 入口在运行时支持时启用环境变量代理. 响应超过大小限制时取消读取并释放 reader.
 - `src/main/services/GitHubSyncService.ts` 负责私有仓库快照读写, 同步预览, 共同基线与上传恢复记录. `SyncHandlers.ts` 负责 sender 和 payload 校验以及 `safeStorage` 凭据加解密. Token 不回传 Renderer, 不写入同步快照或日志.
+- `src/main/services/AppUpdateService.ts` 负责安装版的 GitHub Release 更新. 更新源只来自打包写入的 `app-update.yml`. 开发窗口不访问更新源. 检查和下载 IPC 不接收 Renderer 参数, 只有本次会话已下载完成且安装程序已启动时才关闭窗口. 安装程序启动后不再弹出未保存修改确认, 因为取消退出不能停止已经启动的安装包. `HTTP(S)_PROXY` 里的账号密码只通过更新器的 `login` 回调提供, 不写入代理规则, 状态或日志.
 - `src/preload/` 只把 typed `window.appApi` 暴露给 Renderer.
 - `src/renderer/src/` 是 React UI 源码目录. 标准界面控件直接使用 Ant Design 官方组件, 其下 `components/common/` 只保存 Ant Design 没有对应物的共享领域控件与反馈桥接, `features/` 保存业务界面, `stores/AppStore.ts` 只保存 UI 状态.
 - `.agents/skills/antd/SKILL.md` 是本仓库的 Ant Design 开发辅助规则, 面向在仓库工作的 Agent. 它不属于 `.harness-align/skills/`, 不参与产品的 Skills 发现, 安装或 `setup` 部署.
 - `src/shared/` 保存 IPC 契约, DTO 和 Zod schema. 引擎类型与 Shared DTO 需要并行维护, Shared 不得 import 引擎.
-- `tests/Halign.test.ts` 是唯一测试源文件, 使用 Node 内置 `node:test` 覆盖解析, 渲染, 生成, 部署, Skills, 源文件写回, 目录迁移, 路径安全, GitHub 同步与恢复, 工作区队列和会话日志. 网络行为使用 mock, 不连接真实 GitHub 仓库.
+- `tests/Halign.test.ts` 是唯一测试源文件, 使用 Node 内置 `node:test` 覆盖解析, 渲染, 生成, 部署, Skills, 源文件写回, 目录迁移, 路径安全, GitHub 同步与恢复, 工作区队列, 会话日志和应用更新状态. 网络行为使用 mock, 不连接真实 GitHub 仓库.
 - `dist/` 是引擎和测试的 `tsc` 输出.
 - `out/` 是 `electron-vite` 输出.
 - `package.json` 定义 ESM package, `engines`, `packageManager`, Electron 入口和 scripts, 不声明 `bin`.
@@ -106,6 +108,7 @@
 - `npm run dev` 启动 Electron 开发窗口. 窗口打开 `%USERPROFILE%\.harness-align`, 可视化管理 config / harness / layer / rule / agent / shared-rules / skills, 并调用同一套 `generate` / `setup`.
 - 打开 Harness 文件夹只接受 `window.appApi.workspace.openHarnessRoot(name)`. Main 经 `runIpc` 校验 sender 和名称类型, 在 `withWorkspace` 队列中调用 `resolveExistingHarnessRoot`, 从已保存配置解析目标后再执行 `shell.openPath`. 不接受 Renderer 提供的任意路径, 不使用未保存草稿, 不创建缺失目录; 打开失败必须返回含目标路径的错误.
 - 新增 privileged capability 时必须同步更新 `src/shared` 契约, Main handler, Preload `window.appApi` 和 Renderer 调用. 禁止只改其中一层.
+- 应用更新的 `check` 和 `download` 不接收 Renderer 参数. Main 只使用打包时写入的 `app-update.yml`, 并在下载完成前拒绝安装.
 
 ## 生成与写回
 
@@ -167,7 +170,7 @@ npm run dev
 - `npm run verify` 先编译引擎并类型检查 Main/Preload 与 Renderer, 再运行 `dist/tests/Halign.test.js`. 引擎只编译一次.
 - `npm run typecheck` 检查引擎, Main/Preload 和 Renderer. 引擎使用 `--noEmit`.
 - `npm run test` 会先编译引擎, 再使用 `node --test` 运行 `dist/tests/Halign.test.js`.
-- `npm run build` 使用 electron-vite 构建桌面壳. `npm run build:win` 再打 NSIS 安装包.
+- `npm run build` 使用 electron-vite 构建桌面壳. `npm run build:win` 再打 NSIS 安装包, 并固定 `--publish never`.
 - 修改 Ant Design UI 后, 按 `.agents/skills/antd/SKILL.md` 对变更路径运行 `antd lint <path> --format json`. `@ant-design/cli` 是按需开发辅助工具, 不加入应用依赖.
 - Windows sandbox 可能阻止 Node test runner 创建子进程. 发生真实权限错误时在获得权限后复跑, 不修改测试绕过边界.
 
@@ -181,7 +184,9 @@ npm run dev
 - 用户提供 `X.Y.Z` 或 `vX.Y.Z` 时去掉前导 `v`, 使用 npm 校验版本. 支持 `X.Y.Z-beta.1` 等 SemVer 预发布版本; tag 固定为 `v<version>`, 带预发布标识的版本在 GitHub 标记为 prerelease.
 - 正式交付物为 `release/v<version>/HarnessAlign-<version>-setup.exe`, 是包含 Electron 运行环境的 NSIS 安装包. `win-unpacked/` 用于检查打包结果, 不能只取其中的 `HarnessAlign.exe` 当作独立程序分发. 不上传 `dist/`, `out/`, 整个 `release/` 或用户配置.
 - 打包固定传入 `--x64 --publish never`, 防止架构随构建机器变化或 electron-builder 自动发布. 版本目录通过命令行覆盖 `directories.output`, 普通本地打包仍使用默认的 `release/`.
-- 当前仓库未配置代码签名或应用自动更新. 发布时记录实际签名状态, 未签名安装包可能触发 Windows 安全提示; 用户通过下载新安装包升级. 不上传自动更新元数据作为可用自动更新功能, 不在仓库或 Release Notes 保存签名凭据.
+- 当前仓库未配置代码签名. 发布时记录实际签名状态, 未签名安装包可能触发 Windows 安全提示. 不在仓库或 Release Notes 保存签名凭据.
+- 安装版通过 `electron-updater` 检查并安装 GitHub Release. 更新地址在打包时写入 `app-update.yml`, 固定为 `SnowyLake/HarnessAlign`. `win.verifyUpdateCodeSignature` 保持 `false`, 因为未签名安装包没有可核对的发行者; 下载完整性仍由同一次构建的 `latest.yml` sha512 校验. 配置代码签名后改为 `true`, 让打包写入发行者名称.
+- 每个正式 Release 必须同时上传同一次构建的 `HarnessAlign-<version>-setup.exe`, `latest.yml` 和 `HarnessAlign-<version>-setup.exe.blockmap`. 应用只跟随最新正式版. 早于该功能的已安装版本仍需手动安装一次包含更新器的版本.
 
 ### 发布步骤
 
@@ -200,7 +205,7 @@ npm run verify
 npm run build:win -- --x64 --publish never --config.directories.output=release/v<version>
 ```
 
-7. 确认本次命令成功生成非空的 `release/v<version>/HarnessAlign-<version>-setup.exe`, `release/v<version>/win-unpacked/HarnessAlign.exe` 和 `release/v<version>/win-unpacked/resources/app.asar`. 检查打包后应用的版本与目标一致, 不以旧产物存在代替本次构建成功. 干净环境中的安装, 启动, 页面, 升级和卸载测试为可选验证, 不作为发布前置条件. 不在开发机真实用户目录执行 Setup 作为发布测试, 不把未执行的安装测试报告为通过.
+7. 确认本次命令成功生成非空的 `release/v<version>/HarnessAlign-<version>-setup.exe`, `release/v<version>/HarnessAlign-<version>-setup.exe.blockmap`, `release/v<version>/latest.yml`, `release/v<version>/win-unpacked/HarnessAlign.exe` 和 `release/v<version>/win-unpacked/resources/app.asar`. `latest.yml` 的 `version` 必须是本次版本, `path` 必须是本次安装包文件名. 检查打包后应用的版本与目标一致, 不以旧产物存在代替本次构建成功. 干净环境中的安装, 启动, 页面, 升级和卸载测试为可选验证, 不作为发布前置条件. 不在开发机真实用户目录执行 Setup 作为发布测试, 不把未执行的安装测试报告为通过.
 8. 从上一个已发布版本 tag 到发布 commit 检查 commit 和实际 diff; 首次发布则依据当前功能编写首次版本说明. 由 AI 合并同类改动, 编写面向用户的 Markdown Release Notes, 去除纯发布, 格式化和内部维护噪声. 不直接复制 commit 列表, 不使用 `--generate-notes`, 不写入 diff 未确认的功能. 保存到本次 `.agent-sessions/<YYYYMMDD>-release-v<version>/release-notes.md`, 并在说明中交代 Windows x64 安装包和实际签名状态.
 9. 再次确认工作区干净, HEAD 仍为已验证的 `main` merge commit, 且远端 `main` 指向该 commit. 在此 commit 上创建 annotated tag 后只推送该 tag, 不使用 `git push --tags`.
 
@@ -214,12 +219,14 @@ git push origin v<version>
 ```powershell
 gh release create v<version> `
   "release/v<version>/HarnessAlign-<version>-setup.exe" `
+  "release/v<version>/HarnessAlign-<version>-setup.exe.blockmap" `
+  "release/v<version>/latest.yml" `
   --title "Harness Align v<version>" `
   --notes-file ".agent-sessions/<YYYYMMDD>-release-v<version>/release-notes.md" `
   --verify-tag
 ```
 
-11. 用 `gh release view v<version> --json url,tagName,isDraft,isPrerelease,assets` 核对 Release URL, tag, 发布状态和安装包名称及大小. 下载该安装包至本次会话目录, 用 `Get-FileHash -Algorithm SHA256` 与本地产物比对. 确认 tag 指向已验证的 merge commit, `main` 与 `origin/main` 同步且工作区干净.
+11. 用 `gh release view v<version> --json url,tagName,isDraft,isPrerelease,assets` 核对 Release URL, tag, 发布状态, 以及安装包, `latest.yml` 和 blockmap 的名称及大小. 下载该安装包至本次会话目录, 用 `Get-FileHash -Algorithm SHA256` 与本地产物比对. 确认 tag 指向已验证的 merge commit, `main` 与 `origin/main` 同步且工作区干净.
 12. GitHub Release 创建并核验成功后, 执行 `git switch develop` 切回开发分支, 确认工作区干净且 `develop` 与 `origin/develop` 同步, 再报告发布成功和 Release 链接.
 
 ### 失败与重试

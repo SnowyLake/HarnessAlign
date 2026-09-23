@@ -3,6 +3,7 @@
  * Shared code must not import Electron, Node, DOM, or React.
  */
 
+import type { AppUpdateStatus } from "../models/AppUpdate.js";
 import type { AppSettings } from "../models/AppSettings.js";
 import type { LogChange, LogInput, LogSnapshot } from "../models/Console.js";
 import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncDiscardInput, SyncPreview, SyncResult, SyncStatus } from "../models/Sync.js";
@@ -40,6 +41,12 @@ export interface AppApi
     app: {
         getVersion(): Promise<string>;
         openExternal(url: string): Promise<void>;
+    };
+    appUpdate: {
+        status(): Promise<AppUpdateStatus>;
+        check(): Promise<AppUpdateStatus>;
+        download(): Promise<AppUpdateStatus>;
+        onChanged(callback: (status: AppUpdateStatus) => void): () => void;
     };
     settings: {
         get(): Promise<AppSettings>;
