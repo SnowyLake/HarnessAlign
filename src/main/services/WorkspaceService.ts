@@ -23,12 +23,13 @@ import {
     saveLayerOption,
     saveRule,
     saveSharedRule,
+    saveSkillContent,
     updateHarness,
 } from "../../engine/Edit.js";
 import { generate, readGeneratedFiles, reportGenerate } from "../../engine/Generate.js";
 import { reportSetup, setup } from "../../engine/Setup.js";
 import type { AppApi } from "../../shared/contracts/AppApi.js";
-import { importUserSkills, listUserSkills, removeSkill } from "../../engine/Skills.js";
+import { importUserSkills, listImportableUserSkills, readSkillContent, removeSkill } from "../../engine/Skills.js";
 import * as skillRemote from "./SkillRemoteService.js";
 
 /** Tail of the single-user workspace queue, including reads that must see complete writes. */
@@ -112,6 +113,12 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot"> = {
     /** Discover remote skills from configured GitHub sources. */
     discoverSkills: () => withWorkspace((root) => skillRemote.discoverSkills(root)),
 
+    /** Read one remote SKILL.md from the current discovery cache. */
+    readDiscoveredSkillContent: (previewId) => withWorkspace((root) => skillRemote.readDiscoveredSkillContent(root, previewId)),
+
+    /** Install the exact skill selected from the current discovery cache. */
+    installDiscoveredSkill: (previewId) => withWorkspace((root) => skillRemote.installDiscoveredSkill(root, previewId)),
+
     /** Install selected discovered skills into the project. */
     installSkills: (ids) => withWorkspace((root) => skillRemote.installSkills(root, ids)),
 
@@ -121,8 +128,14 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot"> = {
     /** Apply remote updates for selected installed skills. */
     applySkillUpdates: (ids) => withWorkspace((root) => skillRemote.applySkillUpdates(root, ids)),
 
+    /** Read one installed skill's main Markdown file. */
+    readSkillContent: (id) => withWorkspace((root) => readSkillContent(root, id)),
+
+    /** Save one local skill's main Markdown file. */
+    saveSkillContent: (id, content, expectedContent) => withWorkspace((root) => saveSkillContent(root, id, content, expectedContent)),
+
     /** List skills under the current user profile. */
-    listUserSkills: () => withWorkspace(() => listUserSkills()),
+    listUserSkills: () => withWorkspace((root) => listImportableUserSkills(root)),
 
     /** Import selected user-profile skills into the project. */
     importUserSkills: (ids, overwrite) => withWorkspace((root) => importUserSkills(root, ids, overwrite)),

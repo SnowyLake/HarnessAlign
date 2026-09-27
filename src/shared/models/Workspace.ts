@@ -65,6 +65,7 @@ export interface ProjectSkill extends UserSkill
 /** Skill discovered under a remote GitHub skill source. */
 export interface RemoteSkill extends UserSkill, SkillSource
 {
+    previewId: string;
     sourcePath: string;
     conflict: boolean;
 }

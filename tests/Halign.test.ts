@@ -19,7 +19,7 @@ import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/Ap
 import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
-import { checkSkillUpdates, discoverSkills, hydrateSyncSkills, installSkills } from "../src/main/services/SkillRemoteService.js";
+import { checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent } from "../src/main/services/SkillRemoteService.js";
 import { applySync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
@@ -35,11 +35,11 @@ import { loadConfig, validateConfig } from "../src/engine/Load.js";
 import { HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
 import { reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
-import { assertSafeZipEntry, importUserSkills, listUserSkills, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
+import { assertSafeZipEntry, importUserSkills, listImportableUserSkills, listUserSkills, readSkillContent, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
     loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkillSource,
-    renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, updateHarness,
+    renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, saveSkillContent, updateHarness,
     applySyncSources, recoverSyncSources, validateSyncSources,
 } from "../src/engine/Edit.js";
 
@@ -60,17 +60,15 @@ const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
 test("Discover excludes installed skill ids across origins and casing, and allows removed skills again", () =>
 {
     const discovered: RemoteSkill[] = ["downloaded", "imported", "unknown", "available", "conflict"].map((id) => ({
-        id, title: id, description: "", owner: "example", name: "repo", branch: "main", sourcePath: id, conflict: id === "conflict",
+        id, title: id, description: "", owner: "example", name: "repo", branch: "main", sourcePath: id, previewId: id, conflict: id === "conflict",
     }));
     const installed: ProjectSkill[] = [
         { id: "Downloaded", title: "", description: "", origin: { kind: "github", owner: "other", name: "source", branch: "old", sourcePath: "", contentHash: "hash" } },
         { id: "imported", title: "", description: "", origin: { kind: "local", contentHash: "hash" } },
         { id: "unknown", title: "", description: "", origin: { kind: "unknown" } },
     ];
-    const selected = ["downloaded", "available", "conflict"];
     const selectable = selectableRemoteSkillIds(discovered, installed);
     assert.deepEqual([...selectable], ["available"]);
-    assert.deepEqual(selected.filter((id) => selectable.has(id)), ["available"]);
     assert.deepEqual([...selectableRemoteSkillIds(discovered, [])], ["downloaded", "imported", "unknown", "available"]);
 });
 
@@ -130,6 +128,12 @@ test("session console retains ordered history across hydration and navigation, a
 /** Small valid GitHub-shaped archive used by remote discovery checks. */
 const TEST_SKILL_ARCHIVE = Buffer.from(
     "UEsDBBQAAAAIAFgSKF30xqGHCQAAAAcAAAAXAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRTVnBJzc3nAgBQSwECFAAUAAAACABYEihd9MahhwkAAAAHAAAAFwAAAAAAAAAAAAAAAAAAAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRQSwUGAAAAAAEAAQBFAAAAPgAAAAAA",
+    "base64",
+);
+
+/** Valid ZIP whose discovered SKILL.md contains invalid UTF-8. */
+const INVALID_SKILL_MARKDOWN_ARCHIVE = Buffer.from(
+    "UEsDBBQAAAAIAHEhPF0AAAD/AwAAAAEAAAAXAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWT7DwBQSwECFAAUAAAACABxITxdAAAA/wMAAAABAAAAFwAAAAAAAAAAAAAAAAAAAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRQSwUGAAAAAAEAAQBFAAAAOAAAAAAA",
     "base64",
 );
 
@@ -2038,7 +2042,7 @@ test("installSkillFromDirectory copies a local extracted skill into .harness-ali
     });
 });
 
-test("importUserSkills respects overwrite and records local origin", async () =>
+test("importUserSkills respects local overwrite and rejects GitHub replacement", async () =>
 {
     await withProject(async (root) =>
     {
@@ -2064,9 +2068,40 @@ test("importUserSkills respects overwrite and records local origin", async () =>
         }, true);
         assert.equal((await loadSkills(root))[0]?.origin.kind, "github");
         await writeFile(join(userSkill, "SKILL.md"), "---\nname: User Demo\n---\n\nImported over github.\n", "utf8");
-        await importUserSkills(root, ["demo"], true, userProfile);
+        const localUserSkill = join(userProfile, ".agents", "skills", "private");
+        await mkdir(localUserSkill);
+        await writeFile(join(localUserSkill, "SKILL.md"), "# Private\n");
+        assert.deepEqual((await listImportableUserSkills(root, userProfile)).map((skill) => skill.id), ["private"]);
+        await assert.rejects(importUserSkills(root, ["demo"], true, userProfile), /GitHub skill cannot be imported over/u);
+        assert.equal((await loadSkills(root))[0]?.origin.kind, "github");
+        await removeSkill(root, "demo");
+        await importUserSkills(root, ["demo"], false, userProfile);
         assert.equal(await readFile(join(root, ".harness-align", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: User Demo\n---\n\nImported over github.\n");
         assert.equal((await loadSkills(root))[0]?.origin.kind, "local");
+    });
+});
+
+test("skill content save protects GitHub origins and stale edits while updating local hash", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const source = join(root, "skill-source");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Original\n");
+        await installSkillFromDirectory(root, "local", source, { kind: "local", contentHash: "" });
+        const original = await readSkillContent(root, "local");
+        await saveSkillContent(root, "local", "# Edited\r\n", original);
+        assert.equal(await readSkillContent(root, "local"), "# Edited\n");
+        assert.equal((await loadSkillIndex(root)).local?.contentHash, await hashSkillDirectory(join(root, ".harness-align", "skills", "local")));
+        await assert.rejects(saveSkillContent(root, "local", "# Stale", original), /content changed/u);
+        await installSkillFromDirectory(root, "remote", source, { kind: "github", owner: "acme", name: "repo", branch: "main", sourcePath: "remote", contentHash: "" });
+        const remoteOriginal = await readSkillContent(root, "remote");
+        await assert.rejects(saveSkillContent(root, "remote", "# Edited", remoteOriginal), /read only/u);
+        assert.equal(await readSkillContent(root, "remote"), remoteOriginal);
+        await mkdir(join(root, ".harness-align", "skills", "unknown"));
+        await writeFile(join(root, ".harness-align", "skills", "unknown", "SKILL.md"), "# Unknown\n");
+        await saveSkillContent(root, "unknown", "# Editable", "# Unknown\n");
+        assert.equal(await readSkillContent(root, "unknown"), "# Editable\n");
     });
 });
 
@@ -2804,6 +2839,42 @@ test("discovery cache no longer installs skills after their source is removed", 
             await removeSkillSource(root, "example", "repo");
             await assert.rejects(installSkills(root, ["demo"]), /latest discover results/u);
             assert.deepEqual(await loadSkills(root), []);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("discovered SKILL.md previews use the current cache and report invalid Markdown encoding", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await addSkillSource(root, { url: "https://github.com/example/repo" });
+        let archive = TEST_SKILL_ARCHIVE;
+        let requests = 0;
+        const mocked = t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) =>
+        {
+            requests += 1;
+            return String(url).includes("/commits/") ? Response.json({ sha: "a".repeat(40) }) : new Response(archive);
+        });
+        try
+        {
+            const first = (await discoverSkills(root))[0]!;
+            assert.match(await readDiscoveredSkillContent(root, first.previewId), /^# /u);
+            assert.equal(requests, 2);
+            await assert.rejects(readDiscoveredSkillContent(root, "00000000-0000-4000-8000-000000000000"), /latest discover results/u);
+            assert.match(await installDiscoveredSkill(root, first.previewId), /Installed 1 skill\(s\)/u);
+            archive = INVALID_SKILL_MARKDOWN_ARCHIVE;
+            const invalid = (await discoverSkills(root))[0]!;
+            await assert.rejects(readDiscoveredSkillContent(root, first.previewId), /latest discover results/u);
+            await assert.rejects(installDiscoveredSkill(root, first.previewId), /latest discover results/u);
+            await assert.rejects(readDiscoveredSkillContent(root, invalid.previewId), /example\/repo\/demo\/SKILL.md: invalid UTF-8/u);
+            await removeSkillSource(root, "example", "repo");
+            await assert.rejects(readDiscoveredSkillContent(root, invalid.previewId), /latest discover results/u);
+            await assert.rejects(installDiscoveredSkill(root, invalid.previewId), /latest discover results/u);
+            assert.equal(requests, 4);
         }
         finally
         {

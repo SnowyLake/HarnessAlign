@@ -126,6 +126,16 @@ export function registerWorkspaceHandlers(): void
         return workspaceService.discoverSkills();
     }));
 
+    ipcMain.handle(IPC_CHANNELS.workspaceReadDiscoveredSkillContent, (event, previewId: unknown) => runIpc(event, async () =>
+    {
+        return workspaceService.readDiscoveredSkillContent(z.uuid().parse(previewId));
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceInstallDiscoveredSkill, (event, previewId: unknown) => runIpc(event, async () =>
+    {
+        return workspaceService.installDiscoveredSkill(z.uuid().parse(previewId));
+    }));
+
     ipcMain.handle(IPC_CHANNELS.workspaceInstallSkills, (event, ids: unknown) => runIpc(event, async () =>
     {
         return workspaceService.installSkills(SKILL_IDS_SCHEMA.parse(ids));
@@ -139,6 +149,16 @@ export function registerWorkspaceHandlers(): void
     ipcMain.handle(IPC_CHANNELS.workspaceApplySkillUpdates, (event, ids: unknown) => runIpc(event, async () =>
     {
         return workspaceService.applySkillUpdates(SKILL_IDS_SCHEMA.parse(ids));
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceReadSkillContent, (event, id: unknown) => runIpc(event, async () =>
+    {
+        return workspaceService.readSkillContent(z.string().parse(id));
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveSkillContent, (event, id: unknown, content: unknown, expectedContent: unknown) => runIpc(event, async () =>
+    {
+        await workspaceService.saveSkillContent(z.string().parse(id), z.string().parse(content), z.string().parse(expectedContent));
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceListUserSkills, (event) => runIpc(event, async () =>

@@ -7,7 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, posix, relative, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, reparseError, resolveUserHome } from "./FsSafe.js";
+import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, lstatIfExists, readUtf8, reparseError, resolveUserHome } from "./FsSafe.js";
 import {
     codePointCompare,
     assertWindowsSafeName,
@@ -176,14 +176,14 @@ async function listSkillFiles(skillDirectory: string): Promise<string[]>
 }
 
 /** SHA-256 hash of non-hidden skill files using path + NUL + bytes + NUL. */
-export async function hashSkillDirectory(skillDirectory: string): Promise<string>
+export async function hashSkillDirectory(skillDirectory: string, skillContent?: Buffer): Promise<string>
 {
     const hash = createHash("sha256");
     for (const relative of await listSkillFiles(skillDirectory))
     {
         hash.update(relative);
         hash.update("\0");
-        hash.update(await fs.readFile(join(skillDirectory, ...relative.split("/"))));
+        hash.update(relative === "SKILL.md" && skillContent ? skillContent : await fs.readFile(join(skillDirectory, ...relative.split("/"))));
         hash.update("\0");
     }
     return hash.digest("hex");
@@ -275,14 +275,20 @@ export function parseSkillIndex(parsed: unknown): SkillIndex
     return index;
 }
 
+/** Encode skill provenance in deterministic id order. */
+export function serializeSkillIndex(index: SkillIndex): Buffer
+{
+    const skills: Record<string, SkillIndexEntry> = {};
+    for (const id of Object.keys(index).sort(codePointCompare)) skills[id] = index[id]!;
+    return Buffer.from(`${JSON.stringify({ skills }, null, 2)}\n`, "utf8");
+}
+
 /** Atomically write `.harness-align/skills/index.json`. */
 export async function writeSkillIndex(root: string, index: SkillIndex): Promise<void>
 {
     const path = join(root, ".harness-align", "skills", "index.json");
     await ensureRegularSource(root, path);
-    const skills: Record<string, SkillIndexEntry> = {};
-    for (const id of Object.keys(index).sort(codePointCompare)) skills[id] = index[id]!;
-    await atomicWrite(path, Buffer.from(`${JSON.stringify({ skills }, null, 2)}\n`, "utf8"));
+    await atomicWrite(path, serializeSkillIndex(index));
 }
 
 /** Convert an index entry into a runtime skill origin. */
@@ -352,6 +358,17 @@ export async function loadSkills(root: string): Promise<ProjectSkill[]>
         }
     }
     return skills;
+}
+
+/** Read the main Markdown file of an installed skill without accepting a renderer path. */
+export async function readSkillContent(rootPath: string, id: string): Promise<string>
+{
+    const root = resolve(rootPath);
+    const skillId = assertSkillName(id, `.harness-align/skills/${id}`);
+    if (!(await loadSkills(root)).some((skill) => skill.id === skillId)) throw new HalignError(`.harness-align/skills/${skillId}: skill does not exist`);
+    const path = join(root, ".harness-align", "skills", skillId, "SKILL.md");
+    await ensureRegularSource(root, path);
+    return readUtf8(root, path);
 }
 
 /** Copy non-hidden skill content, preserving empty directories and refusing links. */
@@ -549,6 +566,13 @@ export async function listUserSkills(userProfile = process.env.USERPROFILE): Pro
     return skills;
 }
 
+/** List user skills that are not already managed as GitHub skills in this project. */
+export async function listImportableUserSkills(root: string, userProfile = process.env.USERPROFILE): Promise<UserSkill[]>
+{
+    const githubIds = new Set((await loadSkills(root)).filter((skill) => skill.origin.kind === "github").map((skill) => skill.id.toLowerCase()));
+    return (await listUserSkills(userProfile)).filter((skill) => !githubIds.has(skill.id.toLowerCase()));
+}
+
 /** Import selected user-profile skills into the project skills directory. */
 export async function importUserSkills(
     rootPath: string,
@@ -581,6 +605,10 @@ export async function importUserSkills(
         const sourceStats = await lstatIfExists(source);
         if (!sourceStats?.isDirectory()) throw new HalignError(`${source}: skill does not exist`);
         const collision = existing.find((skill) => skill.id.toLowerCase() === skillId.toLowerCase());
+        if (collision?.origin.kind === "github")
+        {
+            throw new HalignError(`.harness-align/skills/${collision.id}: GitHub skill cannot be imported over; remove it before importing a local skill`);
+        }
         if (collision && !overwrite)
         {
             throw new HalignError(`.harness-align/skills/${collision.id}: skill already exists; pass overwrite to replace it`);

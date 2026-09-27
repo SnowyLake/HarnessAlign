@@ -6,22 +6,26 @@ import {
     CloudDownloadOutlined,
     CloseOutlined,
     DeleteOutlined,
+    EllipsisOutlined,
     ExportOutlined,
     GithubOutlined,
     ImportOutlined,
     PlusOutlined,
     ReloadOutlined,
+    SaveOutlined,
     SearchOutlined,
-    ThunderboltOutlined,
+    UndoOutlined,
     WarningOutlined,
 } from "@ant-design/icons";
 import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, UserSkill, Workspace } from "@shared/models/Workspace";
-import { Alert, Avatar, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Listy, Modal, Select, Space, Tabs, Tag, Tooltip, Typography, type TabsProps } from "antd";
-import { useEffect, useState, type ReactNode } from "react";
+import { Alert, Avatar, Button, Card, Checkbox, Drawer, Dropdown, Empty, Flex, Form, Input, Listy, Modal, Segmented, Select, Space, Splitter, Tooltip, Typography, type MenuProps } from "antd";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
-import { refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { SourceEditor } from "@/components/common/SourceEditor";
+import { persistEditorSnapshot, refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { TreeButton } from "@/features/workspace/WorkspaceTree";
 import { selectableRemoteSkillIds } from "@/lib/Utils";
-import { useAppStore } from "@/stores/AppStore";
+import { selectionKey, useAppStore } from "@/stores/AppStore";
 
 /** Which list the panel currently shows. */
 type SkillsListView = "installed" | "discover";
@@ -67,6 +71,12 @@ function remoteHaystacks(skill: RemoteSkill): string[]
     return [skill.id, skill.title, skill.description, `${skill.owner}/${skill.name}`, skill.sourcePath];
 }
 
+/** Identify a discovered row by its complete source identity. */
+function remoteIdentity(skill: RemoteSkill): string
+{
+    return JSON.stringify([skill.owner, skill.name, skill.branch, skill.sourcePath]);
+}
+
 /** Build counted origin filters from registered sources and installed skills. */
 function originBuckets(skillSources: readonly { owner: string; name: string }[], installed: readonly ProjectSkill[]): OriginBucket[]
 {
@@ -90,68 +100,6 @@ function originBuckets(skillSources: readonly { owner: string; name: string }[],
 function isOutdated(update: SkillUpdate): boolean
 {
     return !update.error && update.currentHash !== update.remoteHash;
-}
-
-/** Render one official icon button with a tooltip label. */
-function IconAction({ label, disabled, danger, onClick, icon }: { label: string; disabled?: boolean; danger?: boolean; onClick?: () => void; icon: ReactNode })
-{
-    return (
-        <Tooltip title={label}>
-            <Button type="text" danger={Boolean(danger)} disabled={Boolean(disabled)} aria-label={label} icon={icon} onClick={() => onClick?.()} />
-        </Tooltip>
-    );
-}
-
-/** Render GitHub provenance or a local origin tag. */
-function OriginMeta({ origin }: { origin: SkillOrigin })
-{
-    if (origin.kind === "github")
-    {
-        const repo = `${origin.owner}/${origin.name}`;
-        return (
-            <Button
-                type="link"
-                size="small"
-                icon={<ExportOutlined />}
-                onClick={() => void window.appApi.app.openExternal(`https://github.com/${repo}`).catch((error: unknown) => showError(error, "Open link failed"))}
-            >
-                {repo}
-            </Button>
-        );
-    }
-    return <Tag>{origin.kind === "local" ? "Local" : "Unknown"}</Tag>;
-}
-
-/** Render one installed skill row with update and removal actions. */
-function InstalledSkillRow({ skill, update, isBusy, onUpdate, onRemove }: {
-    skill: ProjectSkill;
-    update: SkillUpdate | undefined;
-    isBusy: boolean;
-    onUpdate: (id: string) => void;
-    onRemove: (id: string) => void;
-})
-{
-    const actions: ReactNode[] = [];
-    if (update?.error)
-    {
-        actions.push(<Tooltip key="error" title="Update check failed. See Console for details."><Typography.Text type="danger" tabIndex={0} aria-label="Update check failed"><WarningOutlined /></Typography.Text></Tooltip>);
-    }
-    else if (update && isOutdated(update))
-    {
-        actions.push(<IconAction key="update" label="Apply update" disabled={isBusy} onClick={() => onUpdate(skill.id)} icon={<CloudDownloadOutlined />} />);
-    }
-    actions.push(<IconAction key="remove" label="Remove" danger disabled={isBusy} onClick={() => onRemove(skill.id)} icon={<DeleteOutlined />} />);
-
-    return (
-        <div className="app-list-row">
-            <Avatar className="skill-avatar" shape="square" icon={<ThunderboltOutlined />} />
-            <div className="app-list-copy">
-                <Space size={8} wrap><Typography.Text strong>{skill.id}</Typography.Text><OriginMeta origin={skill.origin} /></Space>
-                {skill.description ? <Typography.Text type="secondary">{skill.description}</Typography.Text> : null}
-            </div>
-            <Space size={4}>{actions}</Space>
-        </div>
-    );
 }
 
 /** Render one selectable skill row for discover and import pickers. */
@@ -310,37 +258,195 @@ function SkillSourcesSection({ workspace }: { workspace: Workspace })
     );
 }
 
+/** Show one installed SKILL.md and save edits only for local or unknown origins. */
+function SkillContentPane({ workspace, skill }: { workspace: Workspace; skill: ProjectSkill | undefined })
+{
+    const isBusy = useAppStore((state) => state.isBusy);
+    const draft = useAppStore((state) => skill ? state.editorDrafts[selectionKey({ kind: "skill", id: skill.id })] : undefined);
+    const [source, setSource] = useState<{ id: string; content: string }>();
+    const [loadError, setLoadError] = useState<string>();
+    const [saveError, setSaveError] = useState<string>();
+    const [revision, setRevision] = useState(0);
+    const formRef = useRef<HTMLFormElement>(null);
+
+    useEffect(() =>
+    {
+        let cancelled = false;
+        setSource(undefined);
+        setLoadError(undefined);
+        setSaveError(undefined);
+        if (!skill) return;
+        void window.appApi.workspace.readSkillContent(skill.id).then((content) =>
+        {
+            if (!cancelled) setSource({ id: skill.id, content });
+        }).catch((error: unknown) =>
+        {
+            if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
+        });
+        return () => { cancelled = true; };
+    }, [skill?.id, workspace]);
+
+    if (!skill) return <div className="workspace-editor"><div className="workspace-load-state"><Empty description="Select an installed skill to view SKILL.md" /></div></div>;
+    const isReadOnly = skill.origin.kind === "github";
+    const selection = { kind: "skill" as const, id: skill.id };
+    const editorKey = selectionKey(selection);
+    const currentSource = source?.id === skill.id ? source.content : undefined;
+    const expectedContent = draft?.baseline.content?.[0] ?? currentSource;
+
+    return (
+        <div className="workspace-editor">
+            <Flex className="workspace-editor-toolbar" align="center" justify="space-between" gap={12}>
+                <Typography.Text strong ellipsis={{ tooltip: `${skill.id}/SKILL.md` }} className="workspace-editor-title">{skill.id}/SKILL.md</Typography.Text>
+                {isReadOnly ? <Typography.Text type="secondary">Read only</Typography.Text> : <Space size={8}>
+                    {draft ? <Button type="text" icon={<UndoOutlined />} disabled={isBusy} onClick={() =>
+                    {
+                        useAppStore.getState().clearEditorDraft(editorKey);
+                        setRevision((current) => current + 1);
+                    }}>Discard changes</Button> : null}
+                    <Button icon={<SaveOutlined />} disabled={isBusy || !draft || currentSource === undefined} onClick={() => formRef.current?.requestSubmit()}>Save file</Button>
+                </Space>}
+            </Flex>
+            <div className="workspace-scroll">
+                <div className="workspace-editor-page">
+                    {loadError ? <Alert className="editor-alert" type="error" title={loadError} showIcon /> : null}
+                    {saveError ? <Alert className="editor-alert" type="error" title={saveError} showIcon /> : null}
+                    {currentSource === undefined ? loadError ? null : <Empty description="Loading SKILL.md" /> : isReadOnly
+                        ? <Form component={false} layout="vertical" requiredMark={false}>
+                            <Form.Item label="Body"><SourceEditor key={`${skill.id}:${currentSource}`} aria-label={`${skill.id} SKILL.md`} language="markdown" defaultValue={currentSource} readOnly /></Form.Item>
+                        </Form>
+                        : <form key={`${skill.id}:${currentSource}:${revision}`} ref={formRef} className="editor-form" onInput={(event) =>
+                        {
+                            const current = String(new FormData(event.currentTarget).get("content") ?? "");
+                            useAppStore.getState().setEditorDraft(editorKey, current === expectedContent && expectedContent === currentSource ? undefined : {
+                                selection,
+                                baseline: { content: [expectedContent ?? ""], expectedContent: [expectedContent ?? ""] },
+                                current: { content: [current], expectedContent: [expectedContent ?? ""] },
+                            });
+                        }} onSubmit={(event) =>
+                        {
+                            event.preventDefault();
+                            const content = String(new FormData(event.currentTarget).get("content") ?? "");
+                            setSaveError(undefined);
+                            void runMutation(async () =>
+                            {
+                                await persistEditorSnapshot(workspace, selection, { content: [content], expectedContent: [expectedContent ?? ""] });
+                                useAppStore.getState().clearEditorDraft(editorKey);
+                                showSuccess("Skill saved", `Saved ${skill.id}/SKILL.md`);
+                                await refreshWorkspace(selection);
+                            }).then((result) => { if (!result.ok) setSaveError(result.message); });
+                        }}>
+                            <Form component={false} layout="vertical" requiredMark={false}>
+                                <Form.Item label="Body"><SourceEditor aria-label={`${skill.id} SKILL.md`} name="content" language="markdown" defaultValue={draft?.current.content?.[0] ?? currentSource} /></Form.Item>
+                            </Form>
+                        </form>}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/** Preview one discovered SKILL.md from the Main cache and install only that skill. */
+function DiscoveredSkillPane({ skill, isInstalled, canInstall, isBusy, onInstall }: {
+    skill: RemoteSkill | undefined;
+    isInstalled: boolean;
+    canInstall: boolean;
+    isBusy: boolean;
+    onInstall: (skill: RemoteSkill) => void;
+})
+{
+    const [source, setSource] = useState<{ previewId: string; content: string }>();
+    const [loadError, setLoadError] = useState<{ previewId: string; message: string }>();
+
+    useEffect(() =>
+    {
+        let cancelled = false;
+        setSource(undefined);
+        setLoadError(undefined);
+        if (!skill) return;
+        void Promise.resolve().then(() => window.appApi.workspace.readDiscoveredSkillContent(skill.previewId)).then((content) =>
+        {
+            if (!cancelled)
+            {
+                setSource({ previewId: skill.previewId, content });
+                setLoadError(undefined);
+            }
+        }).catch((error: unknown) =>
+        {
+            if (!cancelled) setLoadError({ previewId: skill.previewId, message: error instanceof Error ? error.message : String(error) });
+        });
+        return () => { cancelled = true; };
+    }, [skill?.previewId]);
+
+    if (!skill) return <div className="workspace-editor"><div className="workspace-load-state"><Empty description="Select a discovered skill to view SKILL.md" /></div></div>;
+    const content = source?.previewId === skill.previewId ? source.content : undefined;
+    const error = loadError?.previewId === skill.previewId ? loadError.message : undefined;
+    return (
+        <div className="workspace-editor">
+            <Flex className="workspace-editor-toolbar" align="center" justify="space-between" gap={12}>
+                <Flex align="center" gap={12} className="workspace-editor-title">
+                    <Typography.Text strong ellipsis={{ tooltip: `${skill.id}/SKILL.md` }}>{skill.id}/SKILL.md</Typography.Text>
+                    <Button type="link" size="small" icon={<ExportOutlined />} styles={{ root: { paddingInline: 0 } }}
+                        onClick={() => void window.appApi.app.openExternal(`https://github.com/${skill.owner}/${skill.name}`).catch((linkError: unknown) => showError(linkError, "Open link failed"))}>
+                        {skill.owner}/{skill.name}
+                    </Button>
+                </Flex>
+                <Tooltip title={skill.conflict ? "This skill id appears in multiple sources." : undefined}>
+                    <span><Button icon={<CloudDownloadOutlined />} disabled={isBusy || !canInstall || content === undefined || Boolean(error)} onClick={() => onInstall(skill)}>
+                        {isInstalled ? "Installed" : "Install"}
+                    </Button></span>
+                </Tooltip>
+            </Flex>
+            <div className="workspace-scroll">
+                <div className="workspace-editor-page">
+                    {error ? <Alert className="editor-alert" type="error" title="Preview failed" description={error} showIcon /> : null}
+                    <Form component={false} layout="vertical" requiredMark={false}>
+                        <Form.Item label="Body">
+                            {content === undefined ? error ? null : <Empty description="Loading SKILL.md" />
+                                : <SourceEditor key={skill.previewId} aria-label={`${skill.id} SKILL.md`} language="markdown" defaultValue={content} readOnly />}
+                        </Form.Item>
+                    </Form>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 /** Render the complete Ant Design Skills management page. */
 export function SkillsPanel()
 {
     const workspace = useAppStore((state) => state.workspace);
     const isBusy = useAppStore((state) => state.isBusy);
+    const selection = useAppStore((state) => state.selection);
+    const setSelection = useAppStore((state) => state.setSelection);
     const [listView, setListView] = useState<SkillsListView>("installed");
     const [originFilter, setOriginFilter] = useState<OriginFilter>("all");
     const [discovered, setDiscovered] = useState<RemoteSkill[]>([]);
     const [hasDiscovered, setHasDiscovered] = useState(false);
     const [updates, setUpdates] = useState<SkillUpdate[]>([]);
     const [userSkills, setUserSkills] = useState<UserSkill[]>([]);
-    const [selectedRemote, setSelectedRemote] = useState<string[]>([]);
+    const [selectedRemoteIdentity, setSelectedRemoteIdentity] = useState<string>();
     const [selectedImport, setSelectedImport] = useState<string[]>([]);
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [isRegistrationOpen, setIsRegistrationOpen] = useState(false);
     const [isOverwriteOpen, setIsOverwriteOpen] = useState(false);
     const [removeId, setRemoveId] = useState<string>();
     const [filter, setFilter] = useState("");
-
-    const selectableRemoteIds = selectableRemoteSkillIds(discovered, workspace?.skills ?? []);
-    const selectedRemoteIds = selectedRemote.filter((id) => selectableRemoteIds.has(id));
+    const sourceKey = JSON.stringify(workspace?.config.skillSources ?? []);
 
     useEffect(() =>
     {
-        const selectableIds = selectableRemoteSkillIds(discovered, workspace?.skills ?? []);
-        setSelectedRemote((current) => current.filter((id) => selectableIds.has(id)));
-    }, [discovered, workspace]);
+        setDiscovered([]);
+        setHasDiscovered(false);
+        setSelectedRemoteIdentity(undefined);
+    }, [sourceKey]);
 
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
 
     const installed = workspace.skills;
+    const selectableRemoteIds = selectableRemoteSkillIds(discovered, installed);
+    const selectedRemoteSkill = discovered.find((skill) => remoteIdentity(skill) === selectedRemoteIdentity) ?? discovered[0];
+    const isSelectedRemoteInstalled = Boolean(selectedRemoteSkill && installed.some((skill) => skill.id.toLowerCase() === selectedRemoteSkill.id.toLowerCase()));
+    const selectedSkill = selection.kind === "skill" ? installed.find((skill) => skill.id === selection.id) : installed[0];
     const buckets = originBuckets(workspace.config.skillSources, installed);
     const updateById = new Map(updates.map((item) => [item.id, item]));
     const outdated = updates.filter((update) => isOutdated(update) && installed.some((skill) => skill.id === update.id));
@@ -351,13 +457,6 @@ export function SkillsPanel()
         { label: `All (${installed.length})`, value: "all" as OriginFilter },
         ...buckets.map((bucket) => ({ label: `${bucket.label} (${bucket.count})`, value: bucket.key })),
     ];
-
-    /** Toggle a remote skill id in the installation selection. */
-    const toggleRemote = (id: string): void =>
-    {
-        if (isBusy || !selectableRemoteIds.has(id)) return;
-        setSelectedRemote((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-    };
 
     /** Toggle a user skill id in the import selection. */
     const toggleImport = (id: string): void =>
@@ -373,7 +472,7 @@ export function SkillsPanel()
             const skills = await window.appApi.workspace.discoverSkills();
             setDiscovered(skills);
             setHasDiscovered(true);
-            setSelectedRemote([]);
+            setSelectedRemoteIdentity(skills[0] ? remoteIdentity(skills[0]) : undefined);
             setFilter("");
             setOriginFilter("all");
             setListView("discover");
@@ -381,16 +480,14 @@ export function SkillsPanel()
         }, "Discover");
     };
 
-    /** Download the selected discovered skills into this project. */
-    const handleDownload = (): void =>
+    /** Install the one discovered skill shown in the editor. */
+    const handleDownload = (skill: RemoteSkill): void =>
     {
-        if (selectedRemoteIds.length === 0) return;
+        if (!selectableRemoteIds.has(skill.id)) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.installSkills(selectedRemoteIds);
+            const report = await window.appApi.workspace.installDiscoveredSkill(skill.previewId);
             showSuccess("Install completed", report);
-            setSelectedRemote([]);
-            setListView("installed");
             await refreshWorkspace();
         }, "Install");
     };
@@ -402,6 +499,9 @@ export function SkillsPanel()
         {
             const next = await window.appApi.workspace.checkSkillUpdates();
             setUpdates(next);
+            setDiscovered([]);
+            setHasDiscovered(false);
+            setSelectedRemoteIdentity(undefined);
             setListView("installed");
             const report = `Checked ${next.length} GitHub skill(s).\n${JSON.stringify(next, null, 2)}`;
             if (next.some((update) => update.error)) showError(report, "Update check completed with errors");
@@ -418,6 +518,9 @@ export function SkillsPanel()
             const report = await window.appApi.workspace.applySkillUpdates(ids);
             showSuccess("Updates applied", report);
             setUpdates((current) => current.filter((item) => !ids.includes(item.id)));
+            setDiscovered([]);
+            setHasDiscovered(false);
+            setSelectedRemoteIdentity(undefined);
             await refreshWorkspace();
         }, "Apply updates");
     };
@@ -442,28 +545,55 @@ export function SkillsPanel()
         {
             const report = await window.appApi.workspace.importUserSkills(selectedImport, overwrite);
             showSuccess("Import completed", report);
+            for (const id of selectedImport) useAppStore.getState().clearEditorDraft(selectionKey({ kind: "skill", id }));
             setIsImportOpen(false);
             setIsOverwriteOpen(false);
             await refreshWorkspace();
         }, "Import");
     };
 
+    const topActions: NonNullable<MenuProps["items"]> = [
+        { key: "sources", icon: <GithubOutlined />, label: "Sources" },
+        { key: "import", icon: <ImportOutlined />, label: "Import" },
+        { type: "divider" },
+        { key: "discover", icon: <SearchOutlined />, label: hasDiscovered ? "Refresh discovery" : "Discover skills", disabled: workspace.config.skillSources.length === 0 },
+        { key: "check", icon: <ReloadOutlined />, label: "Check updates", disabled: !installed.some((skill) => skill.origin.kind === "github") },
+    ];
+    if (outdated.length > 0) topActions.push({ key: "update", icon: <CloudDownloadOutlined />, label: `Update ${outdated.length}` });
+
+    /** Dispatch one page-level skill action. */
+    const handleTopAction: MenuProps["onClick"] = ({ key }) =>
+    {
+        if (key === "sources") setIsRegistrationOpen(true);
+        else if (key === "import") handleImport();
+        else if (key === "discover") handleDiscover();
+        else if (key === "check") handleCheckUpdates();
+        else if (key === "update") handleApplyUpdates(outdated.map((item) => item.id));
+    };
+
     const installedContent = filteredInstalled.length === 0
         ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={installed.length === 0 ? "No installed skills yet" : "No matching skills"} />
         : (
-            <Listy
-                items={filteredInstalled}
-                rowKey="id"
-                itemRender={(skill) => (
-                    <InstalledSkillRow
-                        skill={skill}
-                        update={updateById.get(skill.id)}
-                        isBusy={isBusy}
-                        onUpdate={(id) => handleApplyUpdates([id])}
-                        onRemove={setRemoveId}
-                    />
-                )}
-            />
+            filteredInstalled.map((skill) =>
+            {
+                const update = updateById.get(skill.id);
+                const actions: NonNullable<MenuProps["items"]> = [];
+                if (skill.origin.kind === "github") actions.push({ key: "open", icon: <ExportOutlined />, label: "Open repository", disabled: isBusy });
+                if (update?.error) actions.push({ key: "error", icon: <WarningOutlined />, label: "Update check failed. See Console for details.", disabled: true });
+                else if (update && isOutdated(update)) actions.push({ key: "update", icon: <CloudDownloadOutlined />, label: "Apply update", disabled: isBusy });
+                actions.push({ key: "remove", icon: <DeleteOutlined />, label: "Remove", danger: true, disabled: isBusy });
+                return <TreeButton key={skill.id} label={skill.id} active={selectedSkill?.id === skill.id} disabled={isBusy}
+                    selection={{ kind: "skill", id: skill.id }} onClick={() => setSelection({ kind: "skill", id: skill.id })}
+                    actions={actions} onAction={({ key }) =>
+                    {
+                        if (key === "open" && skill.origin.kind === "github")
+                        {
+                            void window.appApi.app.openExternal(`https://github.com/${skill.origin.owner}/${skill.origin.name}`).catch((error: unknown) => showError(error, "Open link failed"));
+                        }
+                        else if (key === "update") handleApplyUpdates([skill.id]);
+                        else if (key === "remove") setRemoveId(skill.id);
+                    }} />;
+            })
         );
     const discoverContent = filteredDiscovered.length === 0
         ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={!hasDiscovered
@@ -475,78 +605,60 @@ export function SkillsPanel()
             </Button> : null}
         </Empty>
         : (
-            <Listy
-                items={filteredDiscovered}
-                rowKey={(skill) => `${skill.owner}/${skill.name}@${skill.branch}/${skill.sourcePath}`}
-                itemRender={(skill) => (
-                    <SelectableSkillRow
-                        id={skill.id}
-                        title={skill.id}
-                        description={skill.description}
-                        disabled={isBusy || !selectableRemoteIds.has(skill.id)}
-                        checked={selectedRemoteIds.includes(skill.id)}
-                        onToggle={toggleRemote}
-                        detail={skill.conflict
-                            ? <Tag color="error">Conflict</Tag>
-                            : <Space size={8}><Tag>{skill.owner}/{skill.name}@{skill.branch}</Tag>
-                                {!selectableRemoteIds.has(skill.id) ? <Tag>Installed</Tag> : null}</Space>}
-                    />
-                )}
-            />
+            filteredDiscovered.map((skill) => (
+                <TreeButton key={remoteIdentity(skill)} label={skill.id} active={selectedRemoteSkill ? remoteIdentity(selectedRemoteSkill) === remoteIdentity(skill) : false}
+                    muted={installed.some((item) => item.id.toLowerCase() === skill.id.toLowerCase())}
+                    disabled={isBusy} onClick={() => setSelectedRemoteIdentity(remoteIdentity(skill))} />
+            ))
         );
-    const tabItems: TabsProps["items"] = [
-        { key: "installed", label: <Space>Installed<Tag>{installed.length}</Tag></Space>, children: installedContent },
-        { key: "discover", label: <Space>Discover{hasDiscovered ? <Tag>{discovered.length}</Tag> : null}</Space>, children: discoverContent },
-    ];
     return (
-        <div className="skills-page">
-            <Flex align="center" justify="space-between" gap={16} wrap>
-                <Typography.Title level={3} className="page-title">Skills</Typography.Title>
-                <Space size={8}>
-                    <Button icon={<GithubOutlined />} disabled={isBusy} onClick={() => setIsRegistrationOpen(true)}>Sources</Button>
-                    <Button icon={<ImportOutlined />} disabled={isBusy} onClick={handleImport}>Import</Button>
-                </Space>
-            </Flex>
-            <section className="skills-library">
-                <div className="skills-section-body skills-library-body">
-                    <Flex align="center" gap={12} wrap className="skills-toolbar">
-                        <Input
-                            className="skills-filter-input"
-                            aria-label="Search skills"
-                            allowClear
-                            prefix={<SearchOutlined />}
-                            value={filter}
-                            onChange={(event) => setFilter(event.target.value)}
-                            placeholder="Search skills..."
-                            disabled={isBusy}
-                        />
-                        {listView === "installed" && buckets.length > 0
-                            ? <Select aria-label="Filter by origin" value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
-                            : null}
-                        <Space wrap className="skills-toolbar-actions">
-                            {listView === "installed" ? <>
-                                <Tooltip title={installed.some((skill) => skill.origin.kind === "github") ? "Check GitHub skills for updates" : "No GitHub skills installed"}>
-                                    <Button icon={<ReloadOutlined />} disabled={isBusy || !installed.some((skill) => skill.origin.kind === "github")}
-                                            onClick={handleCheckUpdates}>Check updates</Button>
-                                </Tooltip>
-                                {outdated.length > 0 ? <Button type="primary" disabled={isBusy}
-                                    onClick={() => handleApplyUpdates(outdated.map((item) => item.id))}>Update {outdated.length}</Button> : null}
-                            </> : hasDiscovered ? <>
-                                <Button icon={<ReloadOutlined />} disabled={isBusy || workspace.config.skillSources.length === 0} onClick={handleDiscover}>Refresh</Button>
-                                <Button type="primary" icon={<CloudDownloadOutlined />} disabled={isBusy || selectedRemoteIds.length === 0}
-                                        onClick={handleDownload}>Install selected ({selectedRemoteIds.length})</Button>
-                            </> : null}
-                        </Space>
-                    </Flex>
-                    <Tabs activeKey={listView} items={tabItems} onChange={(key) =>
-                    {
-                        const next = key as SkillsListView;
-                        setListView(next);
-                        setFilter("");
-                        setOriginFilter("all");
-                    }} />
-                </div>
-            </section>
+        <>
+            <Splitter className="workspace-splitter">
+                <Splitter.Panel defaultSize="28%" min="20%" max="45%" collapsible>
+                    <div className="workspace-tree">
+                        <Flex className="workspace-tree-header">
+                            <Flex align="center" gap={8}>
+                                <Typography.Text strong>Skills</Typography.Text>
+                                <Segmented<SkillsListView> size="small" name="skill-list" aria-label="Skill list" value={listView}
+                                    options={[{ value: "installed", label: "Installed" }, { value: "discover", label: "Discover" }]}
+                                    onChange={(next) =>
+                                    {
+                                        setListView(next);
+                                        setFilter("");
+                                        setOriginFilter("all");
+                                    }} disabled={isBusy} />
+                            </Flex>
+                            <Dropdown trigger={["click"]} menu={{ items: topActions, onClick: handleTopAction }}>
+                                <Button type="text" size="small" icon={<EllipsisOutlined />} disabled={isBusy}>More</Button>
+                            </Dropdown>
+                        </Flex>
+                        <div className="workspace-tree-content">
+                            <Flex vertical gap={6} className="skills-toolbar">
+                                <Input
+                                    className="skills-filter-input"
+                                    size="small"
+                                    aria-label="Search skills"
+                                    allowClear
+                                    prefix={<SearchOutlined />}
+                                    value={filter}
+                                    onChange={(event) => setFilter(event.target.value)}
+                                    placeholder="Search skills..."
+                                    disabled={isBusy}
+                                />
+                                {listView === "installed" && buckets.length > 0
+                                    ? <Select size="small" aria-label="Filter by origin" value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
+                                    : null}
+                            </Flex>
+                            {listView === "installed" ? installedContent : discoverContent}
+                        </div>
+                    </div>
+                </Splitter.Panel>
+                <Splitter.Panel min="55%">
+                    {listView === "installed" ? <SkillContentPane workspace={workspace} skill={selectedSkill} />
+                        : <DiscoveredSkillPane skill={selectedRemoteSkill} isInstalled={isSelectedRemoteInstalled}
+                            canInstall={Boolean(selectedRemoteSkill && selectableRemoteIds.has(selectedRemoteSkill.id))} isBusy={isBusy} onInstall={handleDownload} />}
+                </Splitter.Panel>
+            </Splitter>
 
             <Modal
                 open={isRegistrationOpen}
@@ -586,7 +698,7 @@ export function SkillsPanel()
                     </Button>
                 )}
             >
-                {userSkills.length === 0 ? <Empty description={<>No skills found in <code>%USERPROFILE%\.agents\skills</code></>} /> : (
+                {userSkills.length === 0 ? <Empty description={<>No importable skills found in <code>%USERPROFILE%\.agents\skills</code></>} /> : (
                     <Listy
                         items={userSkills}
                         rowKey="id"
@@ -636,6 +748,7 @@ export function SkillsPanel()
                     void runMutation(async () =>
                     {
                         await window.appApi.workspace.removeSkill(removeId);
+                        useAppStore.getState().clearEditorDraft(selectionKey({ kind: "skill", id: removeId }));
                         showSuccess("Skill removed", `Removed ${removeId}`);
                         setRemoveId(undefined);
                         await refreshWorkspace();
@@ -644,6 +757,6 @@ export function SkillsPanel()
             >
                 Remove {removeId ?? ""} from this project?
             </Modal>
-        </div>
+        </>
     );
 }

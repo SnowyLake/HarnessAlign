@@ -253,20 +253,6 @@ select {
     gap: 16px;
 }
 
-.skills-page {
-    display: flex;
-    width: 100%;
-    flex-direction: column;
-    gap: 16px;
-}
-
-.skills-library {
-    overflow: hidden;
-    border: 1px solid var(--ant-color-border-secondary);
-    border-radius: var(--ant-border-radius-lg);
-    background: var(--ant-color-bg-container);
-}
-
 .page-title.ant-typography {
     margin: 0;
     font-size: 20px;
@@ -350,26 +336,16 @@ select {
     padding: 0;
 }
 
-.skills-library-body {
-    padding-top: 16px;
-}
-
 .skills-toolbar {
     margin-bottom: 8px;
 }
 
 .skills-filter-input {
-    min-width: 200px;
-    flex: 1;
+    width: 100%;
 }
 
 .skills-origin-select {
-    width: 200px;
-    max-width: 100%;
-}
-
-.skills-toolbar-actions {
-    margin-left: auto;
+    width: 100%;
 }
 
 .app-list-row {
@@ -389,12 +365,6 @@ select {
 .app-list-copy > .ant-typography {
     display: block;
     margin: 0;
-}
-
-.skill-avatar {
-    flex-shrink: 0;
-    background: var(--ant-color-primary-bg);
-    color: var(--ant-color-primary);
 }
 
 .skills-selectable-row {
@@ -450,6 +420,11 @@ select {
 .workspace-tree-row[data-active="true"] .workspace-tree-button {
     color: var(--ant-color-primary);
     font-weight: 600;
+}
+
+.workspace-tree-row[data-muted="true"] .workspace-tree-button,
+.workspace-tree-row[data-muted="true"] .workspace-tree-button:hover {
+    color: var(--ant-color-text-secondary);
 }
 
 .workspace-tree-row[data-draggable="true"] {

@@ -44,7 +44,7 @@
 
 文件列表顶部的 Add 用于新建内容. 编辑区的 Create 或 Save file, 文件行菜单和右键菜单中的 Save, 都只保存当前项. Discard changes 会恢复当前项的已保存内容.
 
-Save all 和 `Ctrl+S` 会保存所有页面的草稿, 以及当前 Layer 顺序与选项. 切换页面会保留草稿, 关闭有未保存修改的窗口时会提示确认. Skills 操作直接生效, 不需要再点 Save all.
+Save all 和 `Ctrl+S` 会保存所有页面的草稿, 以及当前 Layer 顺序与选项. 切换页面会保留草稿, 关闭有未保存修改的窗口时会提示确认. Skills 的安装, 导入和移除直接生效; 编辑 `SKILL.md` 后需要保存.
 
 在软件外修改本地文件后, 点击顶部 Reload 重新读取文件. 没有未保存修改时会直接刷新; 有草稿或未保存的 Layer 顺序与选项时, 可以 Cancel 保留当前内容, 或选择 Discard and reload 丢弃软件内全部未保存修改, 以本地文件为准. 读取或校验失败时保留原有页面内容和草稿, 详情见 Console. 重载后保留当前页面和仍存在的选中项; 选中项被外部删除时会选择该页面的其他可用项.
 
@@ -74,7 +74,7 @@ Add layer 创建空 Group, 添加 Option 后才能启用. 关闭 Group 开关会
 
 在 Agents 页编辑 Subagent 的共享正文, 按 Harness 切换各自的 metadata, 用 Enable 选择需要生成该 Agent 的助手. OpenCode 标签页在 Enable 同行右侧提供相同样式的 Generate name field 勾选项, 默认勾选; 取消勾选后生成的 frontmatter 不包含 `name`. 切换 Agent 时会保持当前 Harness 标签页. 字段和文件格式见[配置参考](configuration.md).
 
-Skills 页可以安装 GitHub Skills, 检查更新和导入本机内容. 具体操作见[Skills 管理](skills.md).
+Skills 页左侧在 Installed 和 Discover 间切换, 仅列出 Skill 名称; Discover 中已安装项的名称置灰, 仍可点击预览. 右侧显示所选项的 `SKILL.md`, Discover 在文件名旁提供来源仓库链接, 右上角提供当前项的安装按钮. GitHub 来源只读, 本地导入或来源不明的 Skill 可编辑并保存. Import 不列出当前项目已安装的同名 GitHub Skill. 具体操作见[Skills 管理](skills.md).
 
 ## 生成和部署
 

@@ -36,9 +36,12 @@ interface TreeButtonProps
     label: string;
     active: boolean;
     disabled?: boolean;
+    muted?: boolean;
     selection?: Selection;
     canSave?: boolean;
     canDelete?: boolean;
+    actions?: NonNullable<MenuProps["items"]>;
+    onAction?: MenuProps["onClick"];
     isDraggable?: boolean;
     isDragging?: boolean;
     dropPosition?: RuleDropPosition | undefined;
@@ -52,7 +55,7 @@ interface TreeButtonProps
 }
 
 /** One selectable row in a workspace module tree. */
-function TreeButton({ label, active, disabled, selection, canSave = false, canDelete = false, isDraggable = false, isDragging = false, dropPosition, onRename, onDragStart, onDragEnd, onDragPositionChange, onDragLeave, onDrop, onClick }: TreeButtonProps)
+export function TreeButton({ label, active, disabled, muted, selection, canSave = false, canDelete = false, actions, onAction, isDraggable = false, isDragging = false, dropPosition, onRename, onDragStart, onDragEnd, onDragPositionChange, onDragLeave, onDrop, onClick }: TreeButtonProps)
 {
     const editorKey = selection ? selectionKey(selection) : undefined;
     const isDirty = useAppStore((state) => editorKey ? Boolean(state.editorDrafts[editorKey]) : false);
@@ -134,6 +137,7 @@ function TreeButton({ label, active, disabled, selection, canSave = false, canDe
             }}
             className="workspace-tree-row"
             data-active={active || undefined}
+            data-muted={muted || undefined}
             data-draggable={isDraggable || undefined}
             data-dragging={isDragging || undefined}
         >
@@ -182,7 +186,7 @@ function TreeButton({ label, active, disabled, selection, canSave = false, canDe
                 <Badge className="workspace-tree-dirty" status="processing" title="Unsaved changes" aria-label="Unsaved changes" />
             ) : null}
             {selection && !isRenaming ? (
-                <Dropdown trigger={["click"]} menu={{ items: menuItems, onClick: handleMenuClick }}>
+                <Dropdown trigger={["click"]} menu={{ items: actions ?? menuItems, onClick: onAction ?? handleMenuClick }}>
                     <Button type="text" size="small" icon={<EllipsisOutlined />} disabled={Boolean(disabled)} aria-label={`Actions for ${label}`} />
                 </Dropdown>
             ) : null}
@@ -191,7 +195,7 @@ function TreeButton({ label, active, disabled, selection, canSave = false, canDe
 
     if (!selection) return row;
     return (
-        <Dropdown trigger={["contextMenu"]} menu={{ items: menuItems, onClick: handleMenuClick }}>{row}</Dropdown>
+        <Dropdown trigger={["contextMenu"]} menu={{ items: actions ?? menuItems, onClick: onAction ?? handleMenuClick }}>{row}</Dropdown>
     );
 }
 

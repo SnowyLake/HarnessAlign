@@ -14,14 +14,14 @@ export interface WorkspacePageProps
     view: WorkspaceView;
 }
 
-/** Render a full-width module or the Ant Design split list and editor view. */
+/** Render a full-width project module or the Ant Design split list and editor view. */
 export function WorkspacePage({ view }: WorkspacePageProps)
 {
-    if (view === "project" || view === "skills")
+    if (view === "project")
     {
         return (
             <div className="workspace-scroll" key={view}>
-                <div className="workspace-wide-page">{view === "project" ? <HarnessesPanel /> : <SkillsPanel />}</div>
+                <div className="workspace-wide-page"><HarnessesPanel /></div>
             </div>
         );
     }
@@ -29,6 +29,7 @@ export function WorkspacePage({ view }: WorkspacePageProps)
     return (
         <div className="workspace-module-page">
             <div className="workspace-module-surface">
+                {view === "skills" ? <SkillsPanel /> :
                 <Splitter key={view === "shared-rules" ? "rules" : view} className="workspace-splitter">
                     <Splitter.Panel defaultSize="28%" min="20%" max="45%" collapsible>
                         <WorkspaceTree view={view} />
@@ -36,7 +37,7 @@ export function WorkspacePage({ view }: WorkspacePageProps)
                     <Splitter.Panel min="55%">
                         <WorkspaceEditor />
                     </Splitter.Panel>
-                </Splitter>
+                </Splitter>}
             </div>
         </div>
     );
