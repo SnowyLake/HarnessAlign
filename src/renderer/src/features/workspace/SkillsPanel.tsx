@@ -312,7 +312,7 @@ function SkillContentPane({ workspace, skill }: { workspace: Workspace; skill: P
                     {saveError ? <Alert className="editor-alert" type="error" title={saveError} showIcon /> : null}
                     {currentSource === undefined ? loadError ? null : <Empty description="Loading SKILL.md" /> : isReadOnly
                         ? <Form component={false} layout="vertical" requiredMark={false}>
-                            <Form.Item label="Body"><SourceEditor key={`${skill.id}:${currentSource}`} aria-label={`${skill.id} SKILL.md`} language="markdown" defaultValue={currentSource} readOnly /></Form.Item>
+                            <Form.Item><SourceEditor key={`${skill.id}:${currentSource}`} aria-label={`${skill.id} SKILL.md`} language="markdown" defaultValue={currentSource} readOnly /></Form.Item>
                         </Form>
                         : <form key={`${skill.id}:${currentSource}:${revision}`} ref={formRef} className="editor-form" onInput={(event) =>
                         {
@@ -336,7 +336,7 @@ function SkillContentPane({ workspace, skill }: { workspace: Workspace; skill: P
                             }).then((result) => { if (!result.ok) setSaveError(result.message); });
                         }}>
                             <Form component={false} layout="vertical" requiredMark={false}>
-                                <Form.Item label="Body"><SourceEditor aria-label={`${skill.id} SKILL.md`} name="content" language="markdown" defaultValue={draft?.current.content?.[0] ?? currentSource} /></Form.Item>
+                                <Form.Item><SourceEditor aria-label={`${skill.id} SKILL.md`} name="content" language="markdown" defaultValue={draft?.current.content?.[0] ?? currentSource} /></Form.Item>
                             </Form>
                         </form>}
                 </div>
@@ -400,7 +400,7 @@ function DiscoveredSkillPane({ skill, isInstalled, canInstall, isBusy, onInstall
                 <div className="workspace-editor-page">
                     {error ? <Alert className="editor-alert" type="error" title="Preview failed" description={error} showIcon /> : null}
                     <Form component={false} layout="vertical" requiredMark={false}>
-                        <Form.Item label="Body">
+                        <Form.Item>
                             {content === undefined ? error ? null : <Empty description="Loading SKILL.md" />
                                 : <SourceEditor key={skill.previewId} aria-label={`${skill.id} SKILL.md`} language="markdown" defaultValue={content} readOnly />}
                         </Form.Item>

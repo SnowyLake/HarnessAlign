@@ -10,12 +10,15 @@ import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFi
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { workspaceService } from "../src/main/services/WorkspaceService.js";
 import { defaultLayerOption, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
 import type { ProjectSkill, RemoteSkill } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
+import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
 import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
@@ -56,6 +59,56 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("Markdown preview renders GFM while keeping HTML, document links, and images inert", () =>
+{
+    const content = [
+        "# Current draft", "", "**strong** and ~~removed~~", "", "- [x] Done", "",
+        "| Field | Value |", "| --- | --- |", "| body | unsaved |", "", "```html", "<b>plain code</b>", "```", "",
+        "[external](https://example.com) [relative](../config.json) [unsafe](javascript:alert%281%29)", "",
+        "![remote](https://example.com/image.png) ![local](file:///private/image.png) ![](image.png)", "",
+        '<script>alert("raw HTML")</script>', "", '<iframe src="https://example.com"></iframe>', "", '<img src="file:///private/raw.png" onerror="alert(1)">',
+    ].join("\n");
+    const rendered = renderToStaticMarkup(createElement(MarkdownPreview, { content }));
+    assert.match(rendered, /<h1>Current draft<\/h1>/);
+    assert.match(rendered, /<strong>strong<\/strong>/);
+    assert.match(rendered, /<del>removed<\/del>/);
+    assert.match(rendered, /<input(?=[^>]*type="checkbox")(?=[^>]*disabled="")(?=[^>]*checked="")[^>]*>/);
+    assert.doesNotMatch(rendered, /<input[^>]*name=/);
+    assert.match(rendered, /<table>/);
+    assert.match(rendered, /<td>unsaved<\/td>/);
+    assert.match(rendered, /&lt;b&gt;plain code&lt;\/b&gt;/);
+    assert.match(rendered, /markdown-preview-link">external<\/span>/);
+    assert.match(rendered, /markdown-preview-link">relative<\/span>/);
+    assert.match(rendered, /markdown-preview-link">unsafe<\/span>/);
+    assert.match(rendered, /\[Image: remote\]/);
+    assert.match(rendered, /\[Image: local\]/);
+    assert.match(rendered, /\[Image\]/);
+    assert.doesNotMatch(rendered, /<(?:a|img|script|iframe)\b|(?:href|src|onerror)=|raw HTML|javascript:|file:\/\/\//);
+    assert.equal(renderToStaticMarkup(createElement(MarkdownPreview, { content: "" })), "");
+});
+
+test("Markdown preview displays only complete opening frontmatter as unchanged YAML", () =>
+{
+    const metadata = "# Keep this comment\nname: demo\ndescription: |\n  First line\n  Second line\ninvalid: [unfinished\n";
+    const body = "# Body\n\n| Field | Value |\n| --- | --- |\n| preview | body |\n\n---\n\nTail";
+    const rendered = renderToStaticMarkup(createElement(MarkdownPreview, { content: `---\n${metadata}---\n${body}` }));
+    assert.ok(rendered.startsWith(`<pre><code class="language-yaml">${metadata}</code></pre><h1>Body</h1>`));
+    assert.match(rendered, /<table>/);
+    assert.match(rendered, /<hr\/>\n<p>Tail<\/p>/);
+
+    const crlf = renderToStaticMarkup(createElement(MarkdownPreview, { content: "\uFEFF--- \r\nname: demo\r\n---\t\r\n# CRLF body" }));
+    assert.equal(crlf, '<pre><code class="language-yaml">name: demo\r\n</code></pre><h1>CRLF body</h1>');
+    assert.equal(renderToStaticMarkup(createElement(MarkdownPreview, { content: "---\n---\n# Empty metadata" })), '<pre><code class="language-yaml"></code></pre><h1>Empty metadata</h1>');
+    assert.equal(renderToStaticMarkup(createElement(MarkdownPreview, { content: "---\nname: demo\n---" })), '<pre><code class="language-yaml">name: demo\n</code></pre>');
+
+    for (const content of ["---\n\nUnclosed metadata", "# Ordinary body\n\n---\n\nname: demo\n\n---", "```text\n---\nname: demo\n---\n```", "\n---\nname: demo\n---"])
+    {
+        const ordinary = renderToStaticMarkup(createElement(MarkdownPreview, { content }));
+        assert.doesNotMatch(ordinary, /language-yaml/);
+        assert.match(ordinary, /Unclosed metadata|Ordinary body|name: demo/);
+    }
+});
 
 test("Discover excludes installed skill ids across origins and casing, and allows removed skills again", () =>
 {

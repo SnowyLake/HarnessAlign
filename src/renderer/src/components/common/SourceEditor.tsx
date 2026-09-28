@@ -1,5 +1,5 @@
 /**
- * CodeMirror source field styled from Ant Design tokens and bridged into native FormData.
+ * CodeMirror source field and Markdown preview styled from Ant Design tokens and bridged into native FormData.
  */
 
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -18,8 +18,9 @@ import {
     lineNumbers,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { theme as antTheme } from "antd";
-import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
+import { Segmented, Typography, theme as antTheme } from "antd";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { MarkdownPreview } from "./MarkdownPreview";
 
 /** Language packs the workspace editors actually need. */
 export type SourceLanguage = "markdown" | "json" | "plain";
@@ -28,6 +29,7 @@ export type SourceLanguage = "markdown" | "json" | "plain";
 export interface SourceEditorProps
 {
     name?: string;
+    label?: string;
     defaultValue?: string;
     language?: SourceLanguage;
     readOnly?: boolean;
@@ -132,6 +134,7 @@ function languageExtension(language: SourceLanguage): Extension
 /** Render a CodeMirror field whose value is mirrored into a hidden native input. */
 export function SourceEditor({
     name,
+    label = "Body",
     defaultValue = "",
     language = "plain",
     readOnly = false,
@@ -143,6 +146,8 @@ export function SourceEditor({
     const hostRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const viewRef = useRef<EditorView | null>(null);
+    const [isPreview, setIsPreview] = useState(false);
+    const [previewContent, setPreviewContent] = useState("");
     const style: SourceEditorStyle = {
         "--source-bg": token.colorBgContainer,
         "--source-text": token.colorText,
@@ -203,13 +208,39 @@ export function SourceEditor({
 
     useLayoutEffect(() =>
     {
-        viewRef.current?.requestMeasure();
-    }, [resizeKey]);
+        if (!isPreview) viewRef.current?.requestMeasure();
+    }, [resizeKey, isPreview]);
+
+    /** Capture unsaved source when opening the preview while preserving the mounted editor state. */
+    const handleModeChange = (mode: "source" | "preview"): void =>
+    {
+        if (mode === "preview") setPreviewContent(viewRef.current?.state.doc.toString() ?? defaultValue);
+        setIsPreview(mode === "preview");
+    };
 
     return (
-        <div className="source-editor" style={style}>
-            {name !== undefined ? <input ref={inputRef} type="hidden" name={name} defaultValue={defaultValue} /> : null}
-            <div ref={hostRef} />
-        </div>
+        <>
+            {language === "markdown" ? (
+                <div className="source-editor-heading" onInput={(event) => event.stopPropagation()} onChange={(event) => event.stopPropagation()}>
+                    <Typography.Text>{label}</Typography.Text>
+                    {/* Empty radio names keep view controls out of native form snapshots. */}
+                    <Segmented<"source" | "preview">
+                        size="small"
+                        name=""
+                        aria-label={ariaLabel ? `${ariaLabel} view` : "Markdown view"}
+                        options={[{ value: "source", label: "Source" }, { value: "preview", label: "Preview" }]}
+                        value={isPreview ? "preview" : "source"}
+                        onChange={handleModeChange}
+                    />
+                </div>
+            ) : null}
+            <div className="source-editor" style={style}>
+                {name !== undefined ? <input ref={inputRef} type="hidden" name={name} value={viewRef.current?.state.doc.toString() ?? defaultValue} /> : null}
+                <div ref={hostRef} hidden={isPreview} />
+                {isPreview ? <div className="markdown-preview" role="region" aria-label={ariaLabel ? `${ariaLabel} preview` : "Markdown preview"}>
+                    <MarkdownPreview content={previewContent} />
+                </div> : null}
+            </div>
+        </>
     );
 }
