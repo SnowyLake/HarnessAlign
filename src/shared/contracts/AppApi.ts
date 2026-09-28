@@ -18,6 +18,7 @@ import type {
     SkillUpdate,
     UserSkill,
     Workspace,
+    WorkspaceItemTarget,
 } from "../models/Workspace.js";
 
 /** Privileged capabilities exposed to the renderer through `window.appApi`. */
@@ -72,6 +73,7 @@ export interface AppApi
         removeHarness(name: string): Promise<void>;
         updateHarness(from: string, harness: HarnessConfig): Promise<Config>;
         openHarnessRoot(name: string): Promise<void>;
+        openItemFolder(target: WorkspaceItemTarget): Promise<void>;
         addSkillSource(input: { url: string; branch?: string }): Promise<Config>;
         removeSkillSource(owner: string, name: string): Promise<Config>;
         discoverSkills(): Promise<RemoteSkill[]>;

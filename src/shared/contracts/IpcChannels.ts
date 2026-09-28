@@ -43,6 +43,7 @@ export const IPC_CHANNELS = {
     workspaceRemoveHarness: "workspace:remove-harness",
     workspaceUpdateHarness: "workspace:update-harness",
     workspaceOpenHarnessRoot: "workspace:open-harness-root",
+    workspaceOpenItemFolder: "workspace:open-item-folder",
     workspaceAddSkillSource: "workspace:add-skill-source",
     workspaceRemoveSkillSource: "workspace:remove-skill-source",
     workspaceDiscoverSkills: "workspace:discover-skills",

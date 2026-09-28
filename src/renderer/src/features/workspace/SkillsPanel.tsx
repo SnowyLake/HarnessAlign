@@ -581,7 +581,7 @@ export function SkillsPanel()
                 if (skill.origin.kind === "github") actions.push({ key: "open", icon: <ExportOutlined />, label: "Open repository", disabled: isBusy });
                 if (update?.error) actions.push({ key: "error", icon: <WarningOutlined />, label: "Update check failed. See Console for details.", disabled: true });
                 else if (update && isOutdated(update)) actions.push({ key: "update", icon: <CloudDownloadOutlined />, label: "Apply update", disabled: isBusy });
-                actions.push({ key: "remove", icon: <DeleteOutlined />, label: "Remove", danger: true, disabled: isBusy });
+                actions.push({ type: "divider" }, { key: "remove", icon: <DeleteOutlined />, label: "Remove", danger: true, disabled: isBusy });
                 return <TreeButton key={skill.id} label={skill.id} active={selectedSkill?.id === skill.id} disabled={isBusy}
                     selection={{ kind: "skill", id: skill.id }} onClick={() => setSelection({ kind: "skill", id: skill.id })}
                     actions={actions} onAction={({ key }) =>

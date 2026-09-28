@@ -44,6 +44,10 @@
 
 文件列表顶部的 Add 用于新建内容. 编辑区的 Create 或 Save file, 文件行菜单和右键菜单中的 Save, 都只保存当前项. Discard changes 会恢复当前项的已保存内容.
 
+文件行的省略号菜单和右键菜单按 Save, Rename, Open in explorer, Open repository, Remove 排列, 只显示当前项支持的操作. Remove 前有分隔线; Skills 的 Apply update 或更新失败提示位于 Open repository 后、分隔线前.
+
+Rules, Shared Rules, Agents, Layer Options, Installed Skills 和 Generated 的文件行菜单及右键菜单都提供 Open in explorer, 用于打开对应文件所在文件夹. Installed Skills 打开已安装 `SKILL.md` 所在目录. 新建但未保存的条目不提供此操作; 文件已被外部删除时会报告错误, 不会创建文件或目录.
+
 Save all 和 `Ctrl+S` 会保存所有页面的草稿, 以及当前 Layer 顺序与选项. 切换页面会保留草稿, 关闭有未保存修改的窗口时会提示确认. Skills 的安装, 导入和移除直接生效; 编辑 `SKILL.md` 后需要保存.
 
 Markdown 正文默认显示 Source. 点击 Body 或 Content 标题行最右侧的 Preview 可以查看当前内容, 包括尚未保存的修改; 切回 Source 后继续编辑, 光标位置和撤销记录会保留. Rules, Layers, Agents, Skills 和 Generated 中的 Markdown 都支持此切换, JSON 和其他纯文本保持源码视图. 切换视图不会保存文件或产生草稿.
@@ -87,6 +91,8 @@ Skills 页左侧在 Installed 和 Discover 间切换, 仅列出 Skill 名称; Di
 Generate 和 Setup 使用当前 Layer 顺序与选项, 包括尚未保存的选择. 有未保存的源文件草稿时, 先用 Save all 或 `Ctrl+S` 保存, 再生成或部署.
 
 Generate 只更新 `%USERPROFILE%\.harness-align\generated`. 每个已声明 Harness 都会得到 `AGENTS.md` 和对应格式的 `agents/` 文件. 应用只删除自己管理过且本次不再生成的文件, 保留未知文件. Generated 页用于查看结果, 不要手工修改输出文件.
+
+Generated 的 Open in explorer 打开生成文件在 `generated/` 中所在的文件夹. 操作基于已有磁盘文件, 不会保存编辑预览或打开部署后的助手副本.
 
 Setup 会重新生成, 然后按下表更新本机目录. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
 

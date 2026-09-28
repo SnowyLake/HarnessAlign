@@ -8,8 +8,11 @@ import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import { z } from "zod";
 import { HalignError } from "../../engine/Model.js";
 import { resolveExistingHarnessRoot } from "../../engine/Setup.js";
-import { AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA } from "../../shared/models/Schemas.js";
-import { withWorkspace, workspaceService } from "../services/WorkspaceService.js";
+import {
+    AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA,
+    RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA,
+} from "../../shared/models/Schemas.js";
+import { resolveWorkspaceItemFolder, withWorkspace, workspaceService } from "../services/WorkspaceService.js";
 import { runIpc } from "../utils/Ipc.js";
 
 /** Register workspace IPC handlers. */
@@ -108,6 +111,17 @@ export function registerWorkspaceHandlers(): void
             const target = await resolveExistingHarnessRoot(root, harnessName);
             const errorMessage = await shell.openPath(target);
             if (errorMessage) throw new HalignError(`${harnessName} target root: failed to open folder: ${target}: ${errorMessage}`);
+        });
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceOpenItemFolder, (event, input: unknown) => runIpc(event, async () =>
+    {
+        const item = WORKSPACE_ITEM_TARGET_SCHEMA.parse(input);
+        await withWorkspace(async (root) =>
+        {
+            const target = await resolveWorkspaceItemFolder(root, item);
+            const errorMessage = await shell.openPath(target);
+            if (errorMessage) throw new HalignError(`Open in explorer: failed to open folder: ${target}: ${errorMessage}`);
         });
     }));
 

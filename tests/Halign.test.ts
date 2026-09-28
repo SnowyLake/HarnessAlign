@@ -14,9 +14,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { workspaceService } from "../src/main/services/WorkspaceService.js";
+import { resolveWorkspaceItemFolder, workspaceService } from "../src/main/services/WorkspaceService.js";
 import { defaultLayerOption, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
-import type { ProjectSkill, RemoteSkill } from "../src/shared/models/Workspace.js";
+import type { ProjectSkill, RemoteSkill, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
 import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
@@ -26,7 +26,7 @@ import { checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscovered
 import { applySync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
-import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA } from "../src/shared/models/Schemas.js";
+import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
 import { buildOutputs, generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
 import { readResponseBytes } from "../src/main/services/RemoteFetch.js";
@@ -1782,6 +1782,80 @@ test("resolveExistingHarnessRoot returns configured directories and rejects miss
     });
 });
 
+test("workspace item folders resolve saved sources, installed SKILL.md, and actual generated files without creating missing paths", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await saveSharedRule(root, ".harness-align/rules/shared/common.md", "# Shared\n");
+        const skillDirectory = join(root, ".harness-align", "skills", "demo");
+        await mkdir(skillDirectory, { recursive: true });
+        await writeFile(join(skillDirectory, "SKILL.md"), "# Demo\n", "utf8");
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "source", path: ".harness-align/rules/base.md" }), join(root, ".harness-align", "rules"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "source", path: ".harness-align/rules/shared/common.md" }), join(root, ".harness-align", "rules", "shared"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "source", path: ".harness-align/layers/soul/arona.md" }), join(root, ".harness-align", "layers", "soul"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "source", path: ".harness-align/agents/explorer.md" }), join(root, ".harness-align", "agents"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "skill", id: "demo" }), skillDirectory);
+
+        assert.ok((await buildOutputs(root)).has("codex/AGENTS.md"));
+        await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "generated", path: "codex/AGENTS.md" }), /file does not exist/u);
+        const generated = join(root, ".harness-align", "generated");
+        await assert.rejects(readdir(generated), /ENOENT/u);
+        await generate(root);
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "generated", path: "codex/AGENTS.md" }), join(generated, "codex"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "generated", path: "codex/agents/explorer.toml" }), join(generated, "codex", "agents"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "generated", path: ".manifest.json" }), generated);
+        await writeFile(join(generated, "retained.txt"), "Unmanaged output\n", "utf8");
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "generated", path: "retained.txt" }), generated);
+
+        for (const path of [".harness-align/config.json", ".harness-align/rules/unsaved.md", ".harness-align/skills/demo/SKILL.md", "../outside.md", "C:/outside.md"])
+        {
+            await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "source", path }), /source file does not exist in the workspace/u);
+        }
+        await assert.rejects(readFile(join(root, ".harness-align", "rules", "unsaved.md")), /ENOENT/u);
+        await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "skill", id: "missing" }), /skill does not exist/u);
+        await assert.rejects(readdir(join(root, ".harness-align", "skills", "missing")), /ENOENT/u);
+        await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "skill", id: "../demo" }), /skill id must match/u);
+        for (const path of ["../config.json", "/outside.md", "C:/outside.md", "codex\\AGENTS.md", "codex/../AGENTS.md"])
+        {
+            await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "generated", path }), /invalid managed path/u);
+        }
+        await mkdir(join(generated, "directory.txt"));
+        await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "generated", path: "directory.txt" }), /expected a file/u);
+        await unlink(join(generated, "codex", "AGENTS.md"));
+        await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "generated", path: "codex/AGENTS.md" }), /file does not exist/u);
+    });
+});
+
+test("workspace item folders reject junctions along source, skill, generated, and workspace paths", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await generate(root);
+        await mkdir(join(root, ".harness-align", "skills", "demo"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "skills", "demo", "SKILL.md"), "# Demo\n", "utf8");
+        const cases: Array<{ directory: string; target: WorkspaceItemTarget }> = [
+            { directory: ".harness-align/rules", target: { kind: "source", path: ".harness-align/rules/base.md" } },
+            { directory: ".harness-align/layers/soul", target: { kind: "source", path: ".harness-align/layers/soul/arona.md" } },
+            { directory: ".harness-align/agents", target: { kind: "source", path: ".harness-align/agents/explorer.md" } },
+            { directory: ".harness-align/skills/demo", target: { kind: "skill", id: "demo" } },
+            { directory: ".harness-align/generated/codex", target: { kind: "generated", path: "codex/AGENTS.md" } },
+            { directory: ".harness-align", target: { kind: "generated", path: "codex/AGENTS.md" } },
+        ];
+        for (const { directory, target } of cases)
+        {
+            const path = join(root, directory);
+            const redirected = join(root, "redirected");
+            await rename(path, redirected);
+            await symlink(redirected, path, process.platform === "win32" ? "junction" : "dir");
+            const entries = await readdir(redirected);
+            await assert.rejects(resolveWorkspaceItemFolder(root, target), /symbolic link/u);
+            assert.deepEqual(await readdir(redirected), entries);
+            await unlink(path);
+            await rename(redirected, path);
+        }
+    });
+});
+
 test("generate and setup reports list written files and destination directories", async () =>
 {
     await withProject(async (root) =>
@@ -2838,6 +2912,13 @@ test("IPC payload schemas reject coercion and incomplete editor shapes", () =>
     assert.equal(LAYER_SELECTION_SCHEMA.safeParse([{ name: "layer" }]).success, false);
     assert.equal(SKILL_IDS_SCHEMA.safeParse(["Demo", "demo"]).success, false);
     assert.equal(SKILL_IDS_SCHEMA.safeParse("demo").success, false);
+    for (const input of ["C:/folder", {}, { kind: "folder", path: "C:/folder" }, { kind: "source", path: 1 }, { kind: "generated", path: "" }, { kind: "skill", id: "demo", path: "C:/folder" }])
+    {
+        assert.equal(WORKSPACE_ITEM_TARGET_SCHEMA.safeParse(input).success, false);
+    }
+    assert.equal(WORKSPACE_ITEM_TARGET_SCHEMA.safeParse({ kind: "source", path: ".harness-align/rules/base.md" }).success, true);
+    assert.equal(WORKSPACE_ITEM_TARGET_SCHEMA.safeParse({ kind: "generated", path: "codex/AGENTS.md" }).success, true);
+    assert.equal(WORKSPACE_ITEM_TARGET_SCHEMA.safeParse({ kind: "skill", id: "demo" }).success, true);
 });
 
 test("repository-root skills survive batch installation, workspace reload, reinstall, and update checks", async (t) =>

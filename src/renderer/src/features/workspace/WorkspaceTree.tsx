@@ -1,10 +1,10 @@
 /** Source navigation and Layer groups sharing the current generation selection. */
 
-import type { LayerOption, RuleInput, SharedRule, Workspace } from "@shared/models/Workspace";
-import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import type { LayerOption, RuleInput, SharedRule, Workspace, WorkspaceItemTarget } from "@shared/models/Workspace";
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, FolderOpenOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
 import { Badge, Button, Collapse, Dropdown, Empty, Flex, Input, Modal, Popover, Segmented, Select, Switch, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
 import { useEffect, useState } from "react";
-import { showSuccess } from "@/components/common/Feedback";
+import { showError, showSuccess } from "@/components/common/Feedback";
 import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation, saveRenamedSource } from "@/features/workspace/WorkspaceTasks";
 import { catalogLayerNames, defaultLayerOption, moveLayerSelection, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
@@ -80,16 +80,37 @@ export function TreeButton({ label, active, disabled, muted, selection, canSave 
     };
 
     const menuItems: NonNullable<MenuProps["items"]> = [];
+    if (canSave) menuItems.push({ key: "save", icon: <SaveOutlined />, label: "Save", disabled: Boolean(disabled) });
     if (onRename)
     {
         menuItems.push({ key: "rename", icon: <EditOutlined />, label: "Rename", disabled: Boolean(disabled) });
     }
-    if (canSave) menuItems.push({ key: "save", icon: <SaveOutlined />, label: "Save", disabled: Boolean(disabled) });
-    if (canDelete) menuItems.push({ key: "delete", icon: <DeleteOutlined />, label: "Delete", danger: true, disabled: Boolean(disabled) });
+    const folderTarget: WorkspaceItemTarget | undefined = selection?.kind === "rule" || selection?.kind === "agent" || selection?.kind === "layer-option"
+        ? { kind: "source", path: selection.path }
+        : selection?.kind === "generated-file" ? { kind: "generated", path: selection.path }
+            : selection?.kind === "skill" ? { kind: "skill", id: selection.id } : undefined;
+    const items = [...(actions ?? menuItems)];
+    if (folderTarget)
+    {
+        const folderIndex = actions ? 0 : items.length;
+        items.splice(folderIndex, 0, { key: "open-explorer", icon: <FolderOpenOutlined />, label: "Open in explorer", disabled: Boolean(disabled) });
+    }
+    if (canDelete && !actions) items.push({ type: "divider" }, { key: "delete", icon: <DeleteOutlined />, label: "Remove", danger: true, disabled: Boolean(disabled) });
 
     /** Dispatch one context menu command to the selected editor row. */
-    const handleMenuClick: MenuProps["onClick"] = ({ key }) =>
+    const handleMenuClick: MenuProps["onClick"] = (info) =>
     {
+        const { key } = info;
+        if (key === "open-explorer" && folderTarget)
+        {
+            void window.appApi.workspace.openItemFolder(folderTarget).catch((error: unknown) => showError(error, "Open folder failed"));
+            return;
+        }
+        if (onAction)
+        {
+            onAction(info);
+            return;
+        }
         if (!selection) return;
         if (key === "rename")
         {
@@ -186,7 +207,7 @@ export function TreeButton({ label, active, disabled, muted, selection, canSave 
                 <Badge className="workspace-tree-dirty" status="processing" title="Unsaved changes" aria-label="Unsaved changes" />
             ) : null}
             {selection && !isRenaming ? (
-                <Dropdown trigger={["click"]} menu={{ items: actions ?? menuItems, onClick: onAction ?? handleMenuClick }}>
+                <Dropdown trigger={["click"]} menu={{ items, onClick: handleMenuClick }}>
                     <Button type="text" size="small" icon={<EllipsisOutlined />} disabled={Boolean(disabled)} aria-label={`Actions for ${label}`} />
                 </Dropdown>
             ) : null}
@@ -195,7 +216,7 @@ export function TreeButton({ label, active, disabled, muted, selection, canSave 
 
     if (!selection) return row;
     return (
-        <Dropdown trigger={["contextMenu"]} menu={{ items: actions ?? menuItems, onClick: onAction ?? handleMenuClick }}>{row}</Dropdown>
+        <Dropdown trigger={["contextMenu"]} menu={{ items, onClick: handleMenuClick }}>{row}</Dropdown>
     );
 }
 
@@ -789,6 +810,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                 label={file.path}
                                 active={selection.kind === "generated-file" && selection.path === file.path}
                                 disabled={isBusy}
+                                selection={{ kind: "generated-file", path: file.path }}
                                 onClick={() => setSelection({ kind: "generated-file", path: file.path })}
                             />
                         ))}
