@@ -30,6 +30,8 @@ const MAX_ZIP_ENTRIES = 10_000;
 const MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
 /** Fetch timeout for GitHub archive downloads. */
 const FETCH_TIMEOUT_MS = 60_000;
+/** Maximum SKILL.md body returned to the renderer for preview. */
+const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 
 /** HTTP download failure whose status determines whether a branch fallback is appropriate. */
 class ArchiveHttpError extends HalignError
@@ -213,7 +215,7 @@ function discoverInArchive(
         const id = sourcePath ? sourcePath.split("/").at(-1)! : name;
         assertSkillName(id, `${owner}/${name}:${sourcePath || "."}`);
         const meta = readSkillFrontmatter(new TextDecoder().decode(skillMap.get("SKILL.md")));
-        return { id, title: meta.name ?? id, description: meta.description ?? "", owner, name, branch, sourcePath,
+        return { id, title: meta.name ?? id, description: meta.description ?? "", owner, name, branch, sourcePath, previewId: randomUUID(),
             files: skillMap, contentHash: hashSkillFiles(skillMap), commit };
     });
 }
@@ -294,16 +296,46 @@ export async function discoverSkills(root: string): Promise<RemoteSkill[]>
             name: skill.name,
             branch: skill.branch,
             sourcePath: skill.sourcePath,
+            previewId: skill.previewId,
             conflict: skill.conflict,
         }))
         .sort((left, right) => codePointCompare(left.id, right.id) || codePointCompare(left.sourcePath, right.sourcePath));
 }
 
-/** Install selected discovered skills into the project. */
-export async function installSkills(root: string, ids: readonly string[]): Promise<string>
+/** Resolve one item only from the current workspace's discovery cache. */
+async function currentCachedSkill(root: string, previewId: string): Promise<CachedSkill>
+{
+    const sources = JSON.stringify((await loadConfig(root)).skillSources);
+    if (!discoverCache || discoverCache.root !== root || discoverCache.sources !== sources)
+    {
+        throw new HalignError(`discovered skill preview ${valueText(previewId)} is not in the latest discover results`);
+    }
+    const skill = discoverCache.skills.find((item) => item.previewId === previewId);
+    if (!skill) throw new HalignError(`discovered skill preview ${valueText(previewId)} is not in the latest discover results`);
+    return skill;
+}
+
+/** Read SKILL.md only from the current validated discovery cache. */
+export async function readDiscoveredSkillContent(root: string, previewId: string): Promise<string>
+{
+    const skill = await currentCachedSkill(root, previewId);
+    const content = skill.files.get("SKILL.md");
+    if (!content) throw new HalignError(`discovered skill ${skill.id}: SKILL.md is missing from the validated archive`);
+    if (content.byteLength > MAX_PREVIEW_BYTES) throw new HalignError(`discovered skill ${skill.id}: SKILL.md exceeds ${MAX_PREVIEW_BYTES} preview bytes`);
+    try
+    {
+        return new TextDecoder("utf-8", { fatal: true }).decode(content);
+    }
+    catch (error)
+    {
+        throw new HalignError(`discovered skill ${skill.owner}/${skill.name}/${skill.sourcePath || "."}/SKILL.md: invalid UTF-8: ${errorText(error)}`);
+    }
+}
+
+/** Install selected cached skills after checking the complete batch. */
+async function installCachedSkills(root: string, ids: readonly string[], skills: readonly CachedSkill[]): Promise<string>
 {
     if (ids.length === 0) throw new HalignError("install requires at least one skill id");
-    const skills = await cachedSkills(root);
     const existing = await loadSkills(root);
     const selected: Array<{ skill: CachedSkill; origin: Exclude<SkillOrigin, { kind: "unknown" }> }> = [];
     for (const id of ids)
@@ -336,6 +368,19 @@ export async function installSkills(root: string, ids: readonly string[]): Promi
         }
     }
     return `Installed ${installed.length} skill(s):\n${installed.map((id) => `  ${id}`).join("\n")}\n`;
+}
+
+/** Install the exact remote item shown by a discovery preview. */
+export async function installDiscoveredSkill(root: string, previewId: string): Promise<string>
+{
+    const skill = await currentCachedSkill(root, previewId);
+    return installCachedSkills(root, [skill.id], [skill]);
+}
+
+/** Install selected discovered skills into the project. */
+export async function installSkills(root: string, ids: readonly string[]): Promise<string>
+{
+    return installCachedSkills(root, ids, await cachedSkills(root));
 }
 
 /** Restore referenced skill bytes in memory, leaving the live workspace untouched on download failure. */

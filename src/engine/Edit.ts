@@ -27,7 +27,7 @@ import {
     type Rule,
     valueText,
 } from "./Model.js";
-import { loadSkills, parseGitHubSkillSource } from "./Skills.js";
+import { assertSkillName, hashSkillDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource, readSkillContent, serializeSkillIndex } from "./Skills.js";
 import { parseSyncSnapshot, readSyncSnapshot, syncSkillIndex, syncSnapshotHash, type SyncSnapshot } from "./Sync.js";
 
 /** Default candidates filtered by existing user configuration directories on first initialization. */
@@ -588,6 +588,31 @@ export async function saveSharedRule(rootPath: string, path: string, body: strin
     const relative = managedRelative(path, path);
     assertRulePath(relative, "shared");
     await writeManaged(root, relative, Buffer.from(normalizedBody(body), "utf8"));
+}
+
+/** Save a local skill's main Markdown file and provenance hash after validating its origin and current contents. */
+export async function saveSkillContent(rootPath: string, id: string, content: string, expectedContent: string): Promise<void>
+{
+    const root = resolve(rootPath);
+    const skillId = assertSkillName(id, `.harness-align/skills/${id}`);
+    if (typeof content !== "string" || typeof expectedContent !== "string") throw new HalignError(`.harness-align/skills/${skillId}/SKILL.md: expected text content`);
+    const skill = (await loadSkills(root)).find((item) => item.id === skillId);
+    if (!skill) throw new HalignError(`.harness-align/skills/${skillId}: skill does not exist`);
+    if (skill.origin.kind === "github") throw new HalignError(`.harness-align/skills/${skillId}/SKILL.md: GitHub skills are read only`);
+    const original = await readSkillContent(root, skillId);
+    if (original !== expectedContent) throw new HalignError(`.harness-align/skills/${skillId}/SKILL.md: content changed since it was opened; reload before saving`);
+    const relativePath = `.harness-align/skills/${skillId}/SKILL.md`;
+    const markdown = Buffer.from(normalizedBody(content), "utf8");
+    const writes: Array<{ path: string; content: Buffer }> = [{ path: relativePath, content: markdown }];
+    if (skill.origin.kind === "local")
+    {
+        const index = await loadSkillIndex(root);
+        const entry = index[skillId];
+        if (!entry || entry.origin !== "local") throw new HalignError(`.harness-align/skills/index.json: missing local provenance for ${skillId}`);
+        index[skillId] = { origin: "local", contentHash: await hashSkillDirectory(join(root, ".harness-align", "skills", skillId), markdown) };
+        writes.push({ path: ".harness-align/skills/index.json", content: serializeSkillIndex(index) });
+    }
+    await writeManagedBatch(root, writes);
 }
 
 /** Validate and atomically write a subagent source file. */

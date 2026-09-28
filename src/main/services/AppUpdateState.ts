@@ -8,7 +8,6 @@ import type { AppUpdatePhase, AppUpdateStatus } from "../../shared/models/AppUpd
 
 const RELEASE_VERSION = /^(?:0|[1-9]\d{0,6})\.(?:0|[1-9]\d{0,6})\.(?:0|[1-9]\d{0,6})(?:-[0-9A-Za-z.-]{1,40})?(?:\+[0-9A-Za-z.-]{1,40})?$/u;
 const CHECKABLE_PHASES: readonly AppUpdatePhase[] = ["idle", "unavailable", "current", "available", "downloaded", "error"];
-const MAX_UPDATE_MESSAGE = 500;
 
 /** Create the idle snapshot for one application version. */
 export function initialAppUpdateStatus(currentVersion: string): AppUpdateStatus
@@ -43,14 +42,11 @@ export interface EnvironmentProxy
     readonly password: string | null;
 }
 
-/** Split an environment proxy into a rule Chromium accepts and a separate login. */
+/** Split an environment proxy into a host rule and a separate login. */
 export function environmentProxy(value: string): EnvironmentProxy
 {
     const trimmed = value.trim();
-    if (trimmed.length === 0 || trimmed.length > 300 || /[\s<>]/u.test(trimmed))
-    {
-        throw new HalignError(`application update: HTTP(S)_PROXY must be one proxy URL without spaces, got ${redactedProxy(trimmed)}`);
-    }
+    if (trimmed.length === 0 || /\s/u.test(trimmed)) throw new HalignError("application update: HTTP(S)_PROXY must be one proxy URL without spaces");
     const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed) ? trimmed : `http://${trimmed}`;
     let parsed: URL;
     try
@@ -59,26 +55,20 @@ export function environmentProxy(value: string): EnvironmentProxy
     }
     catch
     {
-        throw new HalignError(`application update: HTTP(S)_PROXY must be one proxy URL without spaces, got ${redactedProxy(trimmed)}`);
+        throw new HalignError("application update: HTTP(S)_PROXY must be one proxy URL without spaces");
     }
-    if (parsed.hostname.length === 0) throw new HalignError(`application update: HTTP(S)_PROXY must include a host, got ${redactedProxy(trimmed)}`);
+    if (parsed.hostname.length === 0) throw new HalignError("application update: HTTP(S)_PROXY must include a host");
     const username = parsed.username.length > 0 ? decodeURIComponent(parsed.username) : null;
     const password = parsed.password.length > 0 ? decodeURIComponent(parsed.password) : null;
     parsed.username = "";
     parsed.password = "";
-    const proxyRules = parsed.pathname === "/" && parsed.search.length === 0 && parsed.hash.length === 0 ? parsed.origin : parsed.href;
-    return { proxyRules, username, password };
+    return { proxyRules: parsed.origin, username, password };
 }
 
-/** Convert NO_PROXY into Electron bypass rules. */
+/** Convert NO_PROXY into a comma-separated Electron bypass list. */
 export function environmentProxyBypass(value: string): string
 {
-    const rules = value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
-    if (rules.length === 0 || rules.length > 50 || rules.some((item) => item.length > 200 || /[\s;<>]/u.test(item)))
-    {
-        throw new HalignError("application update: NO_PROXY must be a comma-separated host list");
-    }
-    return rules.join(",");
+    return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0).join(",");
 }
 
 /** Move to a check. A check cannot interrupt an active check or download. */
@@ -129,10 +119,7 @@ export function markAppUpdateDownloaded(status: AppUpdateStatus): AppUpdateStatu
 export function failAppUpdate(status: AppUpdateStatus, message: string): AppUpdateStatus
 {
     const details = message.trim();
-    if (details.length === 0 || details.length > MAX_UPDATE_MESSAGE)
-    {
-        throw new HalignError(`application update: error message must be 1 to ${MAX_UPDATE_MESSAGE} characters, got ${details.length}`);
-    }
+    if (details.length === 0) throw new HalignError("application update: error message is empty");
     if (status.phase === "downloading" && status.availableVersion !== null)
     {
         return { ...status, phase: "available", percent: null, message: details };
@@ -160,12 +147,4 @@ export function assertAppUpdateInstallable(status: AppUpdateStatus): void
 function assertPhase(status: AppUpdateStatus, allowed: readonly AppUpdatePhase[], action: string): void
 {
     if (!allowed.includes(status.phase)) throw new HalignError(`application update: cannot ${action} while ${status.phase}`);
-}
-
-/** Hide proxy credentials while still identifying the rejected value. */
-function redactedProxy(value: string): string
-{
-    const at = value.lastIndexOf("@");
-    const visible = at >= 0 ? `***@${value.slice(at + 1)}` : value;
-    return JSON.stringify(visible.slice(0, 80));
 }

@@ -65,6 +65,7 @@ export interface ProjectSkill extends UserSkill
 /** Skill discovered under a remote GitHub skill source. */
 export interface RemoteSkill extends UserSkill, SkillSource
 {
+    previewId: string;
     sourcePath: string;
     conflict: boolean;
 }
@@ -133,6 +134,12 @@ export interface GeneratedFile
     path: string;
     content: string;
 }
+
+/** Existing workspace file identity whose containing folder may be opened by Main. */
+export type WorkspaceItemTarget =
+    | { kind: "source"; path: string }
+    | { kind: "generated"; path: string }
+    | { kind: "skill"; id: string };
 
 /** Loaded `.harness-align` workspace shown in the desktop shell. */
 export interface Workspace

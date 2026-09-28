@@ -8,8 +8,11 @@ import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import { z } from "zod";
 import { HalignError } from "../../engine/Model.js";
 import { resolveExistingHarnessRoot } from "../../engine/Setup.js";
-import { AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA } from "../../shared/models/Schemas.js";
-import { withWorkspace, workspaceService } from "../services/WorkspaceService.js";
+import {
+    AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA,
+    RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA,
+} from "../../shared/models/Schemas.js";
+import { resolveWorkspaceItemFolder, withWorkspace, workspaceService } from "../services/WorkspaceService.js";
 import { runIpc } from "../utils/Ipc.js";
 
 /** Register workspace IPC handlers. */
@@ -111,6 +114,17 @@ export function registerWorkspaceHandlers(): void
         });
     }));
 
+    ipcMain.handle(IPC_CHANNELS.workspaceOpenItemFolder, (event, input: unknown) => runIpc(event, async () =>
+    {
+        const item = WORKSPACE_ITEM_TARGET_SCHEMA.parse(input);
+        await withWorkspace(async (root) =>
+        {
+            const target = await resolveWorkspaceItemFolder(root, item);
+            const errorMessage = await shell.openPath(target);
+            if (errorMessage) throw new HalignError(`Open in explorer: failed to open folder: ${target}: ${errorMessage}`);
+        });
+    }));
+
     ipcMain.handle(IPC_CHANNELS.workspaceAddSkillSource, (event, input: unknown) => runIpc(event, async () =>
     {
         return workspaceService.addSkillSource(SKILL_SOURCE_INPUT_SCHEMA.parse(input));
@@ -126,6 +140,16 @@ export function registerWorkspaceHandlers(): void
         return workspaceService.discoverSkills();
     }));
 
+    ipcMain.handle(IPC_CHANNELS.workspaceReadDiscoveredSkillContent, (event, previewId: unknown) => runIpc(event, async () =>
+    {
+        return workspaceService.readDiscoveredSkillContent(z.uuid().parse(previewId));
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceInstallDiscoveredSkill, (event, previewId: unknown) => runIpc(event, async () =>
+    {
+        return workspaceService.installDiscoveredSkill(z.uuid().parse(previewId));
+    }));
+
     ipcMain.handle(IPC_CHANNELS.workspaceInstallSkills, (event, ids: unknown) => runIpc(event, async () =>
     {
         return workspaceService.installSkills(SKILL_IDS_SCHEMA.parse(ids));
@@ -139,6 +163,16 @@ export function registerWorkspaceHandlers(): void
     ipcMain.handle(IPC_CHANNELS.workspaceApplySkillUpdates, (event, ids: unknown) => runIpc(event, async () =>
     {
         return workspaceService.applySkillUpdates(SKILL_IDS_SCHEMA.parse(ids));
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceReadSkillContent, (event, id: unknown) => runIpc(event, async () =>
+    {
+        return workspaceService.readSkillContent(z.string().parse(id));
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveSkillContent, (event, id: unknown, content: unknown, expectedContent: unknown) => runIpc(event, async () =>
+    {
+        await workspaceService.saveSkillContent(z.string().parse(id), z.string().parse(content), z.string().parse(expectedContent));
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceListUserSkills, (event) => runIpc(event, async () =>

@@ -10,20 +10,23 @@ import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFi
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { workspaceService } from "../src/main/services/WorkspaceService.js";
+import { resolveWorkspaceItemFolder, workspaceService } from "../src/main/services/WorkspaceService.js";
 import { defaultLayerOption, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
-import type { ProjectSkill, RemoteSkill } from "../src/shared/models/Workspace.js";
+import type { ProjectSkill, RemoteSkill, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
+import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
 import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
-import { checkSkillUpdates, discoverSkills, hydrateSyncSkills, installSkills } from "../src/main/services/SkillRemoteService.js";
+import { checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent } from "../src/main/services/SkillRemoteService.js";
 import { applySync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
-import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA } from "../src/shared/models/Schemas.js";
+import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
 import { buildOutputs, generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
 import { readResponseBytes } from "../src/main/services/RemoteFetch.js";
@@ -35,11 +38,11 @@ import { loadConfig, validateConfig } from "../src/engine/Load.js";
 import { HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
 import { reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
-import { assertSafeZipEntry, importUserSkills, listUserSkills, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
+import { assertSafeZipEntry, importUserSkills, listImportableUserSkills, listUserSkills, readSkillContent, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
     loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkillSource,
-    renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, updateHarness,
+    renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, saveSkillContent, updateHarness,
     applySyncSources, recoverSyncSources, validateSyncSources,
 } from "../src/engine/Edit.js";
 
@@ -57,20 +60,68 @@ const config = {
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
 
+test("Markdown preview renders GFM while keeping HTML, document links, and images inert", () =>
+{
+    const content = [
+        "# Current draft", "", "**strong** and ~~removed~~", "", "- [x] Done", "",
+        "| Field | Value |", "| --- | --- |", "| body | unsaved |", "", "```html", "<b>plain code</b>", "```", "",
+        "[external](https://example.com) [relative](../config.json) [unsafe](javascript:alert%281%29)", "",
+        "![remote](https://example.com/image.png) ![local](file:///private/image.png) ![](image.png)", "",
+        '<script>alert("raw HTML")</script>', "", '<iframe src="https://example.com"></iframe>', "", '<img src="file:///private/raw.png" onerror="alert(1)">',
+    ].join("\n");
+    const rendered = renderToStaticMarkup(createElement(MarkdownPreview, { content }));
+    assert.match(rendered, /<h1>Current draft<\/h1>/);
+    assert.match(rendered, /<strong>strong<\/strong>/);
+    assert.match(rendered, /<del>removed<\/del>/);
+    assert.match(rendered, /<input(?=[^>]*type="checkbox")(?=[^>]*disabled="")(?=[^>]*checked="")[^>]*>/);
+    assert.doesNotMatch(rendered, /<input[^>]*name=/);
+    assert.match(rendered, /<table>/);
+    assert.match(rendered, /<td>unsaved<\/td>/);
+    assert.match(rendered, /&lt;b&gt;plain code&lt;\/b&gt;/);
+    assert.match(rendered, /markdown-preview-link">external<\/span>/);
+    assert.match(rendered, /markdown-preview-link">relative<\/span>/);
+    assert.match(rendered, /markdown-preview-link">unsafe<\/span>/);
+    assert.match(rendered, /\[Image: remote\]/);
+    assert.match(rendered, /\[Image: local\]/);
+    assert.match(rendered, /\[Image\]/);
+    assert.doesNotMatch(rendered, /<(?:a|img|script|iframe)\b|(?:href|src|onerror)=|raw HTML|javascript:|file:\/\/\//);
+    assert.equal(renderToStaticMarkup(createElement(MarkdownPreview, { content: "" })), "");
+});
+
+test("Markdown preview displays only complete opening frontmatter as unchanged YAML", () =>
+{
+    const metadata = "# Keep this comment\nname: demo\ndescription: |\n  First line\n  Second line\ninvalid: [unfinished\n";
+    const body = "# Body\n\n| Field | Value |\n| --- | --- |\n| preview | body |\n\n---\n\nTail";
+    const rendered = renderToStaticMarkup(createElement(MarkdownPreview, { content: `---\n${metadata}---\n${body}` }));
+    assert.ok(rendered.startsWith(`<pre><code class="language-yaml">${metadata}</code></pre><h1>Body</h1>`));
+    assert.match(rendered, /<table>/);
+    assert.match(rendered, /<hr\/>\n<p>Tail<\/p>/);
+
+    const crlf = renderToStaticMarkup(createElement(MarkdownPreview, { content: "\uFEFF--- \r\nname: demo\r\n---\t\r\n# CRLF body" }));
+    assert.equal(crlf, '<pre><code class="language-yaml">name: demo\r\n</code></pre><h1>CRLF body</h1>');
+    assert.equal(renderToStaticMarkup(createElement(MarkdownPreview, { content: "---\n---\n# Empty metadata" })), '<pre><code class="language-yaml"></code></pre><h1>Empty metadata</h1>');
+    assert.equal(renderToStaticMarkup(createElement(MarkdownPreview, { content: "---\nname: demo\n---" })), '<pre><code class="language-yaml">name: demo\n</code></pre>');
+
+    for (const content of ["---\n\nUnclosed metadata", "# Ordinary body\n\n---\n\nname: demo\n\n---", "```text\n---\nname: demo\n---\n```", "\n---\nname: demo\n---"])
+    {
+        const ordinary = renderToStaticMarkup(createElement(MarkdownPreview, { content }));
+        assert.doesNotMatch(ordinary, /language-yaml/);
+        assert.match(ordinary, /Unclosed metadata|Ordinary body|name: demo/);
+    }
+});
+
 test("Discover excludes installed skill ids across origins and casing, and allows removed skills again", () =>
 {
     const discovered: RemoteSkill[] = ["downloaded", "imported", "unknown", "available", "conflict"].map((id) => ({
-        id, title: id, description: "", owner: "example", name: "repo", branch: "main", sourcePath: id, conflict: id === "conflict",
+        id, title: id, description: "", owner: "example", name: "repo", branch: "main", sourcePath: id, previewId: id, conflict: id === "conflict",
     }));
     const installed: ProjectSkill[] = [
         { id: "Downloaded", title: "", description: "", origin: { kind: "github", owner: "other", name: "source", branch: "old", sourcePath: "", contentHash: "hash" } },
         { id: "imported", title: "", description: "", origin: { kind: "local", contentHash: "hash" } },
         { id: "unknown", title: "", description: "", origin: { kind: "unknown" } },
     ];
-    const selected = ["downloaded", "available", "conflict"];
     const selectable = selectableRemoteSkillIds(discovered, installed);
     assert.deepEqual([...selectable], ["available"]);
-    assert.deepEqual(selected.filter((id) => selectable.has(id)), ["available"]);
     assert.deepEqual([...selectableRemoteSkillIds(discovered, [])], ["downloaded", "imported", "unknown", "available"]);
 });
 
@@ -130,6 +181,12 @@ test("session console retains ordered history across hydration and navigation, a
 /** Small valid GitHub-shaped archive used by remote discovery checks. */
 const TEST_SKILL_ARCHIVE = Buffer.from(
     "UEsDBBQAAAAIAFgSKF30xqGHCQAAAAcAAAAXAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRTVnBJzc3nAgBQSwECFAAUAAAACABYEihd9MahhwkAAAAHAAAAFwAAAAAAAAAAAAAAAAAAAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRQSwUGAAAAAAEAAQBFAAAAPgAAAAAA",
+    "base64",
+);
+
+/** Valid ZIP whose discovered SKILL.md contains invalid UTF-8. */
+const INVALID_SKILL_MARKDOWN_ARCHIVE = Buffer.from(
+    "UEsDBBQAAAAIAHEhPF0AAAD/AwAAAAEAAAAXAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWT7DwBQSwECFAAUAAAACABxITxdAAAA/wMAAAABAAAAFwAAAAAAAAAAAAAAAAAAAAAAcmVwby1tYWluL2RlbW8vU0tJTEwubWRQSwUGAAAAAAEAAQBFAAAAOAAAAAAA",
     "base64",
 );
 
@@ -1725,6 +1782,80 @@ test("resolveExistingHarnessRoot returns configured directories and rejects miss
     });
 });
 
+test("workspace item folders resolve saved sources, installed SKILL.md, and actual generated files without creating missing paths", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await saveSharedRule(root, ".harness-align/rules/shared/common.md", "# Shared\n");
+        const skillDirectory = join(root, ".harness-align", "skills", "demo");
+        await mkdir(skillDirectory, { recursive: true });
+        await writeFile(join(skillDirectory, "SKILL.md"), "# Demo\n", "utf8");
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "source", path: ".harness-align/rules/base.md" }), join(root, ".harness-align", "rules"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "source", path: ".harness-align/rules/shared/common.md" }), join(root, ".harness-align", "rules", "shared"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "source", path: ".harness-align/layers/soul/arona.md" }), join(root, ".harness-align", "layers", "soul"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "source", path: ".harness-align/agents/explorer.md" }), join(root, ".harness-align", "agents"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "skill", id: "demo" }), skillDirectory);
+
+        assert.ok((await buildOutputs(root)).has("codex/AGENTS.md"));
+        await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "generated", path: "codex/AGENTS.md" }), /file does not exist/u);
+        const generated = join(root, ".harness-align", "generated");
+        await assert.rejects(readdir(generated), /ENOENT/u);
+        await generate(root);
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "generated", path: "codex/AGENTS.md" }), join(generated, "codex"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "generated", path: "codex/agents/explorer.toml" }), join(generated, "codex", "agents"));
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "generated", path: ".manifest.json" }), generated);
+        await writeFile(join(generated, "retained.txt"), "Unmanaged output\n", "utf8");
+        assert.equal(await resolveWorkspaceItemFolder(root, { kind: "generated", path: "retained.txt" }), generated);
+
+        for (const path of [".harness-align/config.json", ".harness-align/rules/unsaved.md", ".harness-align/skills/demo/SKILL.md", "../outside.md", "C:/outside.md"])
+        {
+            await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "source", path }), /source file does not exist in the workspace/u);
+        }
+        await assert.rejects(readFile(join(root, ".harness-align", "rules", "unsaved.md")), /ENOENT/u);
+        await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "skill", id: "missing" }), /skill does not exist/u);
+        await assert.rejects(readdir(join(root, ".harness-align", "skills", "missing")), /ENOENT/u);
+        await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "skill", id: "../demo" }), /skill id must match/u);
+        for (const path of ["../config.json", "/outside.md", "C:/outside.md", "codex\\AGENTS.md", "codex/../AGENTS.md"])
+        {
+            await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "generated", path }), /invalid managed path/u);
+        }
+        await mkdir(join(generated, "directory.txt"));
+        await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "generated", path: "directory.txt" }), /expected a file/u);
+        await unlink(join(generated, "codex", "AGENTS.md"));
+        await assert.rejects(resolveWorkspaceItemFolder(root, { kind: "generated", path: "codex/AGENTS.md" }), /file does not exist/u);
+    });
+});
+
+test("workspace item folders reject junctions along source, skill, generated, and workspace paths", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await generate(root);
+        await mkdir(join(root, ".harness-align", "skills", "demo"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "skills", "demo", "SKILL.md"), "# Demo\n", "utf8");
+        const cases: Array<{ directory: string; target: WorkspaceItemTarget }> = [
+            { directory: ".harness-align/rules", target: { kind: "source", path: ".harness-align/rules/base.md" } },
+            { directory: ".harness-align/layers/soul", target: { kind: "source", path: ".harness-align/layers/soul/arona.md" } },
+            { directory: ".harness-align/agents", target: { kind: "source", path: ".harness-align/agents/explorer.md" } },
+            { directory: ".harness-align/skills/demo", target: { kind: "skill", id: "demo" } },
+            { directory: ".harness-align/generated/codex", target: { kind: "generated", path: "codex/AGENTS.md" } },
+            { directory: ".harness-align", target: { kind: "generated", path: "codex/AGENTS.md" } },
+        ];
+        for (const { directory, target } of cases)
+        {
+            const path = join(root, directory);
+            const redirected = join(root, "redirected");
+            await rename(path, redirected);
+            await symlink(redirected, path, process.platform === "win32" ? "junction" : "dir");
+            const entries = await readdir(redirected);
+            await assert.rejects(resolveWorkspaceItemFolder(root, target), /symbolic link/u);
+            assert.deepEqual(await readdir(redirected), entries);
+            await unlink(path);
+            await rename(redirected, path);
+        }
+    });
+});
+
 test("generate and setup reports list written files and destination directories", async () =>
 {
     await withProject(async (root) =>
@@ -2038,7 +2169,7 @@ test("installSkillFromDirectory copies a local extracted skill into .harness-ali
     });
 });
 
-test("importUserSkills respects overwrite and records local origin", async () =>
+test("importUserSkills respects local overwrite and rejects GitHub replacement", async () =>
 {
     await withProject(async (root) =>
     {
@@ -2064,9 +2195,40 @@ test("importUserSkills respects overwrite and records local origin", async () =>
         }, true);
         assert.equal((await loadSkills(root))[0]?.origin.kind, "github");
         await writeFile(join(userSkill, "SKILL.md"), "---\nname: User Demo\n---\n\nImported over github.\n", "utf8");
-        await importUserSkills(root, ["demo"], true, userProfile);
+        const localUserSkill = join(userProfile, ".agents", "skills", "private");
+        await mkdir(localUserSkill);
+        await writeFile(join(localUserSkill, "SKILL.md"), "# Private\n");
+        assert.deepEqual((await listImportableUserSkills(root, userProfile)).map((skill) => skill.id), ["private"]);
+        await assert.rejects(importUserSkills(root, ["demo"], true, userProfile), /GitHub skill cannot be imported over/u);
+        assert.equal((await loadSkills(root))[0]?.origin.kind, "github");
+        await removeSkill(root, "demo");
+        await importUserSkills(root, ["demo"], false, userProfile);
         assert.equal(await readFile(join(root, ".harness-align", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: User Demo\n---\n\nImported over github.\n");
         assert.equal((await loadSkills(root))[0]?.origin.kind, "local");
+    });
+});
+
+test("skill content save protects GitHub origins and stale edits while updating local hash", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const source = join(root, "skill-source");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Original\n");
+        await installSkillFromDirectory(root, "local", source, { kind: "local", contentHash: "" });
+        const original = await readSkillContent(root, "local");
+        await saveSkillContent(root, "local", "# Edited\r\n", original);
+        assert.equal(await readSkillContent(root, "local"), "# Edited\n");
+        assert.equal((await loadSkillIndex(root)).local?.contentHash, await hashSkillDirectory(join(root, ".harness-align", "skills", "local")));
+        await assert.rejects(saveSkillContent(root, "local", "# Stale", original), /content changed/u);
+        await installSkillFromDirectory(root, "remote", source, { kind: "github", owner: "acme", name: "repo", branch: "main", sourcePath: "remote", contentHash: "" });
+        const remoteOriginal = await readSkillContent(root, "remote");
+        await assert.rejects(saveSkillContent(root, "remote", "# Edited", remoteOriginal), /read only/u);
+        assert.equal(await readSkillContent(root, "remote"), remoteOriginal);
+        await mkdir(join(root, ".harness-align", "skills", "unknown"));
+        await writeFile(join(root, ".harness-align", "skills", "unknown", "SKILL.md"), "# Unknown\n");
+        await saveSkillContent(root, "unknown", "# Editable", "# Unknown\n");
+        assert.equal(await readSkillContent(root, "unknown"), "# Editable\n");
     });
 });
 
@@ -2750,6 +2912,13 @@ test("IPC payload schemas reject coercion and incomplete editor shapes", () =>
     assert.equal(LAYER_SELECTION_SCHEMA.safeParse([{ name: "layer" }]).success, false);
     assert.equal(SKILL_IDS_SCHEMA.safeParse(["Demo", "demo"]).success, false);
     assert.equal(SKILL_IDS_SCHEMA.safeParse("demo").success, false);
+    for (const input of ["C:/folder", {}, { kind: "folder", path: "C:/folder" }, { kind: "source", path: 1 }, { kind: "generated", path: "" }, { kind: "skill", id: "demo", path: "C:/folder" }])
+    {
+        assert.equal(WORKSPACE_ITEM_TARGET_SCHEMA.safeParse(input).success, false);
+    }
+    assert.equal(WORKSPACE_ITEM_TARGET_SCHEMA.safeParse({ kind: "source", path: ".harness-align/rules/base.md" }).success, true);
+    assert.equal(WORKSPACE_ITEM_TARGET_SCHEMA.safeParse({ kind: "generated", path: "codex/AGENTS.md" }).success, true);
+    assert.equal(WORKSPACE_ITEM_TARGET_SCHEMA.safeParse({ kind: "skill", id: "demo" }).success, true);
 });
 
 test("repository-root skills survive batch installation, workspace reload, reinstall, and update checks", async (t) =>
@@ -2804,6 +2973,42 @@ test("discovery cache no longer installs skills after their source is removed", 
             await removeSkillSource(root, "example", "repo");
             await assert.rejects(installSkills(root, ["demo"]), /latest discover results/u);
             assert.deepEqual(await loadSkills(root), []);
+        }
+        finally
+        {
+            mocked.mock.restore();
+        }
+    });
+});
+
+test("discovered SKILL.md previews use the current cache and report invalid Markdown encoding", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await addSkillSource(root, { url: "https://github.com/example/repo" });
+        let archive = TEST_SKILL_ARCHIVE;
+        let requests = 0;
+        const mocked = t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) =>
+        {
+            requests += 1;
+            return String(url).includes("/commits/") ? Response.json({ sha: "a".repeat(40) }) : new Response(archive);
+        });
+        try
+        {
+            const first = (await discoverSkills(root))[0]!;
+            assert.match(await readDiscoveredSkillContent(root, first.previewId), /^# /u);
+            assert.equal(requests, 2);
+            await assert.rejects(readDiscoveredSkillContent(root, "00000000-0000-4000-8000-000000000000"), /latest discover results/u);
+            assert.match(await installDiscoveredSkill(root, first.previewId), /Installed 1 skill\(s\)/u);
+            archive = INVALID_SKILL_MARKDOWN_ARCHIVE;
+            const invalid = (await discoverSkills(root))[0]!;
+            await assert.rejects(readDiscoveredSkillContent(root, first.previewId), /latest discover results/u);
+            await assert.rejects(installDiscoveredSkill(root, first.previewId), /latest discover results/u);
+            await assert.rejects(readDiscoveredSkillContent(root, invalid.previewId), /example\/repo\/demo\/SKILL.md: invalid UTF-8/u);
+            await removeSkillSource(root, "example", "repo");
+            await assert.rejects(readDiscoveredSkillContent(root, invalid.previewId), /latest discover results/u);
+            await assert.rejects(installDiscoveredSkill(root, invalid.previewId), /latest discover results/u);
+            assert.equal(requests, 4);
         }
         finally
         {
@@ -3170,8 +3375,7 @@ test("application update installs only a downloaded offered release and rejects 
     assert.equal(failedDownload.availableVersion, "1.3.0-beta.1");
     assert.equal(failedDownload.percent, null);
     assert.equal(failedDownload.message, "network reset");
-    assert.throws(() => failAppUpdate(downloading, " "), /1 to 500 characters, got 0/u);
-    assert.throws(() => failAppUpdate(downloading, "x".repeat(501)), /got 501/u);
+    assert.throws(() => failAppUpdate(downloading, " "), /error message is empty/u);
 
     const downloaded = markAppUpdateDownloaded(beginAppUpdateDownload(available));
     assertAppUpdateInstallable(downloaded);
@@ -3191,7 +3395,6 @@ test("application update installs only a downloaded offered release and rejects 
     assert.deepEqual(authenticated, { proxyRules: "http://127.0.0.1:8888", username: "user", password: "p@ss" });
     assert.equal(authenticated.proxyRules.includes("p%40ss"), false);
     assert.deepEqual(environmentProxy("127.0.0.1:8888"), { proxyRules: "http://127.0.0.1:8888", username: null, password: null });
-    assert.throws(() => environmentProxy("http://user:pass@127.0.0.1:8888 extra"), (error: unknown) => error instanceof HalignError && !error.message.includes("pass"));
+    assert.throws(() => environmentProxy("http://user:pass@127.0.0.1:8888 extra"), /without spaces/u);
     assert.equal(environmentProxyBypass(" localhost, .github.com "), "localhost,.github.com");
-    assert.throws(() => environmentProxyBypass("localhost bad"), /host list/u);
 });

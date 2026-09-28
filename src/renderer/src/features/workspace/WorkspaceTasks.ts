@@ -49,6 +49,8 @@ function editorSavePriority(selection: Selection): number
         case "agent":
         case "agent-new":
             return 30;
+        case "skill":
+            return 35;
         case "layer-new":
             return 40;
         case "layer":
@@ -293,6 +295,13 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
         case "generated":
         case "generated-file":
             throw new Error(`${selectionKey(selection)} is read-only`);
+        case "skill":
+        {
+            const skill = workspace.skills.find((item) => item.id === selection.id);
+            if (!skill || skill.origin.kind === "github") throw new Error(`Skill ${selection.id} is missing or read only`);
+            await window.appApi.workspace.saveSkillContent(selection.id, snapshotText(snapshot, "content"), snapshotText(snapshot, "expectedContent"));
+            return { selection, message: `Saved ${selection.id}/SKILL.md` };
+        }
     }
 }
 

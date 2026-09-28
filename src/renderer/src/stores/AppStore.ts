@@ -28,6 +28,7 @@ export type Selection =
     | { kind: "rule-new"; scope: "root" | "shared" }
     | { kind: "agent"; path: string }
     | { kind: "agent-new" }
+    | { kind: "skill"; id: string }
     | { kind: "generated" }
     | { kind: "generated-file"; path: string };
 
@@ -80,6 +81,8 @@ export function selectionKey(selection: Selection): string
             return `agent:${selection.path}`;
         case "agent-new":
             return "agent-new";
+        case "skill":
+            return `skill:${selection.id}`;
         case "generated":
             return "generated";
         case "generated-file":
@@ -107,7 +110,7 @@ function selectionMatchesView(view: WorkspaceView, selection: Selection, workspa
                 || (selection.kind === "layer-option-new" && Object.hasOwn(workspace.layerOptions, selection.layer))
                 || (selection.kind === "layer-option" && Object.values(workspace.layerOptions).flat().some((item) => item.path === selection.path));
         case "skills":
-            return true;
+            return selection.kind === "skill" && workspace.skills.some((item) => item.id === selection.id);
         case "agents":
             return selection.kind === "agent-new"
                 || (selection.kind === "agent" && workspace.agents.some((item) => item.path === selection.path));
@@ -147,7 +150,10 @@ function selectionForView(view: WorkspaceView, selection: Selection, workspace: 
             return option ? { kind: "layer-option", path: option.path } : { kind: "layer", name: layer };
         }
         case "skills":
-            return selection;
+        {
+            const skill = workspace.skills[0];
+            return skill ? { kind: "skill", id: skill.id } : selection;
+        }
         case "agents":
         {
             const agent = workspace.agents[0];

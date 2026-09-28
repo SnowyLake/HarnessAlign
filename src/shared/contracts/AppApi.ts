@@ -18,6 +18,7 @@ import type {
     SkillUpdate,
     UserSkill,
     Workspace,
+    WorkspaceItemTarget,
 } from "../models/Workspace.js";
 
 /** Privileged capabilities exposed to the renderer through `window.appApi`. */
@@ -72,12 +73,17 @@ export interface AppApi
         removeHarness(name: string): Promise<void>;
         updateHarness(from: string, harness: HarnessConfig): Promise<Config>;
         openHarnessRoot(name: string): Promise<void>;
+        openItemFolder(target: WorkspaceItemTarget): Promise<void>;
         addSkillSource(input: { url: string; branch?: string }): Promise<Config>;
         removeSkillSource(owner: string, name: string): Promise<Config>;
         discoverSkills(): Promise<RemoteSkill[]>;
+        readDiscoveredSkillContent(previewId: string): Promise<string>;
+        installDiscoveredSkill(previewId: string): Promise<string>;
         installSkills(ids: string[]): Promise<string>;
         checkSkillUpdates(): Promise<SkillUpdate[]>;
         applySkillUpdates(ids: string[]): Promise<string>;
+        readSkillContent(id: string): Promise<string>;
+        saveSkillContent(id: string, content: string, expectedContent: string): Promise<void>;
         listUserSkills(): Promise<UserSkill[]>;
         importUserSkills(ids: string[], overwrite: boolean): Promise<string>;
         removeSkill(id: string): Promise<void>;

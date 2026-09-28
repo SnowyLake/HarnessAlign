@@ -86,6 +86,13 @@ export const AGENT_SCHEMA = z.strictObject({
 /** Ordered layer choices for Generate and Setup. */
 export const LAYER_SELECTION_SCHEMA = z.array(z.strictObject({ name: z.string(), option: z.string() })).optional();
 
+/** Identify an existing workspace item without accepting an arbitrary folder path. */
+export const WORKSPACE_ITEM_TARGET_SCHEMA = z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("source"), path: z.string().min(1) }),
+    z.strictObject({ kind: z.literal("generated"), path: z.string().min(1) }),
+    z.strictObject({ kind: z.literal("skill"), id: z.string().min(1) }),
+]);
+
 /** Skill source registration payload without implicit string coercion. */
 export const SKILL_SOURCE_INPUT_SCHEMA = z.strictObject({ url: z.string(), branch: z.string().optional() })
     .transform(({ url, branch }) => branch === undefined ? { url } : { url, branch });

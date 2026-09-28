@@ -3,6 +3,7 @@
  * The config root is always `%USERPROFILE%`; renderer input never chooses a directory.
  */
 
+import { dirname, join, resolve } from "node:path";
 import {
     addHarness,
     addLayer,
@@ -23,12 +24,16 @@ import {
     saveLayerOption,
     saveRule,
     saveSharedRule,
+    saveSkillContent,
     updateHarness,
 } from "../../engine/Edit.js";
-import { generate, readGeneratedFiles, reportGenerate } from "../../engine/Generate.js";
+import { assertContained, ensureRegularSource, lstatIfExists } from "../../engine/FsSafe.js";
+import { generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
+import { HalignError, valueText } from "../../engine/Model.js";
 import { reportSetup, setup } from "../../engine/Setup.js";
 import type { AppApi } from "../../shared/contracts/AppApi.js";
-import { importUserSkills, listUserSkills, removeSkill } from "../../engine/Skills.js";
+import { assertSkillName, importUserSkills, listImportableUserSkills, loadSkills, readSkillContent, removeSkill } from "../../engine/Skills.js";
+import type { WorkspaceItemTarget } from "../../shared/models/Workspace.js";
 import * as skillRemote from "./SkillRemoteService.js";
 
 /** Tail of the single-user workspace queue, including reads that must see complete writes. */
@@ -43,8 +48,36 @@ export function withWorkspace<T>(work: (root: string) => Promise<T>): Promise<T>
     return operation;
 }
 
+/** Resolve an existing source, generated file, or installed SKILL.md to its safe containing folder. */
+export async function resolveWorkspaceItemFolder(rootPath: string, target: WorkspaceItemTarget): Promise<string>
+{
+    const root = resolve(rootPath);
+    let relativePath: string;
+    if (target.kind === "generated") relativePath = `.harness-align/generated/${safeOutputRelative(target.path)}`;
+    else if (target.kind === "skill")
+    {
+        const id = assertSkillName(target.id, `.harness-align/skills/${target.id}`);
+        if (!(await loadSkills(root)).some((skill) => skill.id === id)) throw new HalignError(`.harness-align/skills/${id}: skill does not exist`);
+        relativePath = `.harness-align/skills/${id}/SKILL.md`;
+    }
+    else
+    {
+        const workspace = await loadWorkspace(root);
+        const sources = [...workspace.rootRules, ...workspace.sharedRules, ...workspace.agents, ...Object.values(workspace.layerOptions).flat()];
+        if (!sources.some((source) => source.path === target.path)) throw new HalignError(`Open in explorer: source file does not exist in the workspace, got ${valueText(target.path)}`);
+        relativePath = target.path;
+    }
+    const path = resolve(root, ...relativePath.split("/"));
+    assertContained(join(root, ".harness-align"), path, "Open in explorer");
+    await ensureRegularSource(root, path);
+    const stats = await lstatIfExists(path);
+    if (!stats) throw new HalignError(`Open in explorer: file does not exist: ${path}`);
+    if (!stats.isFile()) throw new HalignError(`Open in explorer: expected a file: ${path}`);
+    return dirname(path);
+}
+
 /** Privileged workspace operations that wrap the engine. Folder opening stays in the IPC handler so this module stays Electron-free. */
-export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot"> = {
+export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "openItemFolder"> = {
     /** Load and validate the user `.harness-align` workspace. */
     load: () => withWorkspace(async (root) =>
     {
@@ -112,6 +145,12 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot"> = {
     /** Discover remote skills from configured GitHub sources. */
     discoverSkills: () => withWorkspace((root) => skillRemote.discoverSkills(root)),
 
+    /** Read one remote SKILL.md from the current discovery cache. */
+    readDiscoveredSkillContent: (previewId) => withWorkspace((root) => skillRemote.readDiscoveredSkillContent(root, previewId)),
+
+    /** Install the exact skill selected from the current discovery cache. */
+    installDiscoveredSkill: (previewId) => withWorkspace((root) => skillRemote.installDiscoveredSkill(root, previewId)),
+
     /** Install selected discovered skills into the project. */
     installSkills: (ids) => withWorkspace((root) => skillRemote.installSkills(root, ids)),
 
@@ -121,8 +160,14 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot"> = {
     /** Apply remote updates for selected installed skills. */
     applySkillUpdates: (ids) => withWorkspace((root) => skillRemote.applySkillUpdates(root, ids)),
 
+    /** Read one installed skill's main Markdown file. */
+    readSkillContent: (id) => withWorkspace((root) => readSkillContent(root, id)),
+
+    /** Save one local skill's main Markdown file. */
+    saveSkillContent: (id, content, expectedContent) => withWorkspace((root) => saveSkillContent(root, id, content, expectedContent)),
+
     /** List skills under the current user profile. */
-    listUserSkills: () => withWorkspace(() => listUserSkills()),
+    listUserSkills: () => withWorkspace((root) => listImportableUserSkills(root)),
 
     /** Import selected user-profile skills into the project. */
     importUserSkills: (ids, overwrite) => withWorkspace((root) => importUserSkills(root, ids, overwrite)),

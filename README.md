@@ -19,6 +19,7 @@ Harness Align 是一款管理编码助手配置的 Windows 桌面应用. 你可�
 - 编辑公共规则, 按助手指定适用范围. 用 Layer 保存可切换的规则选项, 调整组合和顺序.
 - 为 Subagent 维护一份共享正文, 分别编辑各助手的参数, 生成 TOML 或带 YAML metadata 的 Markdown 文件.
 - 从 GitHub 发现和安装 Skills, 检查更新, 或导入本机已有 Skills.
+- Markdown 正文支持源码与预览切换和 YAML frontmatter 展示, 可以查看未保存的内容, 保留光标位置和撤销记录.
 - 生成后查看 `AGENTS.md` 和 Subagent 文件, 再部署到已存在的助手目录. 共享规则和 Skills 一并部署.
 - 在多台设备间同步配置, 预览差异, 选择冲突版本, 或将某项本地修改还原为远端版本.
 - 在安装版的 Settings 中检查最新正式版, 下载并安装升级. 配置, 主题和同步凭据会保留.

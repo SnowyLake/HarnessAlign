@@ -44,7 +44,17 @@
 
 文件列表顶部的 Add 用于新建内容. 编辑区的 Create 或 Save file, 文件行菜单和右键菜单中的 Save, 都只保存当前项. Discard changes 会恢复当前项的已保存内容.
 
-Save all 和 `Ctrl+S` 会保存所有页面的草稿, 以及当前 Layer 顺序与选项. 切换页面会保留草稿, 关闭有未保存修改的窗口时会提示确认. Skills 操作直接生效, 不需要再点 Save all.
+文件行的省略号菜单和右键菜单按 Save, Rename, Open in explorer, Open repository, Remove 排列, 只显示当前项支持的操作. Remove 前有分隔线; Skills 的 Apply update 或更新失败提示位于 Open repository 后、分隔线前.
+
+Rules, Shared Rules, Agents, Layer Options, Installed Skills 和 Generated 的文件行菜单及右键菜单都提供 Open in explorer, 用于打开对应文件所在文件夹. Installed Skills 打开已安装 `SKILL.md` 所在目录. 新建但未保存的条目不提供此操作; 文件已被外部删除时会报告错误, 不会创建文件或目录.
+
+Save all 和 `Ctrl+S` 会保存所有页面的草稿, 以及当前 Layer 顺序与选项. 切换页面会保留草稿, 关闭有未保存修改的窗口时会提示确认. Skills 的安装, 导入和移除直接生效; 编辑 `SKILL.md` 后需要保存.
+
+Markdown 正文默认显示 Source. 点击 Body 或 Content 标题行最右侧的 Preview 可以查看当前内容, 包括尚未保存的修改; 切回 Source 后继续编辑, 光标位置和撤销记录会保留. Rules, Layers, Agents, Skills 和 Generated 中的 Markdown 都支持此切换, JSON 和其他纯文本保持源码视图. 切换视图不会保存文件或产生草稿.
+
+预览支持标题, 列表, 引用, 代码块, 表格和任务列表. 原始 HTML 不会渲染, 链接只显示文字且不能跳转, 图片显示 `[Image: 替代文字]` 或 `[Image]`. 代码块保持普通文本, 长行自动换行并保留原文和缩进, Mermaid 内容也按代码块显示.
+
+文档第一行以 `---` 开始且存在独立一行的结束 `---` 时, 预览会在顶部用 YAML 代码块原样显示 frontmatter, 下方渲染 Markdown 正文. 开头允许 BOM, 分隔符支持 LF 和 CRLF 换行. metadata 可以为空, 预览不校验或改写 YAML; 缺少结束分隔符时保持普通 Markdown 渲染. 正文中的分隔线和代码块不会作为 frontmatter 处理.
 
 在软件外修改本地文件后, 点击顶部 Reload 重新读取文件. 没有未保存修改时会直接刷新; 有草稿或未保存的 Layer 顺序与选项时, 可以 Cancel 保留当前内容, 或选择 Discard and reload 丢弃软件内全部未保存修改, 以本地文件为准. 读取或校验失败时保留原有页面内容和草稿, 详情见 Console. 重载后保留当前页面和仍存在的选中项; 选中项被外部删除时会选择该页面的其他可用项.
 
@@ -74,13 +84,15 @@ Add layer 创建空 Group, 添加 Option 后才能启用. 关闭 Group 开关会
 
 在 Agents 页编辑 Subagent 的共享正文, 按 Harness 切换各自的 metadata, 用 Enable 选择需要生成该 Agent 的助手. OpenCode 标签页在 Enable 同行右侧提供相同样式的 Generate name field 勾选项, 默认勾选; 取消勾选后生成的 frontmatter 不包含 `name`. 切换 Agent 时会保持当前 Harness 标签页. 字段和文件格式见[配置参考](configuration.md).
 
-Skills 页可以安装 GitHub Skills, 检查更新和导入本机内容. 具体操作见[Skills 管理](skills.md).
+Skills 页左侧在 Installed 和 Discover 间切换, 仅列出 Skill 名称; Discover 中已安装项的名称置灰, 仍可点击预览. 右侧显示所选项的 `SKILL.md`, Discover 在文件名旁提供来源仓库链接, 右上角提供当前项的安装按钮. GitHub 来源只读, 本地导入或来源不明的 Skill 可编辑并保存. Import 不列出当前项目已安装的同名 GitHub Skill. 具体操作见[Skills 管理](skills.md).
 
 ## 生成和部署
 
 Generate 和 Setup 使用当前 Layer 顺序与选项, 包括尚未保存的选择. 有未保存的源文件草稿时, 先用 Save all 或 `Ctrl+S` 保存, 再生成或部署.
 
 Generate 只更新 `%USERPROFILE%\.harness-align\generated`. 每个已声明 Harness 都会得到 `AGENTS.md` 和对应格式的 `agents/` 文件. 应用只删除自己管理过且本次不再生成的文件, 保留未知文件. Generated 页用于查看结果, 不要手工修改输出文件.
+
+Generated 的 Open in explorer 打开生成文件在 `generated/` 中所在的文件夹. 操作基于已有磁盘文件, 不会保存编辑预览或打开部署后的助手副本.
 
 Setup 会重新生成, 然后按下表更新本机目录. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
 

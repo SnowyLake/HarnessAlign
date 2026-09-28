@@ -447,7 +447,7 @@ function RuleForm({ workspace, selection }: { workspace: Workspace; selection: E
                         }}
                     />
                     {!isShared ? <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} /> : null}
-                    <Form.Item label="Body">
+                    <Form.Item>
                         <SourceEditor
                             aria-label={isShared ? "Shared rule body" : "Rule body"}
                             name="body"
@@ -518,7 +518,7 @@ function LayerOptionForm({ workspace, selection }: { workspace: Workspace; selec
                         }}
                     />
                     <TargetBoxes selected={draftValues(editor.draft, "targets", existing?.targets)} />
-                    <Form.Item label="Body">
+                    <Form.Item>
                         <SourceEditor
                             aria-label="Layer option body"
                             name="body"
@@ -640,7 +640,7 @@ function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessCha
                             })}
                         />
                     </Form.Item>
-                    <Form.Item label="Body">
+                    <Form.Item>
                         <SourceEditor
                             name="body"
                             language="markdown"
@@ -681,6 +681,7 @@ function GeneratedFileView({ workspace, path }: { workspace: Workspace; path: st
     return (
         <SourceEditor
             key={file.content}
+            label="Content"
             aria-label={file.path}
             language={file.path.toLowerCase().endsWith(".md") ? "markdown" : "plain"}
             defaultValue={file.content}

@@ -7,7 +7,6 @@ import { errorText, HalignError } from "../../engine/Model.js";
 import type { AppUpdateStatus } from "../../shared/models/AppUpdate.js";
 import { logMainError } from "./ConsoleService.js";
 import {
-    assertAppUpdateInstallable,
     beginAppUpdateCheck,
     beginAppUpdateDownload,
     environmentProxy,
@@ -97,7 +96,6 @@ export function downloadAndInstallAppUpdate(): Promise<AppUpdateStatus>
                 throw new HalignError(`application update: ${status.message ?? "The installer did not start."}`);
             }
             publish(markAppUpdateDownloaded(status));
-            assertAppUpdateInstallable(status);
         }
         catch (error)
         {
@@ -110,10 +108,7 @@ export function downloadAndInstallAppUpdate(): Promise<AppUpdateStatus>
 export function subscribeAppUpdate(listener: (status: AppUpdateStatus) => void): () => void
 {
     listeners.add(listener);
-    return () =>
-    {
-        listeners.delete(listener);
-    };
+    return () => listeners.delete(listener);
 }
 
 /** Run one check or download at a time. */
@@ -152,7 +147,6 @@ async function loadUpdater(): Promise<import("electron-updater").AppUpdater>
         autoUpdater.autoDownload = false;
         autoUpdater.autoInstallOnAppQuit = false;
         autoUpdater.allowPrerelease = false;
-        autoUpdater.allowDowngrade = false;
         autoUpdater.disableWebInstaller = true;
         autoUpdater.on("error", onUpdaterError);
         autoUpdater.on("login", (info, callback) =>
