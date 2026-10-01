@@ -30,6 +30,7 @@ import {
 } from "./Model.js";
 import { assertSkillName, hashSkillDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource, readSkillContent, serializeSkillIndex } from "./Skills.js";
 import { parseSyncSnapshot, readSyncSnapshot, syncSkillIndex, syncSnapshotHash, type SyncSnapshot } from "./Sync.js";
+import { recoverDeployment } from "./Setup.js";
 
 /** Default candidates filtered by existing user configuration directories on first initialization. */
 const DEFAULT_USER_CONFIG = {
@@ -585,6 +586,7 @@ export async function ensureUserWorkspace(userProfile = process.env.USERPROFILE)
         }
     }
     await recoverSyncSources(root);
+    await recoverDeployment(root, root);
     const guidePath = join(halign, "AGENTS.md");
     await ensureRegularSource(root, guidePath);
     const guideStats = await lstatIfExists(guidePath);

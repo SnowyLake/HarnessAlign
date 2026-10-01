@@ -37,7 +37,7 @@ import {
 import { loadConfig, validateConfig } from "../src/engine/Load.js";
 import { HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
-import { previewSetup, reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
+import { previewSetup, recoverDeployment, reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
 import { assertSafeZipEntry, importUserSkills, listImportableUserSkills, listUserSkills, readSkillContent, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
@@ -59,6 +59,95 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("deployment recovery persists failed rollback, refuses external edits and escaped records, then restores on startup", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".codex", "agents"), { recursive: true });
+        await mkdir(join(root, ".agents", "shared-rules"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/new.md", "New shared");
+        await writeFile(join(root, ".codex", "AGENTS.md"), "Old rules");
+        await writeFile(join(root, ".codex", "agents", "old.toml"), "Old agent");
+        await writeFile(join(root, ".agents", "shared-rules", "old.md"), "Old shared");
+        const beforeHarness = await snapshot(join(root, ".codex"));
+        const beforeShared = await snapshot(join(root, ".agents", "shared-rules"));
+        const originalRename = fs.rename;
+        const blocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            const from = String(args[0]);
+            const to = String(args[1]);
+            if (from.includes(".harness-align-stage-") && to === join(root, ".agents", "shared-rules")) throw new Error("Injected interrupted swap");
+            if (from.includes(".harness-align-backup-") && to === join(root, ".codex", "AGENTS.md")) throw new Error("Injected unavailable restore");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, root, undefined, true), /recovery preserved.*Injected unavailable restore/u); }
+        finally { blocked.mock.restore(); }
+        const recordPath = join(root, ".harness-align", ".deployment-recovery.json");
+        const record = await readFile(recordPath);
+        assert.equal(Object.hasOwn((await readSyncSnapshot(root)).files, ".deployment-recovery.json"), false);
+        await writeFile(join(root, ".codex", "AGENTS.md"), "Later external edit");
+        const beforeRefusal = await snapshot(root);
+        await assert.rejects(recoverDeployment(root, root), /changed outside the pending deployment/u);
+        assert.deepEqual(await snapshot(root), beforeRefusal);
+        await unlink(join(root, ".codex", "AGENTS.md"));
+        const corrupt = JSON.parse(record.toString("utf8")) as { entries: Array<{ target: string }> };
+        corrupt.entries[0]!.target = ".harness-align/config.json";
+        await writeFile(recordPath, JSON.stringify(corrupt));
+        await assert.rejects(recoverDeployment(root, root), /outside the declared deployment scopes/u);
+        await writeFile(recordPath, record);
+        const pending = JSON.parse(record.toString("utf8")) as { entries: Array<{ backup: string }> };
+        const backupPath = join(root, pending.entries[0]!.backup);
+        const heldBackup = join(root, "held-deployment-backup");
+        const external = join(root, "external-recovery-directory");
+        await mkdir(external);
+        await writeFile(join(external, "keep.md"), "Keep external");
+        await rename(backupPath, heldBackup);
+        await symlink(external, backupPath, "junction");
+        await assert.rejects(recoverDeployment(root, root), /reparse points/u);
+        assert.equal(await readFile(join(external, "keep.md"), "utf8"), "Keep external");
+        await unlink(backupPath);
+        await rename(heldBackup, backupPath);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await snapshot(join(root, ".codex")), beforeHarness);
+        assert.deepEqual(await snapshot(join(root, ".agents", "shared-rules")), beforeShared);
+        await assert.rejects(readFile(recordPath), /ENOENT/u);
+        assert.equal(await recoverDeployment(root, root), "none");
+        for (const parent of [join(root, ".codex"), join(root, ".agents")]) assert.equal((await readdir(parent)).some((name) => name.startsWith(".harness-align-")), false);
+    });
+});
+
+test("committed deployment recovery completes its baseline and cleanup while preserving later edits", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".codex", "agents"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/new.md", "New shared");
+        await writeFile(join(root, ".codex", "AGENTS.md"), "Old rules");
+        await writeFile(join(root, ".codex", "agents", "old.md"), "Old agent");
+        const originalRemove = fs.rm;
+        const blocked = t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) =>
+        {
+            if (String(args[0]).includes(".harness-align-backup-")) throw new Error("Injected interrupted cleanup");
+            return originalRemove(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, root, undefined, true), /recovery preserved.*Injected interrupted cleanup/u); }
+        finally { blocked.mock.restore(); }
+        const target = join(root, ".codex", "AGENTS.md");
+        const deployed = await readFile(target);
+        const recordPath = join(root, ".harness-align", ".deployment-recovery.json");
+        const record = await readFile(recordPath);
+        await writeFile(target, "External after commit");
+        await assert.rejects(recoverDeployment(root, root), /changed outside the pending deployment/u);
+        assert.equal(await readFile(target, "utf8"), "External after commit");
+        assert.deepEqual(await readFile(recordPath), record);
+        await writeFile(target, deployed);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await readFile(target), deployed);
+        await assert.rejects(readFile(recordPath), /ENOENT/u);
+        assert.equal((await previewSetup(root, undefined, root)).changes.some((change) => change.external), false);
+    });
+});
 
 test("deployment baselines mark external edits and extra deletions and require explicit approval", async () =>
 {
