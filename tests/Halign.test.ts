@@ -21,7 +21,7 @@ import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/Ap
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
 import { DiffText } from "../src/renderer/src/components/common/DiffText.js";
 import { diffLines } from "../src/renderer/src/lib/TextDiff.js";
-import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
+import { appendLog, clearLogs, logMainError, readLogs, redactedLogText, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
 import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent, readSkillUpdatePreview } from "../src/main/services/SkillRemoteService.js";
@@ -31,7 +31,7 @@ import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
 import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
 import { buildOutputs, generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
-import { readResponseBytes } from "../src/main/services/RemoteFetch.js";
+import { githubRateLimitHint, readResponseBytes } from "../src/main/services/RemoteFetch.js";
 import {
     assertAppUpdateInstallable, assertReleaseVersion, beginAppUpdateCheck, beginAppUpdateDownload, environmentProxy, environmentProxyBypass,
     failAppUpdate, initialAppUpdateStatus, markAppUpdateAvailable, markAppUpdateCurrent, markAppUpdateDownloaded, unavailableAppUpdateStatus, updateAppUpdateProgress,
@@ -39,7 +39,7 @@ import {
 import { loadConfig, validateConfig } from "../src/engine/Load.js";
 import { HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
-import { previewSetup, recoverDeployment, reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
+import { inspectHarnessRoots, previewSetup, recoverDeployment, reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
 import { assertSafeZipEntry, importUserSkills, listImportableUserSkills, listUserSkills, readSkillContent, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
@@ -61,6 +61,46 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("Harness root status reports missing, ready and unsafe paths without creation or following junctions", async () =>
+{
+    await withProject(async (root) =>
+    {
+        assert.ok((await inspectHarnessRoots(root, root)).every((item) => item.state === "missing"));
+        await mkdir(join(root, ".codex"));
+        await writeFile(join(root, ".cursor"), "Not a directory");
+        const external = join(root, "external-status");
+        await mkdir(external);
+        await mkdir(join(root, ".config"));
+        await symlink(external, join(root, ".config", "opencode"), "junction");
+        assert.deepEqual(await inspectHarnessRoots(root, root), [{ name: "codex", state: "ready" }, { name: "cursor", state: "unsafe" }, { name: "opencode", state: "unsafe" }]);
+        assert.deepEqual(await readdir(external), []);
+    });
+});
+
+test("Console copies redact home paths and common credentials while keeping original diagnostics", () =>
+{
+    clearLogs();
+    const details = 'C:\\Users\\Example\\.codex and C:/Users/Example/file; ghp_fakeSecret; Bearer test-secret; {"token":"test-token","password":"pass-value"}; http://user:proxy-pass@proxy.example';
+    appendLog({ level: "error", title: "Example diagnostics", details });
+    const copy = redactedLogText("C:\\Users\\Example");
+    for (const secret of ["Example\\.codex", "Example/file", "ghp_fakeSecret", "test-secret", "test-token", "pass-value", "proxy-pass"]) assert.equal(copy.includes(secret), false);
+    assert.ok(copy.includes("%USERPROFILE%"));
+    assert.ok(copy.includes("Example diagnostics"));
+    assert.equal(readLogs().entries[0]!.details, details);
+    clearLogs();
+});
+
+test("GitHub rate-limit hints use validated retry headers and distinguish permission failures", () =>
+{
+    const now = Date.UTC(2026, 9, 1);
+    assert.match(githubRateLimitHint(new Response(null, { status: 429, headers: { "retry-after": "120" } }), now)!, /wait 120s.*2026-10-01T00:02:00/u);
+    assert.match(githubRateLimitHint(new Response(null, { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(now / 1000 + 300) } }), now)!, /wait 300s/u);
+    assert.equal(githubRateLimitHint(new Response(null, { status: 403 })), undefined);
+    const unsafe = githubRateLimitHint(new Response(null, { status: 429, headers: { "retry-after": "secret-value" } }), now)!;
+    assert.equal(unsafe.includes("secret-value"), false);
+    assert.match(unsafe, /wait 60s/u);
+});
 
 test("Skill update review shows old/new commits, all file changes and bounded Markdown without writing", async (t) =>
 {
@@ -126,7 +166,7 @@ test("Harness explanations match strict targets, selected Layers, empty no-ops a
         await addLayer(root, "disabled");
         await addLayerOption(root, "disabled", "empty");
         await saveLayerOption(root, { path: ".harness-align/layers/soul/noop.md", targets: ["codex"], body: "" });
-        const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } };
+        const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, harnessRoots: [] };
         const choices = [{ name: "soul", option: "noop" }];
         const effects = harnessEffects(workspace, "codex", choices);
         assert.equal(effects.find((effect) => effect.path.endsWith("inactive.md"))?.reason, "No targets selected");
@@ -539,7 +579,7 @@ test("opened source guards reject external edits, deletion, creation races, and 
         const previous = { ...state };
         try
         {
-            const workspace = { ...opened, generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } };
+            const workspace = { ...opened, generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, harnessRoots: [] };
             state.resetWorkspace(workspace);
             state.setEditorDraft(`rule:${rule.path}`, { selection: { kind: "rule", path: rule.path }, baseline: { body: [rule.body] }, current: { body: ["Draft"] }, sourceRevisions: opened.sourceRevisions });
             state.setWorkspace({ ...workspace, sourceRevisions: { ...opened.sourceRevisions, [rule.path]: "b".repeat(64) } });
@@ -3727,7 +3767,7 @@ test("Layer selection keeps local choices and falls back only when the selected 
         const initial = useAppStore.getState();
         try
         {
-            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } };
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, harnessRoots: [] };
             initial.setWorkspace(undefined);
             initial.setWorkspace(workspace);
             initial.setLayerSelection([{ name: "soul", option: "kei" }]);
@@ -3764,7 +3804,7 @@ test("workspace reload replaces drafts and Layer choices only after a valid disk
         const initial = useAppStore.getState();
         try
         {
-            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } };
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, harnessRoots: [] };
             initial.setWorkspace(undefined);
             initial.setWorkspace(workspace);
             initial.setView("rules");
@@ -3780,12 +3820,12 @@ test("workspace reload replaces drafts and Layer choices only after a valid disk
             const configPath = join(root, ".harness-align/config.json");
             const savedConfig = await readFile(configPath, "utf8");
             await writeFile(configPath, "invalid JSON");
-            await assert.rejects(loadWorkspace(root).then((loaded) => initial.resetWorkspace({ ...loaded, generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } })));
+            await assert.rejects(loadWorkspace(root).then((loaded) => initial.resetWorkspace({ ...loaded, generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, harnessRoots: [] })));
             assert.equal(useAppStore.getState(), before);
             await writeFile(configPath, savedConfig);
             await writeRule(root, rule.path.split("/").at(-1)!, rule.priority, "Changed outside the app");
             await saveConfig(root, { ...await loadConfig(root), layers: [{ name: "soul", selected: "kei" }] });
-            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } });
+            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, harnessRoots: [] });
             const reloaded = useAppStore.getState();
             assert.match(reloaded.workspace!.rootRules.find((item) => item.path === rule.path)!.body, /Changed outside the app/u);
             assert.deepEqual(reloaded.layerSelection, [{ name: "soul", option: "kei" }]);
@@ -3800,7 +3840,7 @@ test("workspace reload replaces drafts and Layer choices only after a valid disk
             initial.resetWorkspace(reloaded.workspace!);
             assert.equal(useAppStore.getState().workspaceRevision, reloaded.workspaceRevision + 1);
             await unlink(join(root, rule.path));
-            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } });
+            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, harnessRoots: [] });
             assert.notDeepEqual(useAppStore.getState().selection, selection);
             assert.equal(useAppStore.getState().view, "rules");
             initial.setView("console");

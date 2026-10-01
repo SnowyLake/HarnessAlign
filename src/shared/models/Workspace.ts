@@ -196,4 +196,5 @@ export interface Workspace
     skills: ProjectSkill[];
     generatedFiles: GeneratedFile[];
     generationStatus: GenerationStatus;
+    harnessRoots: Array<{ name: string; state: "ready" | "missing" | "unsafe" }>;
 }

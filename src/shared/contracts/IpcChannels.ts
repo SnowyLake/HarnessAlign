@@ -5,6 +5,7 @@
 
 /** Channel names for the typed Main / Preload IPC contract. */
 export const IPC_CHANNELS = {
+    consoleCopyRedacted: "console:copy-redacted",
     consoleRead: "console:read",
     consoleAppend: "console:append",
     consoleClear: "console:clear",

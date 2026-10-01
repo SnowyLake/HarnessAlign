@@ -521,6 +521,30 @@ export async function resolveExistingHarnessRoot(rootPath: string, name: string,
     return targetRoot;
 }
 
+/** Safe directory availability without exposing a user-profile path to the renderer. */
+export interface HarnessRootStatus
+{
+    name: string;
+    state: "ready" | "missing" | "unsafe";
+}
+
+/** Inspect saved deployment roots without creating directories or following reparse points. */
+export async function inspectHarnessRoots(rootPath: string, userProfile = process.env.USERPROFILE): Promise<HarnessRootStatus[]>
+{
+    const config = await loadConfig(rootPath);
+    const home = resolveUserHome(userProfile);
+    return Promise.all(config.harnesses.map(async (harness): Promise<HarnessRootStatus> =>
+    {
+        try
+        {
+            const path = await assertNoReparseComponents(home, join(home, ...harness.configPath.split("/")), "Harness directory status");
+            const stats = await lstatIfExists(path);
+            return { name: harness.name, state: !stats ? "missing" : stats.isDirectory() ? "ready" : "unsafe" };
+        }
+        catch { return { name: harness.name, state: "unsafe" }; }
+    }));
+}
+
 /** Format the setup success report for the desktop log. */
 export function reportSetup(result: SetupResult): string
 {

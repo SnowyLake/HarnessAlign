@@ -14,6 +14,17 @@ export async function fetchRemote(url: string, init: RequestInit): Promise<Respo
     return fetch(url, init);
 }
 
+/** Describe recognized GitHub rate limits using only validated retry headers. */
+export function githubRateLimitHint(response: Response, now = Date.now()): string | undefined
+{
+    if (response.status !== 429 && !(response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0" || response.headers.has("retry-after")))) return undefined;
+    const retry = response.headers.get("retry-after") ?? "";
+    const reset = response.headers.get("x-ratelimit-reset") ?? "";
+    const delay = /^\d{1,7}$/u.test(retry) ? Number(retry) * 1000 : /^\d{1,12}$/u.test(reset) ? Number(reset) * 1000 - now : 60_000;
+    const seconds = Math.ceil((delay > 0 ? delay : 60_000) / 1000);
+    return `GitHub API rate limit reached; wait ${seconds}s before retrying (after ${new Date(now + seconds * 1000).toISOString()}); avoid repeated requests`;
+}
+
 /** Read a bounded response, cancelling oversized bodies and releasing the stream reader. */
 export async function readResponseBytes(response: Response, limit: number, context: string): Promise<Buffer>
 {

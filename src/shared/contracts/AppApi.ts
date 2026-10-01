@@ -28,6 +28,7 @@ import type {
 export interface AppApi
 {
     console: {
+        copyRedacted(): Promise<void>;
         read(): Promise<LogSnapshot>;
         append(input: LogInput): Promise<void>;
         clear(): Promise<void>;

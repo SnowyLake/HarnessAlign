@@ -733,6 +733,8 @@ export function HarnessesPanel()
                     {drafts["harness-new"] ? "Continue new harness" : "Add harness"}
                 </Button>
             </Flex>
+            {workspace.config.harnesses.length === 0 ? <Alert type="info" showIcon title="No Harness configured yet"
+                description="Initialize your tool's configuration directory in your user profile, then use Add harness. Setup skips missing Harness folders; shared rules and installed Skills can still deploy independently." /> : null}
             <div className="harnesses-grid">
                 {workspace.config.harnesses.map((harness) => (
                     <Card key={harness.name} className="harness-card" classNames={{ body: "harness-card-body" }}>
@@ -740,6 +742,9 @@ export function HarnessesPanel()
                             <span className="harness-card-mark" aria-hidden="true">{harness.name.slice(0, 2).toUpperCase()}</span>
                             <div className="harness-card-heading">
                                 <Typography.Title level={4} className="harness-card-name">{harness.name}</Typography.Title>
+                                <Tag color={workspace.harnessRoots.find((item) => item.name === harness.name)?.state === "ready" ? "green" : "gold"}>
+                                    {workspace.harnessRoots.find((item) => item.name === harness.name)?.state === "ready" ? "Ready" : workspace.harnessRoots.find((item) => item.name === harness.name)?.state === "missing" ? "Missing folder" : "Unsafe / unavailable"}
+                                </Tag>
                                 <Button
                                     type="link"
                                     size="small"

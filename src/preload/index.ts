@@ -13,6 +13,7 @@ import type { Agent, Config, HarnessConfig, LayerOptionInput, RuleInput } from "
 /** Renderer-facing capability API bridged onto `window.appApi`. */
 const appApi: AppApi = {
     console: {
+        copyRedacted: () => ipcRenderer.invoke(IPC_CHANNELS.consoleCopyRedacted),
         read: () => ipcRenderer.invoke(IPC_CHANNELS.consoleRead),
         append: (input) => ipcRenderer.invoke(IPC_CHANNELS.consoleAppend, input),
         clear: () => ipcRenderer.invoke(IPC_CHANNELS.consoleClear),

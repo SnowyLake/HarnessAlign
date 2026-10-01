@@ -31,7 +31,7 @@ import {
 import { assertContained, ensureRegularSource, lstatIfExists } from "../../engine/FsSafe.js";
 import { generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
 import { HalignError, valueText } from "../../engine/Model.js";
-import { previewSetup, reportSetup, setup } from "../../engine/Setup.js";
+import { inspectHarnessRoots, previewSetup, reportSetup, setup } from "../../engine/Setup.js";
 import type { AppApi } from "../../shared/contracts/AppApi.js";
 import { assertSkillName, importUserSkills, listImportableUserSkills, loadSkills, readSkillContent, removeSkill } from "../../engine/Skills.js";
 import type { LayerSelection, WorkspaceItemTarget } from "../../shared/models/Workspace.js";
@@ -122,6 +122,7 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
         return {
             ...workspace,
             generationStatus: await inspectGenerated(root, generatedFiles),
+            harnessRoots: await inspectHarnessRoots(root),
             generatedFiles: [...generatedFiles].map(([path, content]) => ({ path, content: content.toString("utf8") })),
         };
     }),

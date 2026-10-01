@@ -3,11 +3,11 @@
  * Update checks and downloads take no renderer payload.
  */
 
-import { app, ipcMain, shell } from "electron";
+import { app, clipboard, ipcMain, shell } from "electron";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import { HTTPS_URL_SCHEMA, LOG_INPUT_SCHEMA } from "../../shared/models/Schemas.js";
 import { checkForAppUpdate, downloadAndInstallAppUpdate, getAppUpdateStatus, subscribeAppUpdate } from "../services/AppUpdateService.js";
-import { appendLog, clearLogs, readLogs, subscribeLogs } from "../services/ConsoleService.js";
+import { appendLog, clearLogs, readLogs, redactedLogText, subscribeLogs } from "../services/ConsoleService.js";
 import { getMainWindow } from "../windows/MainWindow.js";
 import { runIpc } from "../utils/Ipc.js";
 import { setUpdateDraftState } from "../services/WorkspaceService.js";
@@ -17,6 +17,7 @@ import { z } from "zod";
 export function registerAppHandlers(): void
 {
     ipcMain.handle(IPC_CHANNELS.consoleRead, (event) => runIpc(event, readLogs));
+    ipcMain.handle(IPC_CHANNELS.consoleCopyRedacted, (event) => runIpc(event, () => clipboard.writeText(redactedLogText())));
     ipcMain.handle(IPC_CHANNELS.consoleAppend, (event, input: unknown) => runIpc(event, async () =>
     {
         appendLog(LOG_INPUT_SCHEMA.parse(input));

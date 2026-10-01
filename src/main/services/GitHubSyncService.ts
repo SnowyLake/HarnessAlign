@@ -16,7 +16,7 @@ import {
     SYNC_MAX_ENTRIES, SYNC_MAX_FILE_BYTES, SYNC_MAX_TOTAL_BYTES, type SyncSnapshot,
 } from "../../engine/Sync.js";
 import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncDiscardInput, SyncFileView, SyncPreview, SyncResult, SyncStatus } from "../../shared/models/Sync.js";
-import { fetchRemote, readResponseBytes } from "./RemoteFetch.js";
+import { fetchRemote, githubRateLimitHint, readResponseBytes } from "./RemoteFetch.js";
 import { hydrateSyncSkills } from "./SkillRemoteService.js";
 
 /** Stored connection includes only an OS-encrypted token. */
@@ -224,11 +224,11 @@ async function github(connection: SyncConnection, token: string, path: string, m
         if (!response.ok)
         {
             await response.body?.cancel();
-            const hint = response.status === 401 ? "renew the token"
+            const hint = githubRateLimitHint(response) ?? (response.status === 401 ? "renew the token"
                 : response.status === 403 || response.status === 429 ? "check Contents read/write permission, repository policy, and API rate limits; retry later"
                     : response.status === 404 ? "check the selected private repository, initialized branch, and token access"
                         : response.status === 409 || response.status === 422 ? "the branch changed or repository rules rejected the commit; preview again"
-                            : "retry when GitHub is available";
+                            : "retry when GitHub is available");
             throw new HalignError(`GitHub ${method} ${path || "/"}: HTTP ${response.status}; ${hint}`);
         }
         return JSON.parse((await readResponseBytes(response, MAX_RESPONSE_BYTES, "GitHub response")).toString("utf8"));

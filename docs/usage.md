@@ -123,7 +123,13 @@ Harness 卡片的 Explain effects 按当前 Harness 列出 Rules, Layer Options 
 
 Rules 与 Agents 列表支持按名称, 源路径和已保存正文搜索, 多个空格分隔词同时匹配, 不区分大小写. Harness 筛选使用严格 targets 或 Agent metadata block, 空 targets 不会匹配任何 Harness. Shared Rules 只按文字搜索, 因为它们独立部署. 点击匹配项打开现有编辑器, 搜索不会清除草稿; 筛选时暂停 Rules 拖动排序, 清除筛选后可继续排序.
 
+首次使用没有 Harness 时, Harnesses 页面说明先初始化工具的用户配置目录再 Add harness. 每张卡片显示 Ready, Missing folder 或 Unsafe / unavailable; Reload 重新检查状态. 状态检查不创建目标目录, Setup 仍跳过缺失 Harness.
+
 ## 查看日志与排查问题
+
+Copy redacted 将当前 Console 复制到剪贴板, 替换用户主目录, 常见 GitHub token, Bearer 凭据, 密码字段和 URL 中的代理账号密码. 原始日志保留以便诊断; 分享前仍应检查是否包含自定义敏感信息.
+
+GitHub 返回明确限流状态时, 日志按有效 `Retry-After` 或 `x-ratelimit-reset` 显示等待秒数及 UTC 时间; 未提供有效时间时提示至少等待一分钟. 请在提示时间后重试, 不要连续点击. 普通权限失败仍提示核对仓库权限. 依据 [GitHub 限流排查说明](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#rate-limit-errors).
 
 顶部提示显示简短结果, Console 按时间保留操作记录, 完整报告和错误详情. 日志只保留在本次运行中, 切换页面或刷新窗口不会丢失, 关闭应用后清空. Console 支持自动滚动和手动清空, 操作进行中或工作区加载失败时也能查看. 加载失败后可点击 Retry 重试.
 

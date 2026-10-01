@@ -23,7 +23,7 @@ import {
     readSkillFrontmatter,
 } from "../../engine/Skills.js";
 import type { RemoteSkill, SkillUpdate, SkillUpdatePreview } from "../../shared/models/Workspace.js";
-import { fetchRemote, readResponseBytes } from "./RemoteFetch.js";
+import { fetchRemote, githubRateLimitHint, readResponseBytes } from "./RemoteFetch.js";
 
 /** Compressed zip size limit (128 MiB). */
 const MAX_COMPRESSED_BYTES = 128 * 1024 * 1024;
@@ -40,9 +40,9 @@ const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 class ArchiveHttpError extends HalignError
 {
     /** Retain the response status without parsing user-facing error text. */
-    constructor(readonly status: number, location: string)
+    constructor(readonly status: number, location: string, hint?: string)
     {
-        super(`failed to download ${location}: HTTP ${status}`);
+        super(`failed to download ${location}: HTTP ${status}${hint ? `; ${hint}` : ""}`);
     }
 }
 
@@ -95,7 +95,7 @@ async function fetchZip(owner: string, name: string, branch: string, pinnedCommi
             if (!response.ok)
             {
                 await response.body?.cancel();
-                throw new ArchiveHttpError(response.status, location);
+                throw new ArchiveHttpError(response.status, location, githubRateLimitHint(response));
             }
             const value: unknown = JSON.parse((await readResponseBytes(response, 1024 * 1024, `skill commit ${location}`)).toString("utf8"));
             if (!isRecord(value) || typeof value.sha !== "string" || !/^[a-f0-9]{40}$/u.test(value.sha)) throw new HalignError(`skill commit ${location}: expected a 40-character SHA`);
@@ -118,7 +118,7 @@ async function fetchZip(owner: string, name: string, branch: string, pinnedCommi
         if (!response.ok)
         {
             await response.body?.cancel();
-            throw new ArchiveHttpError(response.status, location);
+            throw new ArchiveHttpError(response.status, location, githubRateLimitHint(response));
         }
         const files = unzipSkillArchive(await readResponseBytes(response, MAX_COMPRESSED_BYTES, `skill archive ${location}`));
         const size = [...files.values()].reduce((total, data) => total + data.byteLength, 0);
