@@ -92,6 +92,6 @@ export interface AppApi
         removeSkill(id: string): Promise<void>;
         generate(selection?: LayerSelection[]): Promise<string>;
         previewSetup(selection?: LayerSelection[]): Promise<SetupPreview>;
-        setup(previewId: string): Promise<string>;
+        setup(previewId: string, overwriteExternal: boolean): Promise<string>;
     };
 }

@@ -98,6 +98,8 @@ Generated 的 Open in explorer 打开生成文件在 `generated/` 中所在的�
 
 点击 Setup 会先打开 Review deployment, 按路径列出 added, modified, deleted, unchanged 和 skipped. 预览不生成或部署文件. 确认后重新生成, 再按下表更新本机目录. 源内容, 目标内容或被跳过目录的状态在预览后变化时, 执行会拒绝过期预览, 请重新点击 Setup 审阅. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
 
+External changes 标记上次成功部署后被修改或删除的目标, 将被删除的额外路径, 以及没有部署基线的既有内容. 这些内容需要勾选 Overwrite modified targets and delete extra paths shown above 才能覆盖. 取消会保留目标内容. 上次成功部署的哈希保存在本机 `.harness-align/.deployment.json`, 不进入生成结果或 GitHub 同步; 正常移除未被手改的旧输出不需要额外勾选.
+
 | 目标 | 更新方式 |
 | --- | --- |
 | `%USERPROFILE%\<config_path>\AGENTS.md` | 替换为本次生成的规则 |

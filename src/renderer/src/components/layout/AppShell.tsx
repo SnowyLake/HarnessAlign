@@ -16,7 +16,7 @@ import {
     SyncOutlined,
     ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Badge, Button, Flex, Layout, Menu, Modal, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
+import { Badge, Button, Checkbox, Flex, Layout, Menu, Modal, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useState, type ReactNode } from "react";
 import appIcon from "../../../../../build/icon.png";
 import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
@@ -50,7 +50,7 @@ export interface AppShellProps
     onSave: () => void;
     onReload: () => void;
     onGenerate: () => void;
-    onSetup: (previewId: string) => void;
+    onSetup: (previewId: string, overwriteExternal: boolean) => void;
 }
 
 /** Render the Ant Design application shell and top-level commands. */
@@ -65,6 +65,8 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
     const dirtyCount = useAppStore(workspaceChangeCount);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
     const [setupPreview, setSetupPreview] = useState<SetupPreview>();
+    const [overwriteExternal, setOverwriteExternal] = useState(false);
+    const hasExternalChanges = setupPreview?.changes.some((change) => change.external && change.status !== "unchanged") ?? false;
     const [isReloadOpen, setIsReloadOpen] = useState(false);
     const navigationView = view === "shared-rules" ? "rules" : view;
     const currentNav = navigationView === "settings" || navigationView === "console" ? undefined : WORKSPACE_NAV_ITEMS[navigationView];
@@ -104,6 +106,7 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
         if (!state.workspace || state.isBusy || Object.keys(state.editorDrafts).length > 0) return;
         state.setIsBusy(true);
         setSetupPreview(undefined);
+        setOverwriteExternal(false);
         void window.appApi.workspace.previewSetup(state.layerSelection).then((preview) =>
         {
             setSetupPreview(preview);
@@ -193,21 +196,23 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
                 title="Review deployment"
                 width={800}
                 okText="Setup"
-                okButtonProps={{ disabled: !setupPreview || hasSourceDrafts }}
+                okButtonProps={{ disabled: !setupPreview || hasSourceDrafts || (hasExternalChanges && !overwriteExternal) }}
                 confirmLoading={isBusy}
                 onCancel={() => setIsSetupOpen(false)}
                 onOk={() =>
                 {
                     if (!setupPreview || useAppStore.getState().isBusy || Object.keys(useAppStore.getState().editorDrafts).length > 0) return;
                     setIsSetupOpen(false);
-                    onSetup(setupPreview.id);
+                    if (hasExternalChanges && !overwriteExternal) return;
+                    onSetup(setupPreview.id, overwriteExternal);
                 }}
             >
                 <Typography.Paragraph>
                     Review added, modified, deleted, unchanged, and skipped paths. Setup checks sources and targets again before replacing them; a changed preview must be refreshed.
                 </Typography.Paragraph>
                 <Table rowKey="path" size="small" dataSource={setupPreview?.changes ?? []} pagination={{ pageSize: 10 }}
-                       columns={[{ title: "Change", dataIndex: "status", width: 120 }, { title: "Path", dataIndex: "path" }]} />
+                       columns={[{ title: "Change", dataIndex: "status", width: 120 }, { title: "Path", dataIndex: "path" }, { title: "External changes", dataIndex: "external" }]} />
+                {hasExternalChanges ? <Checkbox checked={overwriteExternal} onChange={(event) => setOverwriteExternal(event.target.checked)}>Overwrite modified targets and delete extra paths shown above</Checkbox> : null}
             </Modal>
         </Layout>
     );

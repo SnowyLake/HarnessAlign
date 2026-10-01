@@ -146,6 +146,7 @@ export interface SetupChange
 {
     path: string;
     status: "added" | "modified" | "deleted" | "unchanged" | "skipped";
+    external?: string;
 }
 
 /** Server-owned deployment preview; execution accepts only its identity. */

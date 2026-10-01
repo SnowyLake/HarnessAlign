@@ -224,11 +224,11 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     }),
 
     /** Apply only the latest reviewed plan after checking its content revision. */
-    setup: (previewId) => withWorkspace(async (root) =>
+    setup: (previewId, overwriteExternal) => withWorkspace(async (root) =>
     {
         const review = setupReview;
         if (!review || review.id !== previewId || review.root !== root) throw new HalignError("Setup preview is missing or expired; preview again before deploying");
         setupReview = undefined;
-        return reportSetup(await setup(root, review.selection, undefined, review.revision));
+        return reportSetup(await setup(root, review.selection, undefined, review.revision, overwriteExternal));
     }),
 };

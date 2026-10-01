@@ -60,6 +60,36 @@ const config = {
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
 
+test("deployment baselines mark external edits and extra deletions and require explicit approval", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "deployment-home");
+        await mkdir(join(home, ".codex"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/guard.md", "Shared");
+        await setup(root, undefined, home);
+        const baselinePath = join(root, ".harness-align", ".deployment.json");
+        const baseline = await readFile(baselinePath);
+        const target = join(home, ".codex", "AGENTS.md");
+        await writeFile(target, "Manual instructions");
+        await writeFile(join(home, ".codex", "agents", "extra.md"), "Extra manual agent");
+        const preview = await previewSetup(root, undefined, home);
+        assert.match(preview.changes.find((change) => change.path === "~/.codex/AGENTS.md")?.external ?? "", /Changed since last deployment/u);
+        assert.match(preview.changes.find((change) => change.path.endsWith("/extra.md"))?.external ?? "", /Extra path/u);
+        await assert.rejects(setup(root, undefined, home, preview.revision), /explicit overwrite approval/u);
+        assert.equal(await readFile(target, "utf8"), "Manual instructions");
+        assert.deepEqual(await readFile(baselinePath), baseline);
+        await setup(root, undefined, home, preview.revision, true);
+        assert.equal((await previewSetup(root, undefined, home)).changes.some((change) => change.external), false);
+        assert.equal(Object.hasOwn((await readSyncSnapshot(root)).files, ".deployment.json"), false);
+        await unlink(join(root, ".harness-align", "agents", "explorer.md"));
+        const removal = await previewSetup(root, undefined, home);
+        assert.equal(removal.changes.find((change) => change.path.endsWith("/explorer.toml"))?.external, undefined);
+        await setup(root, undefined, home, removal.revision);
+        assert.deepEqual(await readdir(join(home, ".codex", "agents")), []);
+    });
+});
+
 test("deployment previews classify changes without writes and refuse changed sources, targets, and skipped roots", async () =>
 {
     await withProject(async (root) =>
@@ -91,7 +121,7 @@ test("deployment previews classify changes without writes and refuse changed sou
             await mkdir(join(userProfile, ".cursor"));
             await assert.rejects(setup(root, undefined, userProfile, preview.revision), /preview expired/u);
             const fresh = await previewSetup(root, undefined, userProfile);
-            await setup(root, undefined, userProfile, fresh.revision);
+            await setup(root, undefined, userProfile, fresh.revision, true);
             assert.equal(await readFile(join(userProfile, ".codex", "unrelated.json"), "utf8"), "Keep");
             await assert.rejects(readFile(join(agents, "extra.md")), /ENOENT/u);
             assert.ok((await previewSetup(root, undefined, userProfile)).changes.every((change) => change.status === "unchanged" || change.status === "skipped"));
@@ -1841,7 +1871,7 @@ test("setup deploys generated harness content into existing roots and shared rul
         await writeFile(join(userProfile, ".config", "opencode", "AGENTS.md"), "old opencode\n", "utf8");
         await writeFile(join(userProfile, ".config", "opencode", "agents", "old.md"), "old opencode agent\n", "utf8");
 
-        await setup(root, undefined, userProfile);
+        await setup(root, undefined, userProfile, undefined, true);
 
         assert.deepEqual(await snapshot(join(userProfile, ".codex")), await snapshot(join(root, ".harness-align", "generated", "codex")));
         assert.deepEqual(await snapshot(join(userProfile, ".config", "opencode")), await snapshot(join(root, ".harness-align", "generated", "opencode")));
@@ -2456,7 +2486,7 @@ test("setup overwrites same-name skills and keeps unrelated siblings", async () 
         await mkdir(join(userProfile, ".agents", "skills", "unrelated"), { recursive: true });
         await writeFile(join(userProfile, ".agents", "skills", "demo", "SKILL.md"), "old\n", "utf8");
         await writeFile(join(userProfile, ".agents", "skills", "unrelated", "SKILL.md"), "keep\n", "utf8");
-        const result = await setup(root, undefined, userProfile);
+        const result = await setup(root, undefined, userProfile, undefined, true);
         assert.equal(result.skills.skipped, false);
         assert.deepEqual(result.skills.ids, ["demo"]);
         assert.equal(await readFile(join(userProfile, ".agents", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: Demo\n---\n\nProject skill.\n");
@@ -2954,7 +2984,7 @@ test("setup staging and swap failures preserve previously deployed files", async
         });
         try
         {
-            await assert.rejects(setup(root, undefined, home), /Injected copy failure/u);
+            await assert.rejects(setup(root, undefined, home, undefined, true), /Injected copy failure/u);
             assert.deepEqual(await snapshot(home), before);
         }
         finally
@@ -2974,7 +3004,7 @@ test("setup staging and swap failures preserve previously deployed files", async
         });
         try
         {
-            await assert.rejects(setup(root, undefined, home), /Injected swap failure/u);
+            await assert.rejects(setup(root, undefined, home, undefined, true), /Injected swap failure/u);
             assert.equal(failed, true);
             assert.deepEqual(await snapshot(home), before);
         }

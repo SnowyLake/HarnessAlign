@@ -6,10 +6,10 @@
 import { promises as fs } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { lstatIfExists, resolveUserHome } from "./FsSafe.js";
+import { atomicWrite, ensureRegularSource, lstatIfExists, resolveUserHome } from "./FsSafe.js";
 import { buildOutputs, generate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
-import { type Harness, type LayerSelection, type OutputMap, codePointCompare, errorText, HalignError, valueText } from "./Model.js";
+import { type Harness, type LayerSelection, type OutputMap, codePointCompare, errorText, HalignError, isRecord, valueText } from "./Model.js";
 import { copySkillTree, loadSkills } from "./Skills.js";
 
 /** Resolve `path` and throw if it escapes `root`. */
@@ -199,6 +199,40 @@ export interface SetupChange
 {
     path: string;
     status: "added" | "modified" | "deleted" | "unchanged" | "skipped";
+    external?: string;
+}
+
+/** Exact snapshots from successful deployments, separate from generated output and sync archives. */
+interface DeploymentBaseline
+{
+    version: 1;
+    scopes: Record<string, Record<string, string>>;
+}
+
+/** Read only the fixed deployment baseline and reject malformed metadata before target writes. */
+async function readDeploymentBaseline(root: string): Promise<DeploymentBaseline>
+{
+    const path = join(root, ".harness-align", ".deployment.json");
+    await ensureRegularSource(root, path);
+    if (!(await lstatIfExists(path))) return { version: 1, scopes: {} };
+    await assertRegularFileIfPresent(path, "deployment baseline");
+    let value: unknown;
+    try { value = JSON.parse(await fs.readFile(path, "utf8")); }
+    catch (error) { throw new HalignError(`${path}: expected deployment JSON, got ${errorText(error)}`); }
+    if (!isRecord(value) || value.version !== 1 || !isRecord(value.scopes)) throw new HalignError(`${path}: expected version 1 and scopes mapping`);
+    const scopes: Array<[string, Record<string, string>]> = [];
+    for (const [scope, tree] of Object.entries(value.scopes))
+    {
+        if (!scope || scope.includes("\\") || scope.split("/").some((part) => !part || part === "." || part === "..") || !isRecord(tree)) throw new HalignError(`${path}: invalid deployment scope ${valueText(scope)}`);
+        const entries: Array<[string, string]> = [];
+        for (const [name, hash] of Object.entries(tree))
+        {
+            if (typeof hash !== "string" || (hash !== "directory" && !/^[a-f0-9]{64}$/u.test(hash)) || (name !== "." && (name.includes("\\") || name.split("/").some((part) => !part || part === "." || part === "..")))) throw new HalignError(`${path}: invalid scope ${scope} entry ${valueText(name)} with hash ${valueText(hash)}`);
+            entries.push([name, hash]);
+        }
+        scopes.push([scope, Object.fromEntries(entries)]);
+    }
+    return { version: 1, scopes: Object.fromEntries(scopes) };
 }
 
 /** Read-only deployment preview bound to source bytes, selection, and target contents. */
@@ -212,7 +246,7 @@ export interface SetupPreview
 async function snapshotTree(root: string, path: string, skipHidden = false): Promise<Record<string, string>>
 {
     await assertNoReparseComponents(root, path, "deployment snapshot");
-    const tree: Record<string, string> = {};
+    const tree: Record<string, string> = Object.create(null);
     /** Recursively capture a regular path relative to the deployment scope. */
     const visit = async (current: string, name: string): Promise<void> =>
     {
@@ -235,12 +269,16 @@ async function snapshotTree(root: string, path: string, skipHidden = false): Pro
 }
 
 /** Compare scopes deterministically, keeping deletions and skipped directories visible. */
-function scopeChanges(path: string, before: Record<string, string>, after: Record<string, string>): SetupChange[]
+function scopeChanges(path: string, before: Record<string, string>, after: Record<string, string>, previous?: Record<string, string>): SetupChange[]
 {
-    return [...new Set([...Object.keys(before), ...Object.keys(after)])].sort(codePointCompare).map((name) => ({
-        path: name === "." ? path : `${path}/${name}`,
-        status: !Object.hasOwn(before, name) ? "added" : !Object.hasOwn(after, name) ? "deleted" : before[name] === after[name] ? "unchanged" : "modified",
-    }));
+    return [...new Set([...Object.keys(before), ...Object.keys(after), ...Object.keys(previous ?? {})])].sort(codePointCompare).map((name) =>
+    {
+        const status: SetupChange["status"] = !Object.hasOwn(before, name) ? Object.hasOwn(after, name) ? "added" : "unchanged" : !Object.hasOwn(after, name) ? "deleted" : before[name] === after[name] ? "unchanged" : "modified";
+        const external = previous && Object.hasOwn(previous, name) && previous[name] !== before[name] ? "Changed since last deployment"
+            : status === "deleted" && (!previous || !Object.hasOwn(previous, name)) ? "Extra path will be deleted"
+                : !previous && status === "modified" ? "Existing content has no deployment baseline" : undefined;
+        return { path: name === "." ? path : `${path}/${name}`, status, ...(external ? { external } : {}) };
+    });
 }
 
 /** Build a desired directory snapshot from generated relative file paths. */
@@ -332,6 +370,7 @@ export function reportSetup(result: SetupResult): string
 async function prepareSetup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE)
 {
     const root = resolve(rootPath);
+    const baseline = await readDeploymentBaseline(root);
     const config = await loadConfig(root);
     const outputs = await buildOutputs(root, selection);
     const generatedRoot = join(root, ".harness-align", "generated");
@@ -425,10 +464,11 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
     ];
     const actual = await Promise.all(replacements.map((replacement) => snapshotTree(deploymentRoot, replacement.target)));
     const sources = await Promise.all(["config.json", "rules", "layers", "agents", "skills"].map((scope) => snapshotTree(root, join(root, ".harness-align", scope))));
-    const changes = replacements.flatMap((replacement, index) => scopeChanges(`~/${relative(deploymentRoot, replacement.target).split(sep).join("/")}`, actual[index]!, desired[index]!));
+    const scopeNames = replacements.map((replacement) => relative(deploymentRoot, replacement.target).split(sep).join("/"));
+    const changes = replacements.flatMap((replacement, index) => scopeChanges(`~/${scopeNames[index]!}`, actual[index]!, desired[index]!, Object.hasOwn(baseline.scopes, scopeNames[index]!) ? baseline.scopes[scopeNames[index]!] : undefined));
     for (const target of reports.filter((item) => item.skipped)) changes.push({ path: `~/${relative(deploymentRoot, target.root).split(sep).join("/")}`, status: "skipped" });
     if (skillsSkipped) changes.push({ path: "~/.agents/skills", status: "skipped" });
-    const revision = createHash("sha256").update(JSON.stringify({ sources, actual, desired, selection, reports })).digest("hex");
+    const revision = createHash("sha256").update(JSON.stringify({ sources, actual, desired, selection, reports, baseline })).digest("hex");
 
     const result: SetupResult = {
         outputs,
@@ -441,7 +481,8 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
             ids: skillInstallations.map((skill) => skill.id),
         },
     };
-    return { result, replacements, revision, changes, desired };
+    const nextBaseline: DeploymentBaseline = { version: 1, scopes: Object.fromEntries(Object.entries({ ...baseline.scopes, ...Object.fromEntries(scopeNames.map((name, index) => [name, desired[index]!])) }).sort(([left], [right]) => codePointCompare(left, right))) };
+    return { result, replacements, revision, changes, desired, nextBaseline };
 }
 
 /** Preview exact replacement scope and skipped targets using the same production setup plan. */
@@ -452,15 +493,19 @@ export async function previewSetup(rootPath: string, selection?: readonly LayerS
 }
 
 /** Generate and deploy only after validating the reviewed source and target revision. */
-export async function setup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE, expectedRevision?: string): Promise<SetupResult>
+export async function setup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE, expectedRevision?: string, overwriteExternal = false): Promise<SetupResult>
 {
     const plan = await prepareSetup(rootPath, selection, userProfile);
     if (expectedRevision !== undefined && plan.revision !== expectedRevision) throw new HalignError("Setup preview expired: sources or deployment targets changed; preview again before deploying");
+    if (!overwriteExternal && plan.changes.some((change) => change.external && change.status !== "unchanged")) throw new HalignError("Setup requires explicit overwrite approval for externally modified targets or extra paths; review the preview before deploying");
     await generate(rootPath, selection);
     await deployReplacements(resolveUserHome(userProfile), plan.replacements, plan.desired, async () =>
     {
         const current = await prepareSetup(rootPath, selection, userProfile);
         if (current.revision !== plan.revision) throw new HalignError("Setup preview expired: sources or deployment targets changed while staging; preview again before deploying");
     });
+    const baselinePath = join(resolve(rootPath), ".harness-align", ".deployment.json");
+    await ensureRegularSource(resolve(rootPath), baselinePath);
+    await atomicWrite(baselinePath, Buffer.from(`${JSON.stringify(plan.nextBaseline, null, 2)}\n`));
     return plan.result;
 }

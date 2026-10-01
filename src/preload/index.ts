@@ -103,7 +103,7 @@ const appApi: AppApi = {
         removeSkill: (id) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRemoveSkill, id),
         generate: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceGenerate, selection),
         previewSetup: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetupPreview, selection),
-        setup: (previewId) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetup, previewId),
+        setup: (previewId, overwriteExternal) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetup, previewId, overwriteExternal),
     },
 };
 
