@@ -53,7 +53,7 @@ export function registerSyncHandlers(): void
         {
             const directory = app.getPath("userData");
             return previewSync(root, directory, await syncToken(directory));
-        });
+        }, "Preview sync");
     }));
     ipcMain.handle(IPC_CHANNELS.syncInspect, (event, previewId: unknown, key: unknown) => runIpc(event, async () =>
     {
@@ -68,7 +68,7 @@ export function registerSyncHandlers(): void
         {
             const directory = app.getPath("userData");
             return applySync(root, directory, await syncToken(directory), decisions);
-        });
+        }, "Apply sync");
     }));
     ipcMain.handle(IPC_CHANNELS.syncDiscard, (event, input: unknown) => runIpc(event, async () =>
     {
@@ -77,6 +77,6 @@ export function registerSyncHandlers(): void
         {
             const directory = app.getPath("userData");
             return discardSync(root, directory, await syncToken(directory), change);
-        });
+        }, "Restore sync");
     }));
 }

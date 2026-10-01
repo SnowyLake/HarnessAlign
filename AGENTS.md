@@ -85,7 +85,7 @@
   - `Edit.ts` — 校验后写回 `.harness-align` 源文件; 负责固定用户目录的初始化和迁移, 写回 API 供桌面应用与测试使用
   - `Sync.ts` — 有界配置源快照, 路径与内容校验, 三方合并; 不联网, 不部署, 同一个 Skill 的内容与来源记录整体合并
 - `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, `SettingsService.ts` 模块函数, `WorkspaceService`, `SkillRemoteService`.
-- `src/main/services/WorkspaceService.ts` 通过 `withWorkspace` 串行执行工作区读写, 失败后释放队列. 该模块不直接导入 Electron; 打开文件夹的 `shell.openPath` 调用留在 `WorkspaceHandlers.ts`.
+- `src/main/services/WorkspaceService.ts` 通过 `withWorkspace` 串行执行工作区读写, 失败后释放队列. Console 记录排队, 初始化和操作耗时, Skills 下载与解压分别记录耗时; 指标不包含源正文, 本机路径或凭据. 该模块不直接导入 Electron; 打开文件夹的 `shell.openPath` 调用留在 `WorkspaceHandlers.ts`.
 - `src/main/services/RemoteFetch.ts` 共享 Skills 与 GitHub 同步的网络请求和有界响应读取. Electron 中未设置环境变量代理时使用 `net.fetch`, 否则使用 Node `fetch`; Main 入口在运行时支持时启用环境变量代理. 响应超过大小限制时取消读取并释放 reader.
 - `src/main/services/GitHubSyncService.ts` 负责私有仓库快照读写, 同步预览, 共同基线与上传恢复记录. `SyncHandlers.ts` 负责 sender 和 payload 校验以及 `safeStorage` 凭据加解密. Token 不回传 Renderer, 不写入同步快照或日志.
 - `src/main/services/AppUpdateService.ts` 负责安装版的 GitHub Release 更新. 更新源只来自打包写入的 `app-update.yml`. 开发窗口不访问更新源. 检查和下载 IPC 不接收 Renderer 参数, 只有本次会话已下载完成且安装程序已启动时才关闭窗口. 安装程序启动后不再弹出未保存修改确认, 因为取消退出不能停止已经启动的安装包. `HTTP(S)_PROXY` 里的账号密码只通过更新器的 `login` 回调提供, 不写入代理规则, 状态或日志.

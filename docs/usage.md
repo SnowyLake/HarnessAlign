@@ -127,6 +127,20 @@ Rules 与 Agents 列表支持按名称, 源路径和已保存正文搜索, 多�
 
 ## 查看日志与排查问题
 
+Console 的 `Load timing`, `Save Rule timing`, `Discover Skills timing` 等记录分别列出 Queue 排队, Initialize 初始化和操作耗时, 失败操作也保留计时. Skills 下载另列压缩字节数和耗时, 解压另列文件数和耗时, 缓存命中会显示复用记录. 排队很长时先查看前一操作; 下载很长时检查网络, 解压很长时检查仓库大小和文件数. 这些指标只保留在本次会话中.
+
+临时目录与 mock 网络的测量如下, 不访问真实用户配置或 GitHub. Windows / Node 24.16.0 下每项运行三次取中位数, 安装列为一次完整写入. 压缩包使用可压缩重复内容, archive mock 固定延迟 30 ms; 结果不代表真实网络速度或最大允许规模.
+
+| 场景 | 加载 / Discover | 单文件保存 / 安装 | 解压 | 排队中的 Load 等待 |
+| --- | --- | --- | --- | --- |
+| 100 个 Rule, 每个约 2 KiB | 107 ms | 保存 3.4 ms | 不适用 | 无前序操作 |
+| 1,000 个 Rule, 每个约 8 KiB | 933 ms | 保存 3.7 ms | 不适用 | 无前序操作 |
+| 2 MiB Skills, 65 文件 | 50 ms | 安装 100 ms | 2.5 ms | 50 ms |
+| 32 MiB Skills, 1,025 文件 | 89 ms | 安装 1,415 ms | 36.6 ms | 89 ms |
+| 32 MiB Skills, 2 文件 | 77 ms | 安装 49 ms | 31.9 ms | 77 ms |
+
+固定 commit 缓存将上述 Skills Discover 降至约 3–16 ms. 本轮保留工作区串行队列和当前解压实现: 大量小文件主要耗时在安全文件读写; 同规模原生异步解压对 1,025 文件约 34 ms, 对单个大文件约 57 ms, 后者降低事件循环停顿但增加总耗时. 当前样本未出现持续主线程停顿, 因此暂不引入自定义 worker 或拆分写入边界. 更大仓库和真实慢网络仍需根据 Console 指标评估, 本轮未测量 512 MiB 上限.
+
 Copy redacted 将当前 Console 复制到剪贴板, 替换用户主目录, 常见 GitHub token, Bearer 凭据, 密码字段和 URL 中的代理账号密码. 原始日志保留以便诊断; 分享前仍应检查是否包含自定义敏感信息.
 
 GitHub 返回明确限流状态时, 日志按有效 `Retry-After` 或 `x-ratelimit-reset` 显示等待秒数及 UTC 时间; 未提供有效时间时提示至少等待一分钟. 请在提示时间后重试, 不要连续点击. 普通权限失败仍提示核对仓库权限. 依据 [GitHub 限流排查说明](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#rate-limit-errors).

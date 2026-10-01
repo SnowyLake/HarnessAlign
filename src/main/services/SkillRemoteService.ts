@@ -24,6 +24,7 @@ import {
 } from "../../engine/Skills.js";
 import type { RemoteSkill, SkillUpdate, SkillUpdatePreview } from "../../shared/models/Workspace.js";
 import { fetchRemote, githubRateLimitHint, readResponseBytes } from "./RemoteFetch.js";
+import { appendLog } from "./ConsoleService.js";
 
 /** Compressed zip size limit (128 MiB). */
 const MAX_COMPRESSED_BYTES = 128 * 1024 * 1024;
@@ -107,9 +108,11 @@ async function fetchZip(owner: string, name: string, branch: string, pinnedCommi
         {
             archiveCache.delete(cacheKey);
             archiveCache.set(cacheKey, cached);
+            appendLog({ level: "info", title: "Skills archive cache hit", details: `${cacheKey}: reused verified download and extraction` });
             return { files: cached, commit };
         }
         const url = archiveUrl(owner, name, commit);
+        const downloadedAt = performance.now();
         const response = await fetchRemote(url, {
             signal: controller.signal,
             headers: { "User-Agent": "HarnessAlign/1.0", Accept: "application/zip" },
@@ -120,7 +123,11 @@ async function fetchZip(owner: string, name: string, branch: string, pinnedCommi
             await response.body?.cancel();
             throw new ArchiveHttpError(response.status, location, githubRateLimitHint(response));
         }
-        const files = unzipSkillArchive(await readResponseBytes(response, MAX_COMPRESSED_BYTES, `skill archive ${location}`));
+        const bytes = await readResponseBytes(response, MAX_COMPRESSED_BYTES, `skill archive ${location}`);
+        appendLog({ level: "info", title: "Skills download timing", details: `${cacheKey}: ${bytes.byteLength} compressed bytes in ${(performance.now() - downloadedAt).toFixed(1)} ms` });
+        const extractedAt = performance.now();
+        const files = unzipSkillArchive(bytes);
+        appendLog({ level: "info", title: "Skills extraction timing", details: `${cacheKey}: ${files.size} files in ${(performance.now() - extractedAt).toFixed(1)} ms` });
         const size = [...files.values()].reduce((total, data) => total + data.byteLength, 0);
         while ((archiveCacheBytes + size > MAX_UNCOMPRESSED_BYTES || archiveCache.size >= 8) && archiveCache.size > 0)
         {

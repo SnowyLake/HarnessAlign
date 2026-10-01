@@ -472,6 +472,60 @@ test("deployment previews classify changes without writes and refuse changed sou
     });
 });
 
+test("operation timings distinguish queued work, failed initialization, archive extraction and cache reuse", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const previousHome = process.env.USERPROFILE;
+        process.env.USERPROFILE = root;
+        clearLogs();
+        let finish = () => {};
+        let ready = () => {};
+        const gate = new Promise<void>((done) => { finish = done; });
+        const started = new Promise<void>((done) => { ready = done; });
+        try
+        {
+            const first = withWorkspace(async () => { ready(); await gate; throw new Error("controlled failure"); }, "Failed write");
+            const rejected = assert.rejects(first, /controlled failure/u);
+            await started;
+            const next = withWorkspace(async () => "loaded", "Queued load");
+            finish();
+            await rejected;
+            assert.equal(await next, "loaded");
+            process.env.USERPROFILE = "";
+            await assert.rejects(withWorkspace(async () => "unexpected", "Initialize failure"), /USERPROFILE/u);
+            process.env.USERPROFILE = root;
+            const { zipSync } = await import("fflate");
+            const archive = zipSync({ "repo/demo/SKILL.md": Buffer.from("# Timing\n") });
+            t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) => String(input).includes("/commits/") ? Response.json({ sha: "f".repeat(40) }) : new Response(Buffer.from(archive)));
+            await addSkillSource(root, { url: "https://github.com/timing-regression/repo" });
+            await workspaceService.discoverSkills();
+            await workspaceService.discoverSkills();
+            const logs = readLogs().entries;
+            assert.deepEqual(logs.slice(0, 3).map(({ title }) => title), ["Failed write timing", "Queued load timing", "Initialize failure timing"]);
+            assert.match(logs[0]!.details!, /Outcome: failed/u);
+            assert.match(logs[1]!.details!, /Outcome: completed/u);
+            assert.match(logs[2]!.details!, /Outcome: failed/u);
+            for (const log of logs.filter(({ title }) => ["Failed write timing", "Queued load timing", "Initialize failure timing", "Discover Skills timing"].includes(title)))
+            {
+                assert.match(log.details!, /Queue: \d+\.\d ms\nInitialize: \d+\.\d ms/u);
+                assert.equal(log.details!.includes(root), false);
+            }
+            assert.equal(logs.filter(({ title }) => title === "Skills download timing").length, 1);
+            assert.equal(logs.filter(({ title }) => title === "Skills extraction timing").length, 1);
+            assert.equal(logs.filter(({ title }) => title === "Skills archive cache hit").length, 1);
+            assert.match(logs.find(({ title }) => title === "Skills extraction timing")!.details!, /1 files in \d+\.\d ms/u);
+        }
+        finally
+        {
+            finish();
+            clearLogs();
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+        }
+    });
+});
+
 test("application downloads drain workspace work, exclude new writes, protect new drafts, and release after failure", async () =>
 {
     await withProject(async (root) =>
