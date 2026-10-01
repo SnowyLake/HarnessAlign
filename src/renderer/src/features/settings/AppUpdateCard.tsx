@@ -7,6 +7,7 @@ import type { AppUpdatePhase, AppUpdateStatus } from "@shared/models/AppUpdate";
 import { Alert, Button, Card, Flex, Progress, Space, Typography } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { showError, writeLog } from "@/components/common/Feedback";
+import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 
 /** Explain the current update phase in the card body. */
 function updateDescription(status: AppUpdateStatus | null): string
@@ -41,6 +42,8 @@ function updateDescription(status: AppUpdateStatus | null): string
 /** Render the installed version and the user-started update actions. */
 export function AppUpdateCard()
 {
+    const workspaceBusy = useAppStore((state) => state.isBusy);
+    const dirtyCount = useAppStore(workspaceChangeCount);
     const [status, setStatus] = useState<AppUpdateStatus | null>(null);
     const [pending, setPending] = useState<"check" | "download" | null>(null);
     const isBusy = useRef(false);
@@ -103,11 +106,29 @@ export function AppUpdateCard()
     /** Download the offered installer and let Main start the silent install. */
     function handleDownload(): void
     {
-        runUpdateAction("download", () => window.appApi.appUpdate.download().then((next) =>
+        const state = useAppStore.getState();
+        if (!state.workspace || state.isBusy || workspaceChangeCount(state) > 0 || isBusy.current) return;
+        state.setIsBusy(true);
+        runUpdateAction("download", async () =>
         {
-            setStatus(next);
-            if (next.phase === "downloaded" && next.availableVersion !== null) writeLog("success", "Application update downloaded", `Version ${next.availableVersion}`);
-        }).catch((error: unknown) => showError(error, "Application update failed")));
+            let isInstalling = false;
+            try
+            {
+                await window.appApi.appUpdate.setDraftState(workspaceChangeCount(useAppStore.getState()) > 0);
+                const next = await window.appApi.appUpdate.download();
+                setStatus(next);
+                isInstalling = next.phase === "downloaded";
+                if (isInstalling && next.availableVersion !== null) writeLog("success", "Application update downloaded", `Version ${next.availableVersion}`);
+            }
+            catch (error)
+            {
+                showError(error, "Application update failed");
+            }
+            finally
+            {
+                if (!isInstalling) useAppStore.getState().setIsBusy(false);
+            }
+        });
     }
 
     return (
@@ -119,10 +140,11 @@ export function AppUpdateCard()
                         <Typography.Text type="secondary">{updateDescription(status)}</Typography.Text>
                     </Space>
                     <Space wrap>
-                        {showDownload ? <Button type="primary" loading={isInstalling} disabled={isChecking || isInstalling} onClick={handleDownload}>Download and install</Button> : null}
+                        {showDownload ? <Button type="primary" loading={isInstalling} disabled={isChecking || isInstalling || workspaceBusy || dirtyCount > 0} onClick={handleDownload}>Download and install</Button> : null}
                         <Button loading={isChecking} disabled={status === null || isChecking || isInstalling} onClick={handleCheck}>Check for updates</Button>
                     </Space>
                 </Flex>
+                {dirtyCount > 0 ? <Typography.Text type="warning">Save all workspace changes before updating.</Typography.Text> : null}
                 {phase === "downloading" ? <Progress aria-label="Update download progress" percent={status?.percent ?? 0} size="small" status="active" /> : null}
                 {status?.message && (phase === "error" || phase === "available") ? (
                     <Alert type={phase === "error" ? "error" : "warning"} showIcon title={phase === "error" ? "Update failed" : "Download failed"} description={status.message} />

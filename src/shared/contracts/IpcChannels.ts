@@ -19,6 +19,7 @@ export const IPC_CHANNELS = {
     appGetVersion: "app:get-version",
     appOpenExternal: "app:open-external",
     appUpdateStatus: "app:update-status",
+    appUpdateDraftState: "app:update-draft-state",
     appUpdateCheck: "app:update-check",
     appUpdateDownload: "app:update-download",
     appUpdateChanged: "app:update-changed",

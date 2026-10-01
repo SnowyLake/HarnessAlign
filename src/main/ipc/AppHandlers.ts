@@ -10,6 +10,8 @@ import { checkForAppUpdate, downloadAndInstallAppUpdate, getAppUpdateStatus, sub
 import { appendLog, clearLogs, readLogs, subscribeLogs } from "../services/ConsoleService.js";
 import { getMainWindow } from "../windows/MainWindow.js";
 import { runIpc } from "../utils/Ipc.js";
+import { setUpdateDraftState } from "../services/WorkspaceService.js";
+import { z } from "zod";
 
 /** Register app-level IPC handlers. */
 export function registerAppHandlers(): void
@@ -24,6 +26,7 @@ export function registerAppHandlers(): void
 
     ipcMain.handle(IPC_CHANNELS.appGetVersion, (event) => runIpc(event, () => app.getVersion()));
     ipcMain.handle(IPC_CHANNELS.appUpdateStatus, (event) => runIpc(event, () => getAppUpdateStatus()));
+    ipcMain.handle(IPC_CHANNELS.appUpdateDraftState, (event, hasUnsaved: unknown) => runIpc(event, () => setUpdateDraftState(z.boolean().parse(hasUnsaved))));
     ipcMain.handle(IPC_CHANNELS.appUpdateCheck, (event) => runIpc(event, () => checkForAppUpdate()));
     ipcMain.handle(IPC_CHANNELS.appUpdateDownload, (event) => runIpc(event, () => downloadAndInstallAppUpdate()));
     subscribeAppUpdate((snapshot) =>

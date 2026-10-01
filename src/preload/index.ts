@@ -38,6 +38,7 @@ const appApi: AppApi = {
         openExternal: (url) => ipcRenderer.invoke(IPC_CHANNELS.appOpenExternal, url),
     },
     appUpdate: {
+        setDraftState: (hasUnsaved) => ipcRenderer.invoke(IPC_CHANNELS.appUpdateDraftState, hasUnsaved),
         status: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateStatus),
         check: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateCheck),
         download: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateDownload),

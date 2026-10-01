@@ -14,7 +14,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { resolveWorkspaceItemFolder, workspaceService } from "../src/main/services/WorkspaceService.js";
+import { assertUpdateDraftsSaved, resolveWorkspaceItemFolder, setUpdateDraftState, withWorkspace, withWorkspaceForUpdate, workspaceService } from "../src/main/services/WorkspaceService.js";
 import { defaultLayerOption, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
 import type { ProjectSkill, RemoteSkill, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
@@ -59,6 +59,70 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("application downloads drain workspace work, exclude new writes, protect new drafts, and release after failure", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const previousHome = process.env.USERPROFILE;
+        process.env.USERPROFILE = root;
+        /** Control asynchronous test phases without timers or external processes. */
+        function deferred()
+        {
+            let resolve = () => {};
+            const promise = new Promise<void>((done) => { resolve = done; });
+            return { promise, resolve };
+        }
+        const writeReady = deferred();
+        const finishWrite = deferred();
+        const downloadReady = deferred();
+        const finishDownload = deferred();
+        const order: string[] = [];
+        try
+        {
+            setUpdateDraftState(true);
+            await assert.rejects(withWorkspaceForUpdate(async () => { order.push("unexpected download"); }), /save all/u);
+            setUpdateDraftState(false);
+            const write = withWorkspace(async () =>
+            {
+                writeReady.resolve();
+                await finishWrite.promise;
+                order.push("write finished");
+            });
+            await writeReady.promise;
+            const update = withWorkspaceForUpdate(async () =>
+            {
+                order.push("download started");
+                downloadReady.resolve();
+                await finishDownload.promise;
+                assertUpdateDraftsSaved();
+                order.push("installer started");
+            });
+            await assert.rejects(workspaceService.generate(), /application update is downloading/u);
+            assert.equal(JSON.stringify(order), "[]");
+            finishWrite.resolve();
+            await write;
+            await downloadReady.promise;
+            assert.equal(order.join(","), "write finished,download started");
+            setUpdateDraftState(true);
+            finishDownload.resolve();
+            await assert.rejects(update, /save all/u);
+            assert.equal(order.includes("installer started"), false);
+            assert.ok((await workspaceService.load()).config);
+            setUpdateDraftState(false);
+            await assert.rejects(withWorkspaceForUpdate(async () => { throw new Error("download failed"); }), /download failed/u);
+            assert.ok((await workspaceService.load()).config);
+        }
+        finally
+        {
+            finishWrite.resolve();
+            finishDownload.resolve();
+            setUpdateDraftState(true);
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+        }
+    });
+});
 
 test("opened source guards reject external edits, deletion, creation races, and rename conflicts without losing drafts", async () =>
 {

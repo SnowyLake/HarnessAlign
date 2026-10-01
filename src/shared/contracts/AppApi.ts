@@ -45,6 +45,7 @@ export interface AppApi
         openExternal(url: string): Promise<void>;
     };
     appUpdate: {
+        setDraftState(hasUnsaved: boolean): Promise<void>;
         status(): Promise<AppUpdateStatus>;
         check(): Promise<AppUpdateStatus>;
         download(): Promise<AppUpdateStatus>;

@@ -6,6 +6,7 @@
 import { errorText, HalignError } from "../../engine/Model.js";
 import type { AppUpdateStatus } from "../../shared/models/AppUpdate.js";
 import { logMainError } from "./ConsoleService.js";
+import { assertUpdateDraftsSaved, withWorkspaceForUpdate } from "./WorkspaceService.js";
 import {
     beginAppUpdateCheck,
     beginAppUpdateDownload,
@@ -77,7 +78,7 @@ export function checkForAppUpdate(): Promise<AppUpdateStatus>
 /** Download the offered installer and start the silent NSIS install. */
 export function downloadAndInstallAppUpdate(): Promise<AppUpdateStatus>
 {
-    return exclusive(async () =>
+    return withWorkspaceForUpdate(() => exclusive(async () =>
     {
         const { app } = await import("electron");
         if (!app.isPackaged) throw new HalignError("application update: downloads require the installed Windows app");
@@ -87,6 +88,7 @@ export function downloadAndInstallAppUpdate(): Promise<AppUpdateStatus>
             await applyEnvironmentProxy();
             const updater = await loadUpdater();
             await updater.downloadUpdate();
+            assertUpdateDraftsSaved();
             isInstallPending = true;
             updater.quitAndInstall(true, true);
             if (status.phase === "error" || !isInstallArmed(updater))
@@ -99,9 +101,10 @@ export function downloadAndInstallAppUpdate(): Promise<AppUpdateStatus>
         }
         catch (error)
         {
+            isInstallPending = false;
             rethrowUpdateError(error);
         }
-    });
+    }), isAppUpdateInstallPending);
 }
 
 /** Observe snapshots produced by check, download, and progress events. */

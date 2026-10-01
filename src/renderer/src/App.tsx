@@ -61,6 +61,21 @@ export function App()
 
     useEffect(() =>
     {
+        /** Report every draft transition, including changes while an update is in flight. */
+        const reportDrafts = (): void =>
+        {
+            const state = useAppStore.getState();
+            void window.appApi.appUpdate.setDraftState(!state.workspace || workspaceChangeCount(state) > 0).catch((error: unknown) => showError(error, "Draft protection unavailable"));
+        };
+        reportDrafts();
+        return useAppStore.subscribe((state, previous) =>
+        {
+            if (state.workspace !== previous.workspace || workspaceChangeCount(state) !== workspaceChangeCount(previous)) reportDrafts();
+        });
+    }, []);
+
+    useEffect(() =>
+    {
         /** Ask the desktop shell to protect unsaved drafts when closing or reloading. */
         const handleBeforeUnload = (event: BeforeUnloadEvent): void =>
         {

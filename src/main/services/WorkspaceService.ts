@@ -38,10 +38,43 @@ import * as skillRemote from "./SkillRemoteService.js";
 
 /** Tail of the single-user workspace queue, including reads that must see complete writes. */
 let workspaceQueue: Promise<unknown> = Promise.resolve();
+let hasUnsavedDrafts = true;
+let isUpdateExclusive = false;
+
+/** Track the trusted renderer's draft state without accepting workspace paths or update URLs. */
+export function setUpdateDraftState(hasUnsaved: boolean): void
+{
+    hasUnsavedDrafts = hasUnsaved;
+}
+
+/** Refuse installation if the renderer has reported any new draft during the download. */
+export function assertUpdateDraftsSaved(): void
+{
+    if (hasUnsavedDrafts) throw new HalignError("application update: save all workspace changes before downloading or installing");
+}
+
+/** Drain existing work and reserve the workspace until the updater fails or starts installation. */
+export async function withWorkspaceForUpdate<T>(work: () => Promise<T>, isInstalling: () => boolean = () => false): Promise<T>
+{
+    if (isUpdateExclusive) throw new HalignError("application update: another download is already running");
+    assertUpdateDraftsSaved();
+    isUpdateExclusive = true;
+    try
+    {
+        await workspaceQueue;
+        assertUpdateDraftsSaved();
+        return await work();
+    }
+    finally
+    {
+        if (!isInstalling()) isUpdateExclusive = false;
+    }
+}
 
 /** Serialize workspace operations and release the queue even when an operation fails. */
 export function withWorkspace<T>(work: (root: string) => Promise<T>): Promise<T>
 {
+    if (isUpdateExclusive) return Promise.reject(new HalignError("workspace: application update is downloading or installing; retry after it finishes"));
     // ponytail: one workspace queue; split remote downloads only if UI latency becomes a measured problem.
     const operation = workspaceQueue.then(async () => work(await ensureUserWorkspace()));
     workspaceQueue = operation.catch(() => undefined);
