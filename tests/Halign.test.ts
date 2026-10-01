@@ -24,7 +24,7 @@ import { diffLines } from "../src/renderer/src/lib/TextDiff.js";
 import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
-import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent } from "../src/main/services/SkillRemoteService.js";
+import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent, readSkillUpdatePreview } from "../src/main/services/SkillRemoteService.js";
 import { applySync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
@@ -61,6 +61,34 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("Skill update review shows old/new commits, all file changes and bounded Markdown without writing", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const { zipSync } = await import("fflate");
+        const old = zipSync({ "repo/demo/SKILL.md": Buffer.from("# Old\n"), "repo/demo/deleted.md": Buffer.from("Removed"), "repo/demo/same.md": Buffer.from("Same") });
+        const next = zipSync({ "repo/demo/SKILL.md": Buffer.from(`# New\n${"x".repeat(17_000)}`), "repo/demo/added.md": Buffer.from("Added"), "repo/demo/same.md": Buffer.from("Same") });
+        let branch = "d".repeat(40);
+        t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) => String(input).includes("/commits/") ? Response.json({ sha: branch }) : new Response(Buffer.from(String(input).includes("d".repeat(40)) ? old : next)));
+        await addSkillSource(root, { url: "https://github.com/update-preview/repo" });
+        await discoverSkills(root);
+        await installSkills(root, ["demo"]);
+        branch = "e".repeat(40);
+        const review = (await checkSkillUpdates(root))[0]!;
+        const before = await snapshot(join(root, ".harness-align"));
+        const detail = await readSkillUpdatePreview(root, review.previewId!);
+        assert.equal(detail.oldCommit, "d".repeat(40));
+        assert.equal(detail.newCommit, "e".repeat(40));
+        assert.deepEqual(detail.files.map(({ path, status }) => [path, status]), [["SKILL.md", "modified"], ["added.md", "added"], ["deleted.md", "deleted"], ["same.md", "unchanged"]]);
+        assert.equal(detail.oldText, "# Old\n");
+        assert.equal(detail.newText.length, 16_000);
+        assert.equal(detail.truncated, true);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+        await discoverSkills(root);
+        await assert.rejects(readSkillUpdatePreview(root, review.previewId!), /preview expired/u);
+    });
+});
 
 test("text comparisons mark additions and deletions, preserve common lines, bound work and escape remote markup", () =>
 {

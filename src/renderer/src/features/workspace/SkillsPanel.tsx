@@ -17,11 +17,13 @@ import {
     UndoOutlined,
     WarningOutlined,
 } from "@ant-design/icons";
-import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, UserSkill, Workspace } from "@shared/models/Workspace";
-import { Alert, Avatar, Button, Card, Checkbox, Drawer, Dropdown, Empty, Flex, Form, Input, Listy, Modal, Segmented, Select, Space, Splitter, Tooltip, Typography, type MenuProps } from "antd";
+import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, SkillUpdatePreview, UserSkill, Workspace } from "@shared/models/Workspace";
+import { Alert, Avatar, Button, Card, Checkbox, Col, Drawer, Dropdown, Empty, Flex, Form, Input, Listy, Modal, Row, Segmented, Select, Space, Splitter, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
+import { DiffText } from "@/components/common/DiffText";
+import { diffLines } from "@/lib/TextDiff";
 import { persistEditorSnapshot, refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { TreeButton } from "@/features/workspace/WorkspaceTree";
 import { selectableRemoteSkillIds } from "@/lib/Utils";
@@ -423,6 +425,7 @@ export function SkillsPanel()
     const [discovered, setDiscovered] = useState<RemoteSkill[]>([]);
     const [hasDiscovered, setHasDiscovered] = useState(false);
     const [updates, setUpdates] = useState<SkillUpdate[]>([]);
+    const [updateDetails, setUpdateDetails] = useState<SkillUpdatePreview[]>([]);
     const [userSkills, setUserSkills] = useState<UserSkill[]>([]);
     const [selectedRemoteIdentity, setSelectedRemoteIdentity] = useState<string>();
     const [selectedImport, setSelectedImport] = useState<string[]>([]);
@@ -509,7 +512,7 @@ export function SkillsPanel()
         }, "Update check");
     };
 
-    /** Apply selected updates and refresh the workspace. */
+    /** Review the exact selected versions before applying any Skill replacement. */
     const handleApplyUpdates = (ids: string[]): void =>
     {
         if (ids.length === 0) return;
@@ -517,12 +520,25 @@ export function SkillsPanel()
         {
             const previewIds = ids.map((id) => updates.find((update) => update.id === id)?.previewId);
             if (previewIds.some((id) => !id)) throw new Error("Skill update preview expired; check updates again.");
-            const report = await window.appApi.workspace.applySkillUpdates(previewIds.filter((id): id is string => Boolean(id)));
+            const details: SkillUpdatePreview[] = [];
+            for (const previewId of previewIds) details.push(await window.appApi.workspace.readSkillUpdatePreview(previewId!));
+            setUpdateDetails(details);
+        }, "Review updates");
+    };
+
+    /** Apply only the fixed versions displayed in the review dialog. */
+    const handleConfirmUpdates = (): void =>
+    {
+        void runCommand(async () =>
+        {
+            const ids = updateDetails.map((detail) => detail.id);
+            const report = await window.appApi.workspace.applySkillUpdates(updateDetails.map((detail) => detail.previewId));
             showSuccess("Updates applied", report);
             setUpdates((current) => current.filter((item) => !ids.includes(item.id)));
             setDiscovered([]);
             setHasDiscovered(false);
             setSelectedRemoteIdentity(undefined);
+            setUpdateDetails([]);
             await refreshWorkspace();
         }, "Apply updates");
     };
@@ -661,6 +677,25 @@ export function SkillsPanel()
                             canInstall={Boolean(selectedRemoteSkill && selectableRemoteIds.has(selectedRemoteSkill.id))} isBusy={isBusy} onInstall={handleDownload} />}
                 </Splitter.Panel>
             </Splitter>
+
+            <Modal open={updateDetails.length > 0} title="Review Skill updates" width={1000} okText="Apply reviewed versions" confirmLoading={isBusy}
+                onOk={handleConfirmUpdates} onCancel={() => setUpdateDetails([])} destroyOnHidden>
+                <Space orientation="vertical" style={{ width: "100%" }}>
+                    {updateDetails.map((detail) =>
+                    {
+                        const diff = diffLines(detail.oldText, detail.newText);
+                        return <Card key={detail.previewId} title={detail.id} size="small" style={{ width: "100%" }}>
+                            <Typography.Paragraph>Commit: <Typography.Text code>{detail.oldCommit ?? "Legacy source (no pinned commit)"}</Typography.Text> → <Typography.Text code>{detail.newCommit}</Typography.Text></Typography.Paragraph>
+                            <Table size="small" rowKey="path" dataSource={detail.files} pagination={{ pageSize: 8, showSizeChanger: false }} columns={[{ title: "File", dataIndex: "path" }, { title: "Change", dataIndex: "status" }]} />
+                            <Row gutter={[12, 12]}>
+                                <Col xs={24} md={12}><Typography.Text strong>Installed SKILL.md</Typography.Text><DiffText lines={diff.local} label="Installed SKILL.md differences" /></Col>
+                                <Col xs={24} md={12}><Typography.Text strong>Reviewed SKILL.md</Typography.Text><DiffText lines={diff.remote} label="Reviewed SKILL.md differences" /></Col>
+                            </Row>
+                            {detail.truncated || diff.limited ? <Alert type="info" title="Text preview is bounded; file changes and the selected commit apply to the entire Skill." /> : null}
+                        </Card>;
+                    })}
+                </Space>
+            </Modal>
 
             <Modal
                 open={isRegistrationOpen}

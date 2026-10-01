@@ -23,6 +23,8 @@ Installed 文件行的省略号菜单和右键菜单提供 Open in explorer, 打
 
 Discover 与 Check updates 每次解析分支最新 commit. 已验证的下载与解压内容按来源 repo + commit 在本次会话中复用, 最多保留 8 个仓库版本且总内容不超过 512 MiB. Apply updates 使用检查时的固定版本. 再次发现或检查, 来源配置变化, 或已安装来源记录变化后, 需要重新检查并审阅.
 
+Check updates 后, 单项 Apply update 或批量 Update 会先打开 Review Skill updates. 审阅旧/新 commit, 文件新增/修改/删除/未变列表和 `SKILL.md` 增删行后, 点击 Apply reviewed versions. 旧记录没有固定 commit 时显示 Legacy source. 文本预览最多显示 16,000 字符, 实际应用仍替换完整 Skill; 删除文件也属于该版本替换的一部分.
+
 ## 导入本机 Skills
 
 通过顶部 More > Import, 从 `%USERPROFILE%\.agents\skills` 选择已有 Skills 导入. 本地导入和部署会保留非隐藏的空目录, 跳过名称以 `.` 开头的文件和目录.

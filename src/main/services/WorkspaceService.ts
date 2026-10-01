@@ -195,6 +195,9 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     /** Compare installed GitHub skills with remote content hashes. */
     checkSkillUpdates: () => withWorkspace((root) => skillRemote.checkSkillUpdates(root)),
 
+    /** Inspect only the fixed remote version retained by the current update review. */
+    readSkillUpdatePreview: (previewId) => withWorkspace((root) => skillRemote.readSkillUpdatePreview(root, previewId)),
+
     /** Apply remote updates for selected installed skills. */
     applySkillUpdates: (previewIds) => withWorkspace((root) => skillRemote.applySkillUpdates(root, previewIds)),
 

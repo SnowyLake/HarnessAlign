@@ -52,6 +52,7 @@ export const IPC_CHANNELS = {
     workspaceInstallDiscoveredSkill: "workspace:install-discovered-skill",
     workspaceInstallSkills: "workspace:install-skills",
     workspaceCheckSkillUpdates: "workspace:check-skill-updates",
+    workspaceSkillUpdatePreview: "workspace:skill-update-preview",
     workspaceApplySkillUpdates: "workspace:apply-skill-updates",
     workspaceReadSkillContent: "workspace:read-skill-content",
     workspaceSaveSkillContent: "workspace:save-skill-content",

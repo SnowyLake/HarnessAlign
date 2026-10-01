@@ -80,6 +80,19 @@ export interface SkillUpdate
     error?: string;
 }
 
+/** Fixed-version update review with bounded Markdown text and file classifications. */
+export interface SkillUpdatePreview
+{
+    previewId: string;
+    id: string;
+    oldCommit: string | null;
+    newCommit: string;
+    files: Array<{ path: string; status: "added" | "modified" | "deleted" | "unchanged" }>;
+    oldText: string;
+    newText: string;
+    truncated: boolean;
+}
+
 /** Skill discovered under the user profile skills directory. */
 export interface UserSkill
 {

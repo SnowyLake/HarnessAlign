@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
 import { loadConfig } from "../../engine/Load.js";
+import { ensureRegularSource } from "../../engine/FsSafe.js";
 import { codePointCompare, errorText, HalignError, isRecord, type SkillOrigin, valueText } from "../../engine/Model.js";
 import { parseSyncSnapshot, syncSkillHash, syncSkillIndex, type SyncSnapshot } from "../../engine/Sync.js";
 import {
@@ -17,9 +18,11 @@ import {
     assertSkillReplacement,
     installSkillFromDirectory,
     loadSkills,
+    listSkillFiles,
+    readSkillContent,
     readSkillFrontmatter,
 } from "../../engine/Skills.js";
-import type { RemoteSkill, SkillUpdate } from "../../shared/models/Workspace.js";
+import type { RemoteSkill, SkillUpdate, SkillUpdatePreview } from "../../shared/models/Workspace.js";
 import { fetchRemote, readResponseBytes } from "./RemoteFetch.js";
 
 /** Compressed zip size limit (128 MiB). */
@@ -484,6 +487,38 @@ export async function checkSkillUpdates(root: string): Promise<SkillUpdate[]>
     }
     updateReview = { root, sources: JSON.stringify((await loadConfig(root)).skillSources), items: reviewed };
     return updates;
+}
+
+/** Inspect actual local files against the immutable version retained by an update check. */
+export async function readSkillUpdatePreview(root: string, previewId: string): Promise<SkillUpdatePreview>
+{
+    if (!updateReview || updateReview.root !== root || updateReview.sources !== JSON.stringify((await loadConfig(root)).skillSources)) throw new HalignError("skill update preview expired; check updates again");
+    const item = updateReview.items.find((entry) => entry.skill.previewId === previewId);
+    if (!item) throw new HalignError(`skill update preview ${valueText(previewId)} expired; check updates again`);
+    const current = (await loadSkills(root)).find((skill) => skill.id === item.skill.id);
+    if (!current || current.origin.kind !== "github" || JSON.stringify(current.origin) !== item.currentOrigin) throw new HalignError(`skills/${item.skill.id}: installed provenance changed since review`);
+    const directory = join(root, ".harness-align", "skills", current.id);
+    await ensureRegularSource(root, directory);
+    const local = new Map<string, string>();
+    const paths = await listSkillFiles(directory);
+    if (paths.length > MAX_ZIP_ENTRIES) throw new HalignError(`${directory}: preview exceeds ${MAX_ZIP_ENTRIES} files`);
+    for (const path of paths)
+    {
+        const absolute = join(directory, ...path.split("/"));
+        await ensureRegularSource(root, absolute);
+        if ((await fs.stat(absolute)).size > MAX_UNCOMPRESSED_BYTES) throw new HalignError(`${absolute}: preview file exceeds 512 MiB`);
+        local.set(path, createHash("sha256").update(await fs.readFile(absolute)).digest("hex"));
+    }
+    const remote = new Map([...item.skill.files].map(([path, bytes]) => [path, createHash("sha256").update(bytes).digest("hex")]));
+    const files: SkillUpdatePreview["files"] = [...new Set([...local.keys(), ...remote.keys()])].sort(codePointCompare).map((path) => ({ path,
+        status: !local.has(path) ? "added" : !remote.has(path) ? "deleted" : local.get(path) === remote.get(path) ? "unchanged" : "modified" }));
+    const oldText = await readSkillContent(root, current.id);
+    const bytes = item.skill.files.get("SKILL.md")!;
+    let newText: string;
+    try { newText = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+    catch (error) { throw new HalignError(`skills/${current.id}/SKILL.md: invalid remote UTF-8: ${errorText(error)}`); }
+    return { previewId, id: current.id, oldCommit: current.origin.commit ?? null, newCommit: item.skill.commit, files,
+        oldText: oldText.slice(0, 16_000), newText: newText.slice(0, 16_000), truncated: oldText.length > 16_000 || newText.length > 16_000 };
 }
 
 /** Reinstall selected skills that have remote updates. */
