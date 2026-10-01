@@ -7,12 +7,14 @@ import { flushSync } from "react-dom";
 import type { SyncApplyInput, SyncChange, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileView } from "@shared/models/Sync";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
+import { DiffText } from "@/components/common/DiffText";
+import { diffLines, type DiffLine } from "@/lib/TextDiff";
 
 const CREATE_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write";
 const MANAGE_TOKENS_URL = "https://github.com/settings/personal-access-tokens";
 
 /** Render bounded text and binary metadata without interpreting remote content as HTML. */
-function SyncFileContent({ label, value }: { label: string; value: SyncFileView | null })
+function SyncFileContent({ label, value, lines }: { label: string; value: SyncFileView | null; lines?: DiffLine[] })
 {
     return (
         <Card size="small" title={label}>
@@ -20,7 +22,7 @@ function SyncFileContent({ label, value }: { label: string; value: SyncFileView 
                 <Space orientation="vertical" size="small" style={{ width: "100%" }}>
                     <Typography.Text type="secondary">{value.bytes.toLocaleString()} bytes</Typography.Text>
                     {value.text === null ? <Typography.Text>Binary file. SHA: {value.hash}</Typography.Text> : (
-                        <pre style={{ margin: 0, maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{value.text || "(empty file)"}</pre>
+                        lines ? <DiffText lines={lines} label={`${label} differences`} /> : <pre style={{ margin: 0, maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{value.text || "(empty file)"}</pre>
                     )}
                     {value.truncated ? <Typography.Text type="warning">Preview limited to 16,000 characters.</Typography.Text> : null}
                 </Space>
@@ -281,16 +283,23 @@ export function SyncPanel()
             </Modal>
             <Modal open={Boolean(detail)} title={`Compare: ${detail?.key ?? ""}`} width={1000} footer={null} onCancel={() => setDetail(undefined)} destroyOnHidden>
                 <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                    <Typography.Text type="secondary">- Local deletions and + Remote additions are highlighted. Conflict choices still apply to the entire source group.</Typography.Text>
                     {detail?.content.files.length === 0 ? <Typography.Text>This change adds or removes an empty directory.</Typography.Text> : null}
-                    {detail?.content.files.map((file) => (
+                    {detail?.content.files.map((file) =>
+                    {
+                        const diff = (!file.local || file.local.text !== null) && (!file.remote || file.remote.text !== null)
+                            ? diffLines(file.local?.text ?? null, file.remote?.text ?? null) : undefined;
+                        return (
                         <div key={file.path} style={{ width: "100%" }}>
                             <Typography.Paragraph code>{file.path}</Typography.Paragraph>
                             <Row gutter={[12, 12]}>
-                                <Col xs={24} md={12}><SyncFileContent label="Local" value={file.local} /></Col>
-                                <Col xs={24} md={12}><SyncFileContent label="Remote" value={file.remote} /></Col>
+                                <Col xs={24} md={12}><SyncFileContent label="Local" value={file.local} {...diff ? { lines: diff.local } : {}} /></Col>
+                                <Col xs={24} md={12}><SyncFileContent label="Remote" value={file.remote} {...diff ? { lines: diff.remote } : {}} /></Col>
                             </Row>
+                            {diff?.limited ? <Typography.Text type="secondary">Large preview: the changed section is highlighted as a whole.</Typography.Text> : null}
                         </div>
-                    ))}
+                    );
+                    })}
                     {detail?.content.omittedFiles ? (
                         <Alert type="info" title={`${detail.content.omittedFiles} additional files omitted from this preview. The decision applies to the entire source group.`} />
                     ) : null}

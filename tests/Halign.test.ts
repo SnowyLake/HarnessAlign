@@ -19,6 +19,8 @@ import { defaultLayerOption, harnessEffects, matchesWorkspaceSource, moveLayerSe
 import type { ProjectSkill, RemoteSkill, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
+import { DiffText } from "../src/renderer/src/components/common/DiffText.js";
+import { diffLines } from "../src/renderer/src/lib/TextDiff.js";
 import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
@@ -59,6 +61,22 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("text comparisons mark additions and deletions, preserve common lines, bound work and escape remote markup", () =>
+{
+    const diff = diffLines("first\nremoved\nlast", "first\nadded\nlast");
+    assert.deepEqual(diff.local.map((line) => line.kind), ["same", "removed", "same"]);
+    assert.deepEqual(diff.remote.map((line) => line.kind), ["same", "added", "same"]);
+    assert.equal(diffLines(null, "new").remote[0]!.kind, "added");
+    assert.equal(diffLines("gone", null).local[0]!.kind, "removed");
+    const large = diffLines(Array(600).fill("before").join("\n"), Array(600).fill("after").join("\n"));
+    assert.equal(large.limited, true);
+    assert.equal(large.local.length, 600);
+    const markup = renderToStaticMarkup(createElement(DiffText, { label: "Remote differences", lines: diffLines(null, "<script>remote()</script>").remote }));
+    assert.ok(markup.includes('data-change="added"'));
+    assert.ok(markup.includes("&lt;script&gt;"));
+    assert.equal(markup.includes("<script>"), false);
+});
 
 test("source search combines name, path, body terms and strict Harness filters without treating empty targets as global", () =>
 {
