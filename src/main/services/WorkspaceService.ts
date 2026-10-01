@@ -29,7 +29,7 @@ import {
     updateHarness,
 } from "../../engine/Edit.js";
 import { assertContained, ensureRegularSource, lstatIfExists } from "../../engine/FsSafe.js";
-import { generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
+import { generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
 import { HalignError, valueText } from "../../engine/Model.js";
 import { previewSetup, reportSetup, setup } from "../../engine/Setup.js";
 import type { AppApi } from "../../shared/contracts/AppApi.js";
@@ -121,6 +121,7 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
         const [workspace, generatedFiles] = await Promise.all([loadWorkspace(root), readGeneratedFiles(root)]);
         return {
             ...workspace,
+            generationStatus: await inspectGenerated(root, generatedFiles),
             generatedFiles: [...generatedFiles].map(([path, content]) => ({ path, content: content.toString("utf8") })),
         };
     }),

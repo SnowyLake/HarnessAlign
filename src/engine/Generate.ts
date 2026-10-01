@@ -233,3 +233,35 @@ export async function readGeneratedFiles(rootPath: string): Promise<Map<string, 
     await visit(generated);
     return files;
 }
+
+/** Content-derived state compared with saved sources and the saved Layer selection. */
+export interface GenerationStatus
+{
+    state: "current" | "stale" | "missing" | "partial";
+    changes: Array<{ path: string; status: "missing" | "modified" | "obsolete" }>;
+}
+
+/** Compare actual managed output bytes rather than reporting success from a previous button click. */
+export async function inspectGenerated(rootPath: string, actual?: Map<string, Buffer>): Promise<GenerationStatus>
+{
+    const expected = await buildOutputs(rootPath);
+    const files = actual ?? await readGeneratedFiles(rootPath);
+    const changes: GenerationStatus["changes"] = [];
+    for (const [path, content] of expected)
+    {
+        const current = files.get(path);
+        if (!current) changes.push({ path, status: "missing" });
+        else if (!current.equals(content)) changes.push({ path, status: "modified" });
+    }
+    let managed: string[];
+    try { managed = await loadManifest(resolve(rootPath)); }
+    catch (error)
+    {
+        if (!(error instanceof HalignError) || !/invalid manifest|version must|files must/u.test(error.message)) throw error;
+        return { state: "partial", changes };
+    }
+    for (const path of managed) if (!expected.has(path)) changes.push({ path, status: "obsolete" });
+    changes.sort((left, right) => codePointCompare(left.path, right.path));
+    const state = changes.length === 0 ? "current" : files.size === 0 ? "missing" : changes.some((change) => change.status === "missing") ? "partial" : "stale";
+    return { state, changes };
+}

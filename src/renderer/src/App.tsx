@@ -134,9 +134,12 @@ export function App()
         if (!current || Object.keys(useAppStore.getState().editorDrafts).length > 0) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.generate(useAppStore.getState().layerSelection);
-            showSuccess("Generate completed", report);
-            await refreshWorkspace();
+            try
+            {
+                const report = await window.appApi.workspace.generate(useAppStore.getState().layerSelection);
+                showSuccess("Generate completed", report);
+            }
+            finally { await refreshWorkspace(); }
             if (useAppStore.getState().view !== "console") useAppStore.getState().setView("generated");
         }, "Generate");
     };
@@ -148,9 +151,12 @@ export function App()
         if (!current || Object.keys(useAppStore.getState().editorDrafts).length > 0) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.setup(previewId, overwriteExternal);
-            showSuccess("Setup completed", report);
-            await refreshWorkspace();
+            try
+            {
+                const report = await window.appApi.workspace.setup(previewId, overwriteExternal);
+                showSuccess("Setup completed", report);
+            }
+            finally { await refreshWorkspace(); }
         }, "Setup");
     };
 

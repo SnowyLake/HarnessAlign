@@ -28,7 +28,7 @@ import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncS
 import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
 import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
-import { buildOutputs, generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
+import { buildOutputs, generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
 import { readResponseBytes } from "../src/main/services/RemoteFetch.js";
 import {
     assertAppUpdateInstallable, assertReleaseVersion, beginAppUpdateCheck, beginAppUpdateDownload, environmentProxy, environmentProxyBypass,
@@ -59,6 +59,37 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("generated status follows source and actual output bytes, missing files and interrupted generations", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        assert.equal((await inspectGenerated(root)).state, "missing");
+        await generate(root);
+        assert.deepEqual(await inspectGenerated(root), { state: "current", changes: [] });
+        await writeFile(join(root, ".harness-align", "generated", "unmanaged.md"), "Keep unmanaged");
+        assert.equal((await inspectGenerated(root)).state, "current");
+        await saveRule(root, { ...(await loadWorkspace(root)).rootRules[0]!, body: "Changed saved source" });
+        const stale = await inspectGenerated(root);
+        assert.equal(stale.state, "stale");
+        assert.ok(stale.changes.some((change) => change.path === "codex/AGENTS.md" && change.status === "modified"));
+        await unlink(join(root, ".harness-align", "generated", "codex", "AGENTS.md"));
+        assert.equal((await inspectGenerated(root)).state, "partial");
+        const originalRename = fs.rename;
+        const blocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            if (String(args[1]) === join(root, ".harness-align", "generated", "codex", "AGENTS.md")) throw new Error("Interrupted generation");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(generate(root), /Interrupted generation/u); }
+        finally { blocked.mock.restore(); }
+        assert.equal((await inspectGenerated(root)).state, "partial");
+        await generate(root);
+        assert.equal((await inspectGenerated(root)).state, "current");
+        await writeFile(join(root, ".harness-align", "generated", ".manifest.json"), "Invalid interrupted manifest");
+        assert.equal((await inspectGenerated(root)).state, "partial");
+    });
+});
 
 test("cascaded source edits persist rollback across interruptions and refuse subsequent external changes", async (t) =>
 {
@@ -384,7 +415,7 @@ test("opened source guards reject external edits, deletion, creation races, and 
         const previous = { ...state };
         try
         {
-            const workspace = { ...opened, generatedFiles: [] };
+            const workspace = { ...opened, generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } };
             state.resetWorkspace(workspace);
             state.setEditorDraft(`rule:${rule.path}`, { selection: { kind: "rule", path: rule.path }, baseline: { body: [rule.body] }, current: { body: ["Draft"] }, sourceRevisions: opened.sourceRevisions });
             state.setWorkspace({ ...workspace, sourceRevisions: { ...opened.sourceRevisions, [rule.path]: "b".repeat(64) } });
@@ -3567,7 +3598,7 @@ test("Layer selection keeps local choices and falls back only when the selected 
         const initial = useAppStore.getState();
         try
         {
-            const workspace = { ...await loadWorkspace(root), generatedFiles: [] };
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } };
             initial.setWorkspace(undefined);
             initial.setWorkspace(workspace);
             initial.setLayerSelection([{ name: "soul", option: "kei" }]);
@@ -3604,7 +3635,7 @@ test("workspace reload replaces drafts and Layer choices only after a valid disk
         const initial = useAppStore.getState();
         try
         {
-            const workspace = { ...await loadWorkspace(root), generatedFiles: [] };
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } };
             initial.setWorkspace(undefined);
             initial.setWorkspace(workspace);
             initial.setView("rules");
@@ -3620,12 +3651,12 @@ test("workspace reload replaces drafts and Layer choices only after a valid disk
             const configPath = join(root, ".harness-align/config.json");
             const savedConfig = await readFile(configPath, "utf8");
             await writeFile(configPath, "invalid JSON");
-            await assert.rejects(loadWorkspace(root).then((loaded) => initial.resetWorkspace({ ...loaded, generatedFiles: [] })));
+            await assert.rejects(loadWorkspace(root).then((loaded) => initial.resetWorkspace({ ...loaded, generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } })));
             assert.equal(useAppStore.getState(), before);
             await writeFile(configPath, savedConfig);
             await writeRule(root, rule.path.split("/").at(-1)!, rule.priority, "Changed outside the app");
             await saveConfig(root, { ...await loadConfig(root), layers: [{ name: "soul", selected: "kei" }] });
-            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [] });
+            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } });
             const reloaded = useAppStore.getState();
             assert.match(reloaded.workspace!.rootRules.find((item) => item.path === rule.path)!.body, /Changed outside the app/u);
             assert.deepEqual(reloaded.layerSelection, [{ name: "soul", option: "kei" }]);
@@ -3640,7 +3671,7 @@ test("workspace reload replaces drafts and Layer choices only after a valid disk
             initial.resetWorkspace(reloaded.workspace!);
             assert.equal(useAppStore.getState().workspaceRevision, reloaded.workspaceRevision + 1);
             await unlink(join(root, rule.path));
-            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [] });
+            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } });
             assert.notDeepEqual(useAppStore.getState().selection, selection);
             assert.equal(useAppStore.getState().view, "rules");
             initial.setView("console");

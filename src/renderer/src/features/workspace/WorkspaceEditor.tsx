@@ -850,7 +850,16 @@ export function WorkspaceEditor()
                 </Space> : selection.kind !== "layer" ? <Typography.Text type="secondary">Read only</Typography.Text> : null}
             </Flex>
             <div className="workspace-scroll" ref={scrollRef}>
-                <div key={revision} className="workspace-editor-page">{editor}</div>
+                <div key={revision} className="workspace-editor-page">
+                    {selection.kind === "generated" || selection.kind === "generated-file" ? <Alert showIcon
+                        type={workspace.generationStatus.state === "current" ? "success" : "warning"}
+                        title={`Saved source status: ${workspace.generationStatus.state}`}
+                        description={<Space orientation="vertical">
+                            <Typography.Text>Compared with saved sources and saved Layer choices. Reload checks disk changes; Generate refreshes output.</Typography.Text>
+                            {workspace.generationStatus.changes.map((change) => <Typography.Text key={change.path}>{change.status}: {change.path}</Typography.Text>)}
+                        </Space>} /> : null}
+                    {editor}
+                </div>
             </div>
         </div>
     );

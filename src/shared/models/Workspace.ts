@@ -135,6 +135,13 @@ export interface GeneratedFile
     content: string;
 }
 
+/** Actual managed output status relative to saved sources, independent of operation history. */
+export interface GenerationStatus
+{
+    state: "current" | "stale" | "missing" | "partial";
+    changes: Array<{ path: string; status: "missing" | "modified" | "obsolete" }>;
+}
+
 /** Existing workspace file identity whose containing folder may be opened by Main. */
 export type WorkspaceItemTarget =
     | { kind: "source"; path: string }
@@ -174,4 +181,5 @@ export interface Workspace
     agents: Agent[];
     skills: ProjectSkill[];
     generatedFiles: GeneratedFile[];
+    generationStatus: GenerationStatus;
 }
