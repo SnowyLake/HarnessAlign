@@ -43,7 +43,7 @@ import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
     loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkillSource,
     renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, saveSkillContent, updateHarness,
-    applySyncSources, recoverSyncSources, validateSyncSources,
+    applySyncSources, recoverSourceEdits, recoverSyncSources, validateSyncSources,
 } from "../src/engine/Edit.js";
 
 const config = {
@@ -59,6 +59,64 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("cascaded source edits persist rollback across interruptions and refuse subsequent external changes", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const before = await readSyncSnapshot(root);
+        const originalRename = fs.rename;
+        let interrupted = false;
+        const blocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            const target = String(args[1]);
+            if (target === join(root, ".harness-align", "agents", "explorer.md")) { interrupted = true; throw new Error("Interrupted agent write"); }
+            if (interrupted && target === join(root, ".harness-align", "config.json")) throw new Error("Unavailable config rollback");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(removeHarness(root, "codex"), /recovery preserved.*Unavailable config rollback/u); }
+        finally { blocked.mock.restore(); }
+        const recordPath = join(root, ".harness-align", ".edit-recovery.json");
+        assert.equal(Object.hasOwn((await readSyncSnapshot(root)).files, ".edit-recovery.json"), false);
+        const pendingConfig = await readFile(join(root, ".harness-align", "config.json"));
+        await writeFile(join(root, ".harness-align", "config.json"), "External later edit");
+        const refusal = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(recoverSourceEdits(root), /changed outside the interrupted source update/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), refusal);
+        await writeFile(join(root, ".harness-align", "config.json"), pendingConfig);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await readSyncSnapshot(root), before);
+        await assert.rejects(readFile(recordPath), /ENOENT/u);
+        await loadWorkspace(root);
+    });
+});
+
+test("layer move recovery restores config references and preserves edits made to the moved directory", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const before = await readSyncSnapshot(root);
+        const originalRename = fs.rename;
+        const blocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            const from = String(args[0]);
+            const to = String(args[1]);
+            if (to === join(root, ".harness-align", "config.json")) throw new Error("Interrupted config write");
+            if (from === join(root, ".harness-align", "layers", "moved") && to === join(root, ".harness-align", "layers", "soul")) throw new Error("Unavailable layer rollback");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(renameLayer(root, "soul", "moved"), /recovery preserved.*Unavailable layer rollback/u); }
+        finally { blocked.mock.restore(); }
+        const extra = join(root, ".harness-align", "layers", "moved", "later.md");
+        await writeFile(extra, "External later file");
+        await assert.rejects(ensureUserWorkspace(root), /changed outside the interrupted source update/u);
+        assert.equal(await readFile(extra, "utf8"), "External later file");
+        await unlink(extra);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await readSyncSnapshot(root), before);
+        assert.equal(await recoverSourceEdits(root), "none");
+    });
+});
 
 test("deployment recovery persists failed rollback, refuses external edits and escaped records, then restores on startup", async (t) =>
 {

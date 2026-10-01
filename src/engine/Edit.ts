@@ -4,7 +4,7 @@
  */
 
 import { promises as fs } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join, posix, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { stringify as stringifyYaml } from "yaml";
@@ -277,37 +277,181 @@ async function writeManaged(root: string, relativePath: string, content: Buffer)
     await atomicWrite(path, content);
 }
 
-/** Preflight a source batch and restore completed writes if a later write fails. */
-async function writeManagedBatch(root: string, writes: Array<{ path: string; content: Buffer }>): Promise<void>
+/** One layer move kept until its cascaded source writes have committed. */
+interface EditMove
 {
-    const prepared = await Promise.all(writes.map(async (write) => ({
-        ...write,
-        original: await fs.readFile(await resolveManaged(root, write.path, write.path)),
-    })));
-    const written: typeof prepared = [];
+    from: string;
+    to: string;
+    revision: string;
+    remove: boolean;
+}
+
+/** Exact affected bytes preserve unrelated sources and avoid synchronization archive limits. */
+interface EditJournal
+{
+    version: 1;
+    phase: "applying" | "committed";
+    writes: Array<{ path: string; before: string; after: string }>;
+    move?: EditMove;
+}
+
+/** Hash a layer tree without following links, including empty directories and exact file bytes. */
+async function editTreeRevision(root: string, path: string): Promise<string>
+{
+    const hash = createHash("sha256");
+    /** Visit each guarded relative tree entry in deterministic order. */
+    const visit = async (current: string, name: string): Promise<void> =>
+    {
+        await ensureRegularSource(root, current);
+        const stats = await fs.lstat(current);
+        hash.update(name).update("\0");
+        if (stats.isDirectory())
+        {
+            hash.update("directory\0");
+            for (const child of (await fs.readdir(current)).sort(codePointCompare)) await visit(join(current, child), `${name}/${child}`);
+        }
+        else if (stats.isFile()) hash.update(await fs.readFile(current)).update("\0");
+        else throw new HalignError(`${current}: expected a regular layer source`);
+    };
+    await visit(path, ".");
+    return hash.digest("hex");
+}
+
+/** Read the exact spelling of a moved path, including case-only renames on Windows. */
+async function editMoveExists(root: string, path: string): Promise<boolean>
+{
+    const absolute = join(root, ...path.split("/"));
+    await ensureRegularSource(root, absolute);
+    const parent = join(absolute, "..");
+    if (!(await lstatIfExists(parent))) return false;
+    return (await fs.readdir(parent)).includes(path.split("/").at(-1)!);
+}
+
+/** Recover only recorded source bytes and one layer move, preserving subsequent external edits. */
+export async function recoverSourceEdits(root: string): Promise<"none" | "restored" | "completed">
+{
+    const recordPath = join(root, ".harness-align", ".edit-recovery.json");
+    await ensureRegularSource(root, recordPath);
+    const stats = await lstatIfExists(recordPath);
+    if (!stats) return "none";
+    if (!stats.isFile() || stats.size > 96 * 1024 * 1024) throw new HalignError(`${recordPath}: expected a regular recovery record no larger than 96 MiB`);
+    const record = await fs.readFile(recordPath);
+    let value: unknown;
+    try { value = JSON.parse(record.toString("utf8")); }
+    catch (error) { throw new HalignError(`${recordPath}: invalid JSON: ${errorText(error)}`); }
+    if (!isRecord(value) || value.version !== 1 || (value.phase !== "applying" && value.phase !== "committed") || !Array.isArray(value.writes)) throw new HalignError(`${recordPath}: expected version 1 source writes and phase`);
+    const writes: EditJournal["writes"] = [];
+    const paths = new Set<string>();
+    for (const item of value.writes)
+    {
+        if (!isRecord(item) || typeof item.path !== "string" || typeof item.before !== "string" || typeof item.after !== "string") throw new HalignError(`${recordPath}: expected source path and base64 bytes`);
+        const path = managedRelative(item.path, recordPath);
+        const key = pathKey(join(root, path));
+        if (paths.has(key)) throw new HalignError(`${recordPath}: duplicate source ${path}`);
+        paths.add(key);
+        for (const bytes of [item.before, item.after]) if (Buffer.from(bytes, "base64").toString("base64") !== bytes) throw new HalignError(`${recordPath}: ${path} contains invalid base64`);
+        writes.push({ path, before: item.before, after: item.after });
+    }
+    let move: EditMove | undefined;
+    if (value.move !== undefined)
+    {
+        const item = value.move;
+        if (!isRecord(item) || typeof item.from !== "string" || typeof item.to !== "string" || typeof item.remove !== "boolean" || typeof item.revision !== "string" || !/^[a-f0-9]{64}$/u.test(item.revision)) throw new HalignError(`${recordPath}: invalid layer move`);
+        const from = managedRelative(item.from, recordPath);
+        const to = item.to;
+        const layerPath = /^\.harness-align\/layers\/[^/]+(?:\/[^/]+\.md)?$/u;
+        const removalPath = /^\.harness-align\/\.edit-backup-[0-9a-f-]{36}$/u;
+        if (!layerPath.test(from) || (item.remove ? !removalPath.test(to) : !layerPath.test(managedRelative(to, recordPath))) || from === to) throw new HalignError(`${recordPath}: move must remain in layer sources or its deletion backup`);
+        if (!item.remove && (from.split("/").length !== to.split("/").length || (from.split("/").length === 4 && posix.dirname(from) !== posix.dirname(to)))) throw new HalignError(`${recordPath}: option move must remain in its layer`);
+        assertContained(root, join(root, ...to.split("/")), recordPath);
+        move = { from, to, remove: item.remove, revision: item.revision };
+    }
+    /** Refuse unrelated edits before any restoration or deletion. */
+    const inspect = async (): Promise<{ atSource: boolean; atTarget: boolean }> =>
+    {
+        for (const write of writes)
+        {
+            const path = await resolveManaged(root, write.path, recordPath);
+            const actual = (await fs.readFile(path)).toString("base64");
+            if (value.phase === "committed" ? actual !== write.after : actual !== write.before && actual !== write.after) throw new HalignError(`${path}: changed outside the interrupted source update; preserve ${recordPath}`);
+        }
+        const atSource = move ? await editMoveExists(root, move.from) : false;
+        const atTarget = move ? await editMoveExists(root, move.to) : false;
+        if (move)
+        {
+            if (atSource && atTarget || (!atSource && !atTarget && !(value.phase === "committed" && move.remove)) || (value.phase === "committed" && atSource)) throw new HalignError(`${recordPath}: ambiguous layer move ${move.from} to ${move.to}; preserve both paths`);
+            const location = atSource ? move.from : atTarget ? move.to : undefined;
+            if (location && await editTreeRevision(root, join(root, ...location.split("/"))) !== move.revision) throw new HalignError(`${location}: changed outside the interrupted source update; preserve ${recordPath}`);
+        }
+        return { atSource, atTarget };
+    };
+    const state = await inspect();
+    if (value.phase === "applying")
+    {
+        for (const write of [...writes].reverse())
+        {
+            const path = await resolveManaged(root, write.path, recordPath);
+            const actual = (await fs.readFile(path)).toString("base64");
+            if (actual !== write.before && actual !== write.after) throw new HalignError(`${path}: changed during source recovery; preserve ${recordPath}`);
+            await writeManaged(root, write.path, Buffer.from(write.before, "base64"));
+        }
+        if (move && state.atTarget)
+        {
+            await inspect();
+            await fs.rename(join(root, ...move.to.split("/")), join(root, ...move.from.split("/")));
+        }
+    }
+    else if (move?.remove && state.atTarget)
+    {
+        await inspect();
+        const backup = join(root, ...move.to.split("/"));
+        await assertNoReparseTree(root, backup);
+        await fs.rm(backup, { recursive: true, force: true });
+    }
+    if (!(await fs.readFile(recordPath)).equals(record)) throw new HalignError(`${recordPath}: recovery record changed; preserve it`);
+    await fs.unlink(recordPath);
+    return value.phase === "committed" ? "completed" : "restored";
+}
+
+/** Persist an affected-source batch before moving layers or atomically writing any file. */
+async function writeManagedBatch(root: string, writes: Array<{ path: string; content: Buffer }>, moveInput?: { from: string; to: string; remove?: boolean }): Promise<void>
+{
+    await recoverSourceEdits(root);
+    const journal: EditJournal = { version: 1, phase: "applying", writes: await Promise.all(writes.map(async (write) => ({
+        path: write.path, before: (await fs.readFile(await resolveManaged(root, write.path, write.path))).toString("base64"), after: write.content.toString("base64"),
+    }))) };
+    if (moveInput) journal.move = { ...moveInput, remove: moveInput.remove ?? false, revision: await editTreeRevision(root, join(root, ...moveInput.from.split("/"))) };
+    const recordPath = join(root, ".harness-align", ".edit-recovery.json");
+    await ensureRegularSource(root, recordPath);
+    const bytes = Buffer.from(`${JSON.stringify(journal)}\n`);
+    if (bytes.length > 96 * 1024 * 1024) throw new HalignError(`${recordPath}: affected source bytes exceed the 96 MiB recovery limit`);
+    await atomicWrite(recordPath, bytes);
     try
     {
-        for (const write of prepared)
+        if (journal.move)
         {
-            await writeManaged(root, write.path, write.content);
-            written.push(write);
+            const source = join(root, ...journal.move.from.split("/"));
+            const destination = join(root, ...journal.move.to.split("/"));
+            await ensureRegularSource(root, destination);
+            await assertRenameDestination(source, destination, journal.move.to);
+            if (await editTreeRevision(root, source) !== journal.move.revision) throw new HalignError(`${source}: layer changed before its move; preserve ${recordPath}`);
+            await fs.rename(source, destination);
         }
+        for (const [index, write] of writes.entries())
+        {
+            const path = await resolveManaged(root, write.path, write.path);
+            if ((await fs.readFile(path)).toString("base64") !== journal.writes[index]!.before) throw new HalignError(`${path}: source changed before its cascaded write; preserve ${recordPath}`);
+            await writeManaged(root, write.path, write.content);
+        }
+        if (!(await fs.readFile(recordPath)).equals(bytes)) throw new HalignError(`${recordPath}: source recovery record changed before commit; preserve it`);
+        journal.phase = "committed";
+        await atomicWrite(recordPath, Buffer.from(`${JSON.stringify(journal)}\n`));
+        await recoverSourceEdits(root);
     }
     catch (error)
     {
-        const failures: string[] = [];
-        for (const write of written.reverse())
-        {
-            try
-            {
-                await writeManaged(root, write.path, write.original);
-            }
-            catch (rollbackError)
-            {
-                failures.push(`${write.path}: ${errorText(rollbackError)}`);
-            }
-        }
-        if (failures.length > 0) throw new HalignError(`Source update failed: ${errorText(error)}; rollback failed: ${failures.join("; ")}`);
+        try { if (await recoverSourceEdits(root) === "completed") return; }
+        catch (recoveryError) { throw new HalignError(`Source update failed: ${errorText(error)}; recovery preserved at ${recordPath}: ${errorText(recoveryError)}`); }
         throw error;
     }
 }
@@ -586,6 +730,7 @@ export async function ensureUserWorkspace(userProfile = process.env.USERPROFILE)
         }
     }
     await recoverSyncSources(root);
+    await recoverSourceEdits(root);
     await recoverDeployment(root, root);
     const guidePath = join(halign, "AGENTS.md");
     await ensureRegularSource(root, guidePath);
@@ -807,23 +952,14 @@ export async function removeLayer(rootPath: string, name: string): Promise<Confi
     }
     const directory = join(root, ".harness-align", "layers", name);
     await assertNoReparseTree(root, directory);
-    const temporary = join(root, ".harness-align", `.remove-layer-${name}-${process.pid}`);
+    const temporary = join(root, ".harness-align", `.edit-backup-${randomUUID()}`);
     if (await lstatIfExists(temporary)) throw new HalignError(`${display(root, temporary)}: temporary path already exists`);
     const nextLayers = config.layers.filter((layer) => layer.name !== name);
     const next = nextLayers.length === config.layers.length
         ? config
         : validateConfig(configDocument({ ...config, layers: nextLayers }));
-    await fs.rename(directory, temporary);
-    try
-    {
-        if (next !== config) await writeConfig(root, next);
-    }
-    catch (error)
-    {
-        await fs.rename(temporary, directory);
-        throw error;
-    }
-    await fs.rm(temporary, { recursive: true, force: true });
+    await writeManagedBatch(root, next === config ? [] : [{ path: ".harness-align/config.json", content: Buffer.from(`${JSON.stringify(configDocument(next), null, 2)}\n`) }],
+        { from: `.harness-align/layers/${name}`, to: `.harness-align/${posix.basename(temporary.replaceAll("\\", "/"))}`, remove: true });
     return next;
 }
 
@@ -849,17 +985,9 @@ export async function renameLayer(rootPath: string, from: string, to: string): P
     const next = nextLayers.some((layer, index) => layer !== config.layers[index])
         ? validateConfig(configDocument({ ...config, layers: nextLayers }))
         : config;
-    if (source !== destination) await fs.rename(source, destination);
-    try
-    {
-        if (next !== config) await writeConfig(root, next);
-        return next;
-    }
-    catch (error)
-    {
-        if (source !== destination) await fs.rename(destination, source);
-        throw error;
-    }
+    if (source !== destination) await writeManagedBatch(root, next === config ? [] : [{ path: ".harness-align/config.json", content: Buffer.from(`${JSON.stringify(configDocument(next), null, 2)}\n`) }],
+        { from: `.harness-align/layers/${from}`, to: `.harness-align/layers/${to}` });
+    return next;
 }
 
 /** Create an empty option file under an existing layer. */
@@ -922,17 +1050,9 @@ export async function renameLayerOption(rootPath: string, layer: string, from: s
         ...config,
         layers: config.layers.map((candidate) => candidate.name === layer && candidate.selected === from ? { ...candidate, selected: to } : candidate),
     }));
-    if (source !== destination) await fs.rename(source, destination);
-    try
-    {
-        if (layerConfig?.selected === from) await writeConfig(root, next);
-        return next;
-    }
-    catch (error)
-    {
-        if (source !== destination) await fs.rename(destination, source);
-        throw error;
-    }
+    if (source !== destination) await writeManagedBatch(root, layerConfig?.selected !== from ? [] : [{ path: ".harness-align/config.json", content: Buffer.from(`${JSON.stringify(configDocument(next), null, 2)}\n`) }],
+        { from: `.harness-align/layers/${layer}/${from}.md`, to: `.harness-align/layers/${layer}/${to}.md` });
+    return next;
 }
 
 /** Replace a harness name inside a rule target list. */
