@@ -60,6 +60,60 @@ const config = {
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
 
+test("opened source guards reject external edits, deletion, creation races, and rename conflicts without losing drafts", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await saveSharedRule(root, ".harness-align/rules/shared/guarded.md", "Shared original");
+        const opened = await loadWorkspace(root);
+        const rule = opened.rootRules[0]!;
+        const option = Object.values(opened.layerOptions).flat()[0]!;
+        const agent = opened.agents[0]!;
+        const shared = opened.sharedRules.find((item) => item.path.endsWith("/guarded.md"))!;
+        const items = [
+            { path: ".harness-align/config.json", save: () => saveConfig(root, { ...opened.config, name: "Draft" }, guard(".harness-align/config.json")) },
+            { path: rule.path, save: () => saveRule(root, { ...rule, path: ".harness-align/rules/renamed.md", body: "Draft" }, guard(rule.path)) },
+            { path: option.path, save: () => saveLayerOption(root, { ...option, path: `.harness-align/layers/${option.layer}/renamed.md`, body: "Draft" }, guard(option.path)) },
+            { path: shared.path, save: () => saveSharedRule(root, ".harness-align/rules/shared/renamed.md", "Draft", guard(shared.path)) },
+            { path: agent.path, save: () => saveAgent(root, { ...agent, path: ".harness-align/agents/renamed.md", name: "renamed", body: "Draft" }, guard(agent.path)) },
+        ];
+        /** Use only revisions captured when the editor was opened. */
+        function guard(path: string) { return { path, revision: opened.sourceRevisions[path]! }; }
+        for (const item of items)
+        {
+            const path = join(root, item.path);
+            const original = await readFile(path);
+            await writeFile(path, Buffer.concat([original, Buffer.from("\n")]));
+            await assert.rejects(item.save(), /content changed since it was opened/u);
+            assert.deepEqual(await readFile(path), Buffer.concat([original, Buffer.from("\n")]));
+            await writeFile(path, original);
+        }
+        await unlink(join(root, rule.path));
+        await assert.rejects(saveRule(root, rule, guard(rule.path)), /got null/u);
+        await assert.rejects(readFile(join(root, ".harness-align/rules/renamed.md")), /ENOENT/u);
+        const next = ".harness-align/rules/new.md";
+        await saveRule(root, { ...rule, path: next }, { path: next, revision: null });
+        await assert.rejects(saveRule(root, { ...rule, path: next }, { path: next, revision: null }), /content changed/u);
+        await saveAgent(root, { ...agent, path: ".harness-align/agents/renamed.md", name: "renamed" }, guard(agent.path));
+        await assert.rejects(readFile(join(root, agent.path)), /ENOENT/u);
+        await saveLayerOption(root, { ...option, path: `.harness-align/layers/${option.layer}/renamed.md` }, guard(option.path));
+        assert.equal((await loadConfig(root)).layers.find((layer) => layer.name === option.layer)?.selected, "renamed");
+
+        const state = useAppStore.getState();
+        const previous = { ...state };
+        try
+        {
+            const workspace = { ...opened, generatedFiles: [] };
+            state.resetWorkspace(workspace);
+            state.setEditorDraft(`rule:${rule.path}`, { selection: { kind: "rule", path: rule.path }, baseline: { body: [rule.body] }, current: { body: ["Draft"] }, sourceRevisions: opened.sourceRevisions });
+            state.setWorkspace({ ...workspace, sourceRevisions: { ...opened.sourceRevisions, [rule.path]: "b".repeat(64) } });
+            assert.equal(useAppStore.getState().editorDrafts[`rule:${rule.path}`]?.sourceRevisions?.[rule.path], opened.sourceRevisions[rule.path]);
+            assert.deepEqual(useAppStore.getState().editorDrafts[`rule:${rule.path}`]?.current.body, ["Draft"]);
+        }
+        finally { useAppStore.setState(previous); }
+    });
+});
+
 test("Markdown preview renders GFM while keeping HTML, document links, and images inert", () =>
 {
     const content = [

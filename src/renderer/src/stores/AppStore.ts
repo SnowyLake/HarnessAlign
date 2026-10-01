@@ -41,6 +41,7 @@ export interface EditorDraft
     selection: Selection;
     baseline: FormSnapshot;
     current: FormSnapshot;
+    sourceRevisions?: Record<string, string>;
 }
 
 /** Commands that can be requested from a workspace tree item. */
@@ -318,6 +319,7 @@ export const useAppStore = create<AppState>((set) => ({
         if (!draft || previousKey === nextKey) return state;
         const editorDrafts = { ...state.editorDrafts };
         editorDrafts[nextKey] = {
+            ...draft,
             selection: to,
             baseline: name === undefined ? draft.baseline : { ...draft.baseline, name: [name] },
             current: name === undefined ? draft.current : { ...draft.current, name: [name] },

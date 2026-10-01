@@ -5,7 +5,7 @@ import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, Ellip
 import { Badge, Button, Collapse, Dropdown, Empty, Flex, Input, Modal, Popover, Segmented, Select, Switch, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
 import { useEffect, useState } from "react";
 import { showError, showSuccess } from "@/components/common/Feedback";
-import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation, saveRenamedSource } from "@/features/workspace/WorkspaceTasks";
+import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { catalogLayerNames, defaultLayerOption, moveLayerSelection, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 
@@ -226,10 +226,13 @@ async function renameRuleFromTree(workspace: Workspace, rule: RuleInput | Shared
     let nextPath = rule.path;
     const result = await runMutation(async () =>
     {
+        if (useAppStore.getState().editorDrafts[selectionKey({ kind: "rule", path: rule.path })]) throw new Error("Save this draft before renaming from the tree");
         nextPath = uniqueRulePath(rule.path, name, [...workspace.rootRules, ...workspace.sharedRules].map((item) => item.path));
         if (nextPath !== rule.path)
         {
-            await window.appApi.workspace.renameSource(rule.path, nextPath);
+            const guard = { path: rule.path, revision: workspace.sourceRevisions[rule.path] ?? null };
+            if ("targets" in rule) await window.appApi.workspace.saveRule({ ...rule, path: nextPath }, guard);
+            else await window.appApi.workspace.saveSharedRule(nextPath, rule.body, guard);
 
             const state = useAppStore.getState();
             state.moveEditorDraft({ kind: "rule", path: rule.path }, { kind: "rule", path: nextPath }, ruleDisplayName(nextPath));
@@ -265,7 +268,7 @@ async function persistRuleOrder(rules: readonly RuleInput[], sourcePath: string 
     const updates = ordered.filter((rule) => rules.find((current) => current.path === rule.path)?.priority !== rule.priority);
     const result = await runMutation(async () =>
     {
-        for (const rule of updates) await window.appApi.workspace.saveRule(rule);
+        for (const rule of updates) await window.appApi.workspace.saveRule(rule, { path: rule.path, revision: useAppStore.getState().workspace?.sourceRevisions[rule.path] ?? null });
         await refreshWorkspace(selection.kind === "rule" ? selection : undefined);
     });
     if (result.ok) showSuccess("Rule order updated");
@@ -293,11 +296,12 @@ async function renameAgentFromTree(workspace: Workspace, path: string, name: str
     let nextPath = agent.path;
     const result = await runMutation(async () =>
     {
+        if (useAppStore.getState().editorDrafts[selectionKey({ kind: "agent", path: agent.path })]) throw new Error("Save this draft before renaming from the tree");
         nextPath = uniqueAgentPath(agent.path, name, workspace.agents.map((item) => item.path));
         const nextName = ruleDisplayName(nextPath);
         if (nextPath !== agent.path || nextName !== agent.name)
         {
-            await saveRenamedSource(agent.path, nextPath, (savePath) => window.appApi.workspace.saveAgent({ ...agent, path: savePath, name: nextName }));
+            await window.appApi.workspace.saveAgent({ ...agent, path: nextPath, name: nextName }, { path: agent.path, revision: workspace.sourceRevisions[agent.path] ?? null });
             const state = useAppStore.getState();
             state.moveEditorDraft({ kind: "agent", path: agent.path }, { kind: "agent", path: nextPath }, nextName);
         }

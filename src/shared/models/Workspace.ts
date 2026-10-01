@@ -141,9 +141,17 @@ export type WorkspaceItemTarget =
     | { kind: "generated"; path: string }
     | { kind: "skill"; id: string };
 
+/** Opened source identity checked by Main before saving or renaming. */
+export interface SourceGuard
+{
+    path: string;
+    revision: string | null;
+}
+
 /** Loaded `.harness-align` workspace shown in the desktop shell. */
 export interface Workspace
 {
+    sourceRevisions: Record<string, string>;
     config: Config;
     rootRules: RuleInput[];
     layerOptions: Record<string, LayerOption[]>;

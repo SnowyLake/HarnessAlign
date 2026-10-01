@@ -4,6 +4,7 @@
  */
 
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, posix, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { stringify as stringifyYaml } from "yaml";
@@ -93,12 +94,94 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 /** Loaded `.harness-align` workspace for the desktop editor and tests. */
 export interface Workspace
 {
+    sourceRevisions: Record<string, string>;
     config: Config;
     rootRules: Rule[];
     layerOptions: Record<string, LayerOption[]>;
     sharedRules: SharedRule[];
     agents: Agent[];
     skills: ProjectSkill[];
+}
+
+/** Opened source identity used to reject stale saves, including renames and new files. */
+export interface SourceGuard
+{
+    path: string;
+    revision: string | null;
+}
+
+/** Hash the exact persisted bytes rather than a normalized editor representation. */
+export function sourceRevision(content: Buffer): string
+{
+    return createHash("sha256").update(content).digest("hex");
+}
+
+/** Capture editable source bytes without imposing synchronization archive limits on local editing. */
+async function readSourceRevisions(root: string): Promise<Record<string, string>>
+{
+    const revisions: Record<string, string> = {};
+    /** Visit regular source paths without following links or including atomic writer temporaries. */
+    const visit = async (relative: string): Promise<void> =>
+    {
+        const path = resolve(root, ...relative.split("/"));
+        assertContained(join(root, ".harness-align"), path, relative);
+        await ensureRegularSource(root, path);
+        const stats = await lstatIfExists(path);
+        if (!stats) return;
+        if (stats.isDirectory())
+        {
+            for (const name of (await fs.readdir(path)).sort(codePointCompare))
+            {
+                if (!isAtomicWriteTemporary(name)) await visit(`${relative}/${name}`);
+            }
+        }
+        else if (stats.isFile()) revisions[relative] = sourceRevision(await fs.readFile(path));
+        else throw new HalignError(`${relative}: expected a regular source file or directory`);
+    };
+    for (const scope of ["config.json", "rules", "layers", "agents"]) await visit(`.harness-align/${scope}`);
+    return revisions;
+}
+
+/** Refuse changes to an opened source before any rename or write takes place. */
+async function assertSourceGuard(root: string, guard: SourceGuard): Promise<void>
+{
+    const path = await resolveManaged(root, guard.path, guard.path);
+    const stats = await lstatIfExists(path);
+    if (stats && !stats.isFile()) throw new HalignError(`${guard.path}: expected a regular source file`);
+    const actual = stats ? sourceRevision(await fs.readFile(path)) : null;
+    if (actual !== guard.revision) throw new HalignError(`${guard.path}: content changed since it was opened; expected revision ${valueText(guard.revision)}, got ${valueText(actual)}; compare or reload before saving`);
+}
+
+/** Save validated bytes and an optional rename under one workspace operation. */
+async function writeEditedSource(root: string, path: string, content: Buffer, guard?: SourceGuard): Promise<void>
+{
+    if (!guard) return writeManaged(root, path, content);
+    await assertSourceGuard(root, guard);
+    if (guard.path === path) return writeManaged(root, path, content);
+    if (guard.revision === null) throw new HalignError(`${guard.path}: new source guard must match destination ${path}`);
+    const isOption = path.startsWith(".harness-align/layers/");
+    const before = isOption ? layerOptionParts(guard.path) : undefined;
+    const after = isOption ? layerOptionParts(path) : undefined;
+    if (before && after && before.layer !== after.layer) throw new HalignError(`${guard.path}: option rename must stay in layer ${before.layer}, got ${path}`);
+    if (before && after) await renameLayerOption(root, before.layer, before.option, after.option);
+    else await renameSource(root, guard.path, path);
+    try
+    {
+        await writeManaged(root, path, content);
+    }
+    catch (error)
+    {
+        try
+        {
+            if (before && after) await renameLayerOption(root, after.layer, after.option, before.option);
+            else await renameSource(root, path, guard.path);
+        }
+        catch (rollbackError)
+        {
+            throw new HalignError(`${path}: save failed: ${errorText(error)}; rename rollback failed: ${errorText(rollbackError)}`);
+        }
+        throw error;
+    }
 }
 
 /** Editor payload for creating or updating a rule source file. */
@@ -330,6 +413,7 @@ function assertAgentInput(agent: Agent, harnesses: HarnessConfig[]): void
 export async function loadWorkspace(rootPath: string): Promise<Workspace>
 {
     const root = resolve(rootPath);
+    const before = await readSourceRevisions(root);
     const config = await loadConfig(root);
     const [agents, rules, layerOptions, sharedRules, skills] = await Promise.all([
         loadAgents(root, config.harnesses),
@@ -338,7 +422,9 @@ export async function loadWorkspace(rootPath: string): Promise<Workspace>
         loadSharedRules(root),
         loadSkills(root),
     ]);
-    return { config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents, skills };
+    const sourceRevisions = await readSourceRevisions(root);
+    if (JSON.stringify(before) !== JSON.stringify(sourceRevisions)) throw new HalignError(`${root}/.harness-align: sources changed while loading; reload before editing`);
+    return { config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents, skills, sourceRevisions };
 }
 
 /** Materialize only snapshot-managed paths, preserving generated output and unrelated root files. */
@@ -537,17 +623,22 @@ async function writeConfig(root: string, config: Config): Promise<void>
 }
 
 /** Validate sources and atomically write `config.json`. */
-export async function saveConfig(rootPath: string, config: Config): Promise<Config>
+export async function saveConfig(rootPath: string, config: Config, guard?: SourceGuard): Promise<Config>
 {
     const root = resolve(rootPath);
     const validated = validateConfig(configDocument(config));
     await Promise.all([loadLayerOptions(root, validated), loadRules(root, validated.harnesses), loadAgents(root, validated.harnesses)]);
+    if (guard)
+    {
+        if (guard.path !== ".harness-align/config.json") throw new HalignError(`${guard.path}: expected .harness-align/config.json guard`);
+        await assertSourceGuard(root, guard);
+    }
     await writeConfig(root, validated);
     return validated;
 }
 
 /** Validate and atomically write a root rule. */
-export async function saveRule(rootPath: string, input: RuleInput): Promise<void>
+export async function saveRule(rootPath: string, input: RuleInput, guard?: SourceGuard): Promise<void>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
@@ -560,11 +651,11 @@ export async function saveRule(rootPath: string, input: RuleInput): Promise<void
         throw new HalignError(`${path}: priority must be a non-negative integer, got ${valueText(input.priority)}`);
     }
     const targets = validateTargets(input.targets, path, config.harnesses);
-    await writeManaged(root, path, serializeFrontmatter({ priority: input.priority, targets }, input.body, path));
+    await writeEditedSource(root, path, serializeFrontmatter({ priority: input.priority, targets }, input.body, path), guard);
 }
 
 /** Validate and atomically write a layer option Markdown file. */
-export async function saveLayerOption(rootPath: string, input: LayerOptionInput): Promise<void>
+export async function saveLayerOption(rootPath: string, input: LayerOptionInput, guard?: SourceGuard): Promise<void>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
@@ -578,16 +669,16 @@ export async function saveLayerOption(rootPath: string, input: LayerOptionInput)
         throw new HalignError(`${path}: layer does not exist, got ${valueText(layer)}`);
     }
     const targets = validateTargets(input.targets, path, config.harnesses);
-    await writeManaged(root, path, serializeLayerOption(targets, input.body));
+    await writeEditedSource(root, path, serializeLayerOption(targets, input.body), guard);
 }
 
 /** Validate and atomically write a shared-rule markdown file. */
-export async function saveSharedRule(rootPath: string, path: string, body: string): Promise<void>
+export async function saveSharedRule(rootPath: string, path: string, body: string, guard?: SourceGuard): Promise<void>
 {
     const root = resolve(rootPath);
     const relative = managedRelative(path, path);
     assertRulePath(relative, "shared");
-    await writeManaged(root, relative, Buffer.from(normalizedBody(body), "utf8"));
+    await writeEditedSource(root, relative, Buffer.from(normalizedBody(body), "utf8"), guard);
 }
 
 /** Save a local skill's main Markdown file and provenance hash after validating its origin and current contents. */
@@ -616,7 +707,7 @@ export async function saveSkillContent(rootPath: string, id: string, content: st
 }
 
 /** Validate and atomically write a subagent source file. */
-export async function saveAgent(rootPath: string, agent: Agent): Promise<void>
+export async function saveAgent(rootPath: string, agent: Agent, guard?: SourceGuard): Promise<void>
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
@@ -624,13 +715,13 @@ export async function saveAgent(rootPath: string, agent: Agent): Promise<void>
     const next: Agent = { ...agent, path, body: normalizedBody(agent.body) };
     assertAgentInput(next, config.harnesses);
     const agents = await loadAgents(root, config.harnesses);
-    const collision = agents.find((candidate) => candidate.name.toLowerCase() === next.name.toLowerCase() && pathKey(join(root, candidate.path)) !== pathKey(join(root, path)));
+    const collision = agents.find((candidate) => candidate.name.toLowerCase() === next.name.toLowerCase() && pathKey(join(root, candidate.path)) !== pathKey(join(root, path)) && candidate.path !== guard?.path);
     if (collision) throw new HalignError(`${path}: name must be unique without case sensitivity, got ${valueText(next.name)} already used by ${collision.path}`);
-    await writeManaged(root, path, serializeFrontmatter({
+    await writeEditedSource(root, path, serializeFrontmatter({
         name: next.name,
         description: next.description,
         harnesses: next.harnesses,
-    }, next.body, path));
+    }, next.body, path), guard);
 }
 
 /** Delete a `.harness-align` source file after containment and reparse checks. */

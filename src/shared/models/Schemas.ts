@@ -5,6 +5,9 @@
 
 import { z } from "zod";
 
+/** Require an exact opened-file revision or a missing-file baseline for creation. */
+export const SOURCE_GUARD_SCHEMA = z.strictObject({ path: z.string().min(1), revision: z.string().regex(/^[a-f0-9]{64}$/u).nullable() });
+
 /** Validate renderer log records without accepting arbitrary objects or executable content. */
 export const LOG_INPUT_SCHEMA = z.object({
     level: z.enum(["info", "success", "error"]),

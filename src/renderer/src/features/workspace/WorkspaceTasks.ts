@@ -83,36 +83,12 @@ function savedSelection(current: Selection, before: Selection, after: Selection)
     return selectionKey(current) === selectionKey(before) ? after : current;
 }
 
-/** Move an existing source, save it at the new path, and move it back when saving fails. */
-export async function saveRenamedSource(from: string, to: string, save: (path: string) => Promise<void>): Promise<void>
-{
-    if (from === to)
-    {
-        await save(to);
-        return;
-    }
-    await window.appApi.workspace.renameSource(from, to);
-    try
-    {
-        await save(to);
-    }
-    catch (error)
-    {
-        try
-        {
-            await window.appApi.workspace.renameSource(to, from);
-        }
-        catch (rollbackError)
-        {
-            throw new Error(`${errorMessage(error)}; rename rollback failed: ${errorMessage(rollbackError)}`);
-        }
-        throw error;
-    }
-}
-
 /** Persist one mounted or retained editor snapshot without refreshing the renderer workspace. */
 export async function persistEditorSnapshot(workspace: Workspace, selection: Selection, snapshot: FormSnapshot): Promise<EditorSaveResult>
 {
+    const revisions = useAppStore.getState().editorDrafts[selectionKey(selection)]?.sourceRevisions ?? workspace.sourceRevisions;
+    /** Keep the opened revision even if Save all refreshed other workspace data. */
+    const guardFor = (path: string) => ({ path, revision: revisions[path] ?? null });
     switch (selection.kind)
     {
         case "config":
@@ -122,7 +98,7 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
                 name: snapshotText(snapshot, "name", workspace.config.name).trim(),
                 layers: useAppStore.getState().layerSelection.map((item) => ({ name: item.name, selected: item.option })),
             };
-            await window.appApi.workspace.saveConfig(next);
+            await window.appApi.workspace.saveConfig(next, guardFor(".harness-align/config.json"));
             return { selection, message: "Saved config.json" };
         }
         case "harness":
@@ -195,15 +171,14 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             {
                 if (isShared)
                 {
-                    await window.appApi.workspace.saveSharedRule(savePath, body);
+                    await window.appApi.workspace.saveSharedRule(savePath, body, guardFor(original ?? savePath));
                     return;
                 }
                 const targets = snapshotTargets(snapshot);
                 const payload: RuleInput = { path: savePath, priority: existing?.priority ?? workspace.rootRules.length, targets, body };
-                await window.appApi.workspace.saveRule(payload);
+                await window.appApi.workspace.saveRule(payload, guardFor(original ?? savePath));
             };
-            if (original) await saveRenamedSource(original, path, save);
-            else await save(path);
+            await save(path);
             return {
                 selection: { kind: "rule", path },
                 message: selection.kind === "rule-new" ? `Created ${fileName(path)}` : `Saved ${fileName(path)}`,
@@ -222,42 +197,12 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             const targets = snapshotTargets(snapshot);
             const body = snapshotText(snapshot, "body");
             let path: string;
-            if (existing)
+            path = `.harness-align/layers/${layer}/${nextName}.md`;
+            await window.appApi.workspace.saveLayerOption({ path, targets, body }, guardFor(existing?.path ?? path));
+            if (existing && existing.name !== nextName)
             {
-                if (existing.name === nextName)
-                {
-                    path = existing.path;
-                    await window.appApi.workspace.saveLayerOption({ path, targets, body });
-                }
-                else
-                {
-                    path = await persistLayerOptionRename(existing.layer, existing.name, nextName);
-                    try
-                    {
-                        await window.appApi.workspace.saveLayerOption({ path, targets, body });
-                    }
-                    catch (error)
-                    {
-                        try
-                        {
-                            await persistLayerOptionRename(existing.layer, nextName, existing.name);
-                        }
-                        catch (rollbackError)
-                        {
-                            throw new Error(`${errorMessage(error)}; option rename rollback failed: ${errorMessage(rollbackError)}`);
-                        }
-                        throw error;
-                    }
-                }
-            }
-            else
-            {
-                if (workspace.layerOptions[layer]?.some((option) => option.name.toLowerCase() === nextName.toLowerCase()))
-                {
-                    throw new Error(`Layer ${layer}: option ${nextName} already exists`);
-                }
-                path = `.harness-align/layers/${layer}/${nextName}.md`;
-                await window.appApi.workspace.saveLayerOption({ path, targets, body });
+                const state = useAppStore.getState();
+                state.setLayerSelection(state.layerSelection.map((item) => item.name === layer && item.option === existing.name ? { ...item, option: nextName } : item));
             }
             return {
                 selection: { kind: "layer-option", path },
@@ -284,9 +229,8 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
                 harnesses,
                 body: snapshotText(snapshot, "body", existing?.body),
             };
-            const save = (savePath: string): Promise<void> => window.appApi.workspace.saveAgent({ ...agent, path: savePath });
-            if (existing) await saveRenamedSource(existing.path, path, save);
-            else await save(path);
+            const save = (savePath: string): Promise<void> => window.appApi.workspace.saveAgent({ ...agent, path: savePath }, guardFor(existing?.path ?? savePath));
+            await save(path);
             return {
                 selection: { kind: "agent", path },
                 message: selection.kind === "agent-new" ? `Created ${fileName(path)}` : `Saved ${fileName(path)}`,
@@ -325,18 +269,12 @@ export async function saveWorkspaceChanges(): Promise<void>
     setIsBusy(true);
     try
     {
-        currentWorkspace = await window.appApi.workspace.load();
-        if (!hasLocalLayerChanges)
+        if (configDraft || hasLocalLayerChanges)
         {
-            useAppStore.getState().setLayerSelection(currentWorkspace.config.layers.map((item) => ({ name: item.name, option: item.selected })));
+            await persistEditorSnapshot(initial.workspace, { kind: "config" }, configDraft?.current ?? { name: [initial.workspace.config.name] });
+            writeLog("success", "Configuration saved", "Saved .harness-align/config.json");
+            useAppStore.getState().clearEditorDraft(selectionKey({ kind: "config" }));
         }
-        await persistEditorSnapshot(
-            currentWorkspace,
-            { kind: "config" },
-            configDraft?.current ?? { name: [currentWorkspace.config.name] },
-        );
-        writeLog("success", "Configuration saved", "Saved .harness-align/config.json");
-        useAppStore.getState().clearEditorDraft(selectionKey({ kind: "config" }));
         currentWorkspace = await window.appApi.workspace.load();
 
         for (const entry of pending)
@@ -473,7 +411,12 @@ export async function persistLayerOptionRename(layer: string, from: string, to: 
 {
     const nextPath = `.harness-align/layers/${layer}/${to}.md`;
     if (from === to) return nextPath;
-    await window.appApi.workspace.renameLayerOption(layer, from, to);
+    const previousPath = `.harness-align/layers/${layer}/${from}.md`;
+    const opened = useAppStore.getState();
+    if (opened.editorDrafts[selectionKey({ kind: "layer-option", path: previousPath })]) throw new Error("Save this draft before renaming from the tree");
+    const option = opened.workspace?.layerOptions[layer]?.find((item) => item.path === previousPath);
+    if (!option || !opened.workspace) throw new Error(`${previousPath}: option no longer exists`);
+    await window.appApi.workspace.saveLayerOption({ ...option, path: nextPath }, { path: previousPath, revision: opened.workspace.sourceRevisions[previousPath] ?? null });
     const state = useAppStore.getState();
     state.setLayerSelection(state.layerSelection.map((selection) => selection.name === layer && selection.option === from
         ? { ...selection, option: to }

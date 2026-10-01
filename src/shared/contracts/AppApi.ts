@@ -19,6 +19,7 @@ import type {
     UserSkill,
     Workspace,
     WorkspaceItemTarget,
+    SourceGuard,
 } from "../models/Workspace.js";
 
 /** Privileged capabilities exposed to the renderer through `window.appApi`. */
@@ -56,11 +57,11 @@ export interface AppApi
     };
     workspace: {
         load(): Promise<Workspace>;
-        saveConfig(config: Config): Promise<Config>;
-        saveRule(input: RuleInput): Promise<void>;
-        saveLayerOption(input: LayerOptionInput): Promise<void>;
-        saveSharedRule(path: string, body: string): Promise<void>;
-        saveAgent(agent: Agent): Promise<void>;
+        saveConfig(config: Config, guard: SourceGuard): Promise<Config>;
+        saveRule(input: RuleInput, guard: SourceGuard): Promise<void>;
+        saveLayerOption(input: LayerOptionInput, guard: SourceGuard): Promise<void>;
+        saveSharedRule(path: string, body: string, guard: SourceGuard): Promise<void>;
+        saveAgent(agent: Agent, guard: SourceGuard): Promise<void>;
         deleteSource(path: string): Promise<void>;
         renameSource(from: string, to: string): Promise<void>;
         addLayer(name: string): Promise<Config>;

@@ -89,19 +89,19 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     }),
 
     /** Validate and write `config.json`. */
-    saveConfig: (config) => withWorkspace((root) => saveConfig(root, config)),
+    saveConfig: (config, guard) => withWorkspace((root) => saveConfig(root, config, guard)),
 
     /** Validate and write a root rule. */
-    saveRule: (input) => withWorkspace((root) => saveRule(root, input)),
+    saveRule: (input, guard) => withWorkspace((root) => saveRule(root, input, guard)),
 
     /** Validate and write a layer option. */
-    saveLayerOption: (input) => withWorkspace((root) => saveLayerOption(root, input)),
+    saveLayerOption: (input, guard) => withWorkspace((root) => saveLayerOption(root, input, guard)),
 
     /** Validate and write a shared-rule markdown file. */
-    saveSharedRule: (path, body) => withWorkspace((root) => saveSharedRule(root, path, body)),
+    saveSharedRule: (path, body, guard) => withWorkspace((root) => saveSharedRule(root, path, body, guard)),
 
     /** Validate and write a subagent source file. */
-    saveAgent: (agent) => withWorkspace((root) => saveAgent(root, agent)),
+    saveAgent: (agent, guard) => withWorkspace((root) => saveAgent(root, agent, guard)),
 
     /** Delete a `.harness-align` source file after containment checks. */
     deleteSource: (path) => withWorkspace((root) => deleteSource(root, path)),

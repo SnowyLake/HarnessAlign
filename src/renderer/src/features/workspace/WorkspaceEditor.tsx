@@ -106,6 +106,7 @@ function useEditorForm(workspace: Workspace, selection: Selection, onDelete?: ()
     const setEditorDraft = useAppStore((state) => state.setEditorDraft);
     const formRef = useRef<HTMLFormElement>(null);
     const baselineRef = useRef<FormSnapshot | undefined>(draft?.baseline);
+    const sourceRevisionsRef = useRef(draft?.sourceRevisions ?? workspace.sourceRevisions);
     const [formError, setFormError] = useState<string>();
 
     useLayoutEffect(() =>
@@ -119,7 +120,7 @@ function useEditorForm(workspace: Workspace, selection: Selection, onDelete?: ()
     {
         const current = formSnapshot(event.currentTarget);
         const baseline = baselineRef.current ?? current;
-        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current });
+        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current, sourceRevisions: sourceRevisionsRef.current });
     };
 
     /** Store a controlled Ant Design field that does not emit a native form change. */
@@ -129,7 +130,7 @@ function useEditorForm(workspace: Workspace, selection: Selection, onDelete?: ()
         const current = formSnapshot(formRef.current);
         current[name] = [value];
         const baseline = baselineRef.current ?? current;
-        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current });
+        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current, sourceRevisions: sourceRevisionsRef.current });
     };
 
     /** Run an editor mutation while sharing the busy guard and inline failure summary. */

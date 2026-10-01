@@ -10,7 +10,7 @@ import { HalignError } from "../../engine/Model.js";
 import { resolveExistingHarnessRoot } from "../../engine/Setup.js";
 import {
     AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA,
-    RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA,
+    RULE_INPUT_SCHEMA, SOURCE_GUARD_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA,
 } from "../../shared/models/Schemas.js";
 import { resolveWorkspaceItemFolder, withWorkspace, workspaceService } from "../services/WorkspaceService.js";
 import { runIpc } from "../utils/Ipc.js";
@@ -23,29 +23,29 @@ export function registerWorkspaceHandlers(): void
         return workspaceService.load();
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveConfig, (event, config: unknown) => runIpc(event, async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveConfig, (event, config: unknown, guard: unknown) => runIpc(event, async () =>
     {
-        return workspaceService.saveConfig(CONFIG_SCHEMA.parse(config));
+        return workspaceService.saveConfig(CONFIG_SCHEMA.parse(config), SOURCE_GUARD_SCHEMA.parse(guard));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveRule, (event, input: unknown) => runIpc(event, async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveRule, (event, input: unknown, guard: unknown) => runIpc(event, async () =>
     {
-        await workspaceService.saveRule(RULE_INPUT_SCHEMA.parse(input));
+        await workspaceService.saveRule(RULE_INPUT_SCHEMA.parse(input), SOURCE_GUARD_SCHEMA.parse(guard));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveLayerOption, (event, input: unknown) => runIpc(event, async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveLayerOption, (event, input: unknown, guard: unknown) => runIpc(event, async () =>
     {
-        await workspaceService.saveLayerOption(LAYER_OPTION_INPUT_SCHEMA.parse(input));
+        await workspaceService.saveLayerOption(LAYER_OPTION_INPUT_SCHEMA.parse(input), SOURCE_GUARD_SCHEMA.parse(guard));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveSharedRule, (event, path: unknown, body: unknown) => runIpc(event, async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveSharedRule, (event, path: unknown, body: unknown, guard: unknown) => runIpc(event, async () =>
     {
-        await workspaceService.saveSharedRule(z.string().parse(path), z.string().parse(body));
+        await workspaceService.saveSharedRule(z.string().parse(path), z.string().parse(body), SOURCE_GUARD_SCHEMA.parse(guard));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveAgent, (event, agent: unknown) => runIpc(event, async () =>
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveAgent, (event, agent: unknown, guard: unknown) => runIpc(event, async () =>
     {
-        await workspaceService.saveAgent(AGENT_SCHEMA.parse(agent));
+        await workspaceService.saveAgent(AGENT_SCHEMA.parse(agent), SOURCE_GUARD_SCHEMA.parse(guard));
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceDeleteSource, (event, path: unknown) => runIpc(event, async () =>
