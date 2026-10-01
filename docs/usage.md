@@ -96,7 +96,7 @@ Generate 只更新 `%USERPROFILE%\.harness-align\generated`. 每个已声明 Har
 
 Generated 的 Open in explorer 打开生成文件在 `generated/` 中所在的文件夹. 操作基于已有磁盘文件, 不会保存编辑预览或打开部署后的助手副本.
 
-Setup 会重新生成, 然后按下表更新本机目录. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
+点击 Setup 会先打开 Review deployment, 按路径列出 added, modified, deleted, unchanged 和 skipped. 预览不生成或部署文件. 确认后重新生成, 再按下表更新本机目录. 源内容, 目标内容或被跳过目录的状态在预览后变化时, 执行会拒绝过期预览, 请重新点击 Setup 审阅. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
 
 | 目标 | 更新方式 |
 | --- | --- |

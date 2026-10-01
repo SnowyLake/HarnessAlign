@@ -141,6 +141,20 @@ export type WorkspaceItemTarget =
     | { kind: "generated"; path: string }
     | { kind: "skill"; id: string };
 
+/** One reviewed deployment change under a user harness, shared-rule, or skill directory. */
+export interface SetupChange
+{
+    path: string;
+    status: "added" | "modified" | "deleted" | "unchanged" | "skipped";
+}
+
+/** Server-owned deployment preview; execution accepts only its identity. */
+export interface SetupPreview
+{
+    id: string;
+    changes: SetupChange[];
+}
+
 /** Opened source identity checked by Main before saving or renaming. */
 export interface SourceGuard
 {

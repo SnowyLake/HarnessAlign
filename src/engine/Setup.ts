@@ -4,10 +4,10 @@
  */
 
 import { promises as fs } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { lstatIfExists, resolveUserHome } from "./FsSafe.js";
-import { generate } from "./Generate.js";
+import { buildOutputs, generate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
 import { type Harness, type LayerSelection, type OutputMap, codePointCompare, errorText, HalignError, valueText } from "./Model.js";
 import { copySkillTree, loadSkills } from "./Skills.js";
@@ -93,7 +93,7 @@ async function removeDeploymentPath(userProfile: string, path: string): Promise<
 }
 
 /** Stage all replacements before swapping targets, restoring backups if a swap fails. */
-async function deployReplacements(userProfile: string, replacements: Array<{ target: string; populate: (path: string) => Promise<void> }>): Promise<void>
+async function deployReplacements(userProfile: string, replacements: Array<{ target: string; populate: (path: string) => Promise<void> }>, desired: Record<string, string>[], recheck: () => Promise<void>): Promise<void>
 {
     const staged: Array<{ target: string; temporary: string; backup: string; hasBackup: boolean; installed: boolean }> = [];
     try
@@ -108,7 +108,10 @@ async function deployReplacements(userProfile: string, replacements: Array<{ tar
             staged.push(entry);
             await replacement.populate(entry.temporary);
             await assertNoReparseTree(entry.temporary, "staged deployment");
+            const content = await snapshotTree(userProfile, entry.temporary);
+            if (JSON.stringify(Object.entries(content).sort()) !== JSON.stringify(Object.entries(desired[staged.length - 1]!).sort())) throw new HalignError(`${target}: staged content differs from the reviewed source; preview again before deploying`);
         }
+        await recheck();
         for (const entry of staged)
         {
             await assertNoReparseComponents(userProfile, entry.target, "deployment target");
@@ -191,6 +194,66 @@ export interface SetupResult
     skills: SetupSkillsReport;
 }
 
+/** One file or directory whose deployment outcome can be reviewed before writing. */
+export interface SetupChange
+{
+    path: string;
+    status: "added" | "modified" | "deleted" | "unchanged" | "skipped";
+}
+
+/** Read-only deployment preview bound to source bytes, selection, and target contents. */
+export interface SetupPreview
+{
+    revision: string;
+    changes: SetupChange[];
+}
+
+/** Capture exact file contents and empty directories without following links. */
+async function snapshotTree(root: string, path: string, skipHidden = false): Promise<Record<string, string>>
+{
+    await assertNoReparseComponents(root, path, "deployment snapshot");
+    const tree: Record<string, string> = {};
+    /** Recursively capture a regular path relative to the deployment scope. */
+    const visit = async (current: string, name: string): Promise<void> =>
+    {
+        const stats = await lstatIfExists(current);
+        if (!stats) return;
+        if (stats.isSymbolicLink()) throw deploymentReparseError("deployment snapshot", current);
+        if (stats.isDirectory())
+        {
+            tree[name] = "directory";
+            for (const child of (await fs.readdir(current)).sort(codePointCompare))
+            {
+                if (!skipHidden || !child.startsWith(".")) await visit(join(current, child), name === "." ? child : `${name}/${child}`);
+            }
+        }
+        else if (stats.isFile()) tree[name] = createHash("sha256").update(await fs.readFile(current)).digest("hex");
+        else throw new HalignError(`${current}: expected a regular file or directory`);
+    };
+    await visit(path, ".");
+    return tree;
+}
+
+/** Compare scopes deterministically, keeping deletions and skipped directories visible. */
+function scopeChanges(path: string, before: Record<string, string>, after: Record<string, string>): SetupChange[]
+{
+    return [...new Set([...Object.keys(before), ...Object.keys(after)])].sort(codePointCompare).map((name) => ({
+        path: name === "." ? path : `${path}/${name}`,
+        status: !Object.hasOwn(before, name) ? "added" : !Object.hasOwn(after, name) ? "deleted" : before[name] === after[name] ? "unchanged" : "modified",
+    }));
+}
+
+/** Build a desired directory snapshot from generated relative file paths. */
+function outputTree(files: Array<[string, Buffer]>): Record<string, string>
+{
+    const tree: Record<string, string> = { ".": "directory" };
+    for (const [path, content] of files)
+    {
+        tree[path] = createHash("sha256").update(content).digest("hex");
+    }
+    return tree;
+}
+
 /** List files under a directory as `/`-separated relative paths. */
 async function listRelativeFiles(directory: string): Promise<string[]>
 {
@@ -265,12 +328,12 @@ export function reportSetup(result: SetupResult): string
     return `${lines.join("\n")}\n`;
 }
 
-/** Generate then deploy into existing USERPROFILE harness roots, shared-rules, and skills. */
-export async function setup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE): Promise<SetupResult>
+/** Validate sources and deployment targets without changing generated files or user directories. */
+async function prepareSetup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE)
 {
     const root = resolve(rootPath);
     const config = await loadConfig(root);
-    const outputs = await generate(root, selection);
+    const outputs = await buildOutputs(root, selection);
     const generatedRoot = join(root, ".harness-align", "generated");
     const deploymentRoot = resolveUserHome(userProfile);
     await assertRegularDirectory(deploymentRoot, "USERPROFILE");
@@ -342,7 +405,7 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
     const skillsSkipped = skillInstallations.length === 0;
 
     const sharedFiles = await listRelativeFiles(sourceSharedRules);
-    await deployReplacements(deploymentRoot, [
+    const replacements = [
         ...installations.flatMap((installation) => [
             { target: installation.targetAgents, populate: async (path: string): Promise<void> =>
             {
@@ -353,9 +416,21 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
         ]),
         { target: targetSharedRules, populate: (path: string) => fs.cp(sourceSharedRules, path, { recursive: true, force: false, errorOnExist: true }) },
         ...skillInstallations.map((skill) => ({ target: skill.target, populate: (path: string) => copySkillTree(skill.source, path) })),
-    ]);
+    ];
 
-    return {
+    const desired = [
+        ...installations.flatMap((installation) => [outputTree(installation.agents), { ".": createHash("sha256").update(installation.rules).digest("hex") }]),
+        await snapshotTree(root, sourceSharedRules),
+        ...await Promise.all(skillInstallations.map((skill) => snapshotTree(root, skill.source, true))),
+    ];
+    const actual = await Promise.all(replacements.map((replacement) => snapshotTree(deploymentRoot, replacement.target)));
+    const sources = await Promise.all(["config.json", "rules", "layers", "agents", "skills"].map((scope) => snapshotTree(root, join(root, ".harness-align", scope))));
+    const changes = replacements.flatMap((replacement, index) => scopeChanges(`~/${relative(deploymentRoot, replacement.target).split(sep).join("/")}`, actual[index]!, desired[index]!));
+    for (const target of reports.filter((item) => item.skipped)) changes.push({ path: `~/${relative(deploymentRoot, target.root).split(sep).join("/")}`, status: "skipped" });
+    if (skillsSkipped) changes.push({ path: "~/.agents/skills", status: "skipped" });
+    const revision = createHash("sha256").update(JSON.stringify({ sources, actual, desired, selection, reports })).digest("hex");
+
+    const result: SetupResult = {
         outputs,
         generatedRoot,
         targets: reports,
@@ -366,4 +441,26 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
             ids: skillInstallations.map((skill) => skill.id),
         },
     };
+    return { result, replacements, revision, changes, desired };
+}
+
+/** Preview exact replacement scope and skipped targets using the same production setup plan. */
+export async function previewSetup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE): Promise<SetupPreview>
+{
+    const { revision, changes } = await prepareSetup(rootPath, selection, userProfile);
+    return { revision, changes };
+}
+
+/** Generate and deploy only after validating the reviewed source and target revision. */
+export async function setup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE, expectedRevision?: string): Promise<SetupResult>
+{
+    const plan = await prepareSetup(rootPath, selection, userProfile);
+    if (expectedRevision !== undefined && plan.revision !== expectedRevision) throw new HalignError("Setup preview expired: sources or deployment targets changed; preview again before deploying");
+    await generate(rootPath, selection);
+    await deployReplacements(resolveUserHome(userProfile), plan.replacements, plan.desired, async () =>
+    {
+        const current = await prepareSetup(rootPath, selection, userProfile);
+        if (current.revision !== plan.revision) throw new HalignError("Setup preview expired: sources or deployment targets changed while staging; preview again before deploying");
+    });
+    return plan.result;
 }

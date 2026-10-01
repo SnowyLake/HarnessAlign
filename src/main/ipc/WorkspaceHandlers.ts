@@ -195,8 +195,6 @@ export function registerWorkspaceHandlers(): void
         return workspaceService.generate(LAYER_SELECTION_SCHEMA.parse(selection));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSetup, (event, selection?: unknown) => runIpc(event, async () =>
-    {
-        return workspaceService.setup(LAYER_SELECTION_SCHEMA.parse(selection));
-    }));
+    ipcMain.handle(IPC_CHANNELS.workspaceSetupPreview, (event, selection?: unknown) => runIpc(event, () => workspaceService.previewSetup(LAYER_SELECTION_SCHEMA.parse(selection))));
+    ipcMain.handle(IPC_CHANNELS.workspaceSetup, (event, previewId: unknown) => runIpc(event, () => workspaceService.setup(z.uuid().parse(previewId))));
 }

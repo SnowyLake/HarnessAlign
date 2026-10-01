@@ -16,11 +16,13 @@ import {
     SyncOutlined,
     ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Badge, Button, Flex, Layout, Menu, Modal, Space, Spin, Tooltip, Typography, type MenuProps } from "antd";
+import { Badge, Button, Flex, Layout, Menu, Modal, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useState, type ReactNode } from "react";
 import appIcon from "../../../../../build/icon.png";
 import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
 import { SyncPanel } from "@/features/settings/SyncPanel";
+import { showError } from "@/components/common/Feedback";
+import type { SetupPreview } from "@shared/models/Workspace";
 
 const { Header, Sider, Content } = Layout;
 
@@ -48,7 +50,7 @@ export interface AppShellProps
     onSave: () => void;
     onReload: () => void;
     onGenerate: () => void;
-    onSetup: () => void;
+    onSetup: (previewId: string) => void;
 }
 
 /** Render the Ant Design application shell and top-level commands. */
@@ -62,6 +64,7 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
     const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const dirtyCount = useAppStore(workspaceChangeCount);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
+    const [setupPreview, setSetupPreview] = useState<SetupPreview>();
     const [isReloadOpen, setIsReloadOpen] = useState(false);
     const navigationView = view === "shared-rules" ? "rules" : view;
     const currentNav = navigationView === "settings" || navigationView === "console" ? undefined : WORKSPACE_NAV_ITEMS[navigationView];
@@ -92,6 +95,20 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
         if (!state.workspace || state.isBusy) return;
         if (workspaceChangeCount(state) > 0) setIsReloadOpen(true);
         else onReload();
+    };
+
+    /** Ask Main for an exact deployment preview before offering the execution button. */
+    const handleSetupPreview = (): void =>
+    {
+        const state = useAppStore.getState();
+        if (!state.workspace || state.isBusy || Object.keys(state.editorDrafts).length > 0) return;
+        state.setIsBusy(true);
+        setSetupPreview(undefined);
+        void window.appApi.workspace.previewSetup(state.layerSelection).then((preview) =>
+        {
+            setSetupPreview(preview);
+            setIsSetupOpen(true);
+        }).catch((error: unknown) => showError(error, "Setup preview failed")).finally(() => useAppStore.getState().setIsBusy(false));
     };
 
     return (
@@ -126,7 +143,7 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
                         </Tooltip>
                         <Tooltip title={hasSourceDrafts ? "Save source changes before deploying" : "Deploy to existing harnesses"}>
                             <Button type="primary" icon={<RocketOutlined />} disabled={!workspace || isBusy || hasSourceDrafts}
-                                    aria-label="Setup" onClick={() => setIsSetupOpen(true)}>Setup</Button>
+                                    aria-label="Setup" onClick={handleSetupPreview}>Setup</Button>
                         </Tooltip>
                     </Space.Compact>
                 </Flex>
@@ -173,19 +190,24 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
             </Modal>
             <Modal
                 open={isSetupOpen}
-                title="Deploy configuration?"
+                title="Review deployment"
+                width={800}
                 okText="Setup"
+                okButtonProps={{ disabled: !setupPreview || hasSourceDrafts }}
                 confirmLoading={isBusy}
                 onCancel={() => setIsSetupOpen(false)}
                 onOk={() =>
                 {
+                    if (!setupPreview || useAppStore.getState().isBusy || Object.keys(useAppStore.getState().editorDrafts).length > 0) return;
                     setIsSetupOpen(false);
-                    onSetup();
+                    onSetup(setupPreview.id);
                 }}
             >
                 <Typography.Paragraph>
-                    Setup regenerates output and replaces rules, agents, shared rules, and same-name skills in existing assistant directories. Missing directories are skipped.
+                    Review added, modified, deleted, unchanged, and skipped paths. Setup checks sources and targets again before replacing them; a changed preview must be refreshed.
                 </Typography.Paragraph>
+                <Table rowKey="path" size="small" dataSource={setupPreview?.changes ?? []} pagination={{ pageSize: 10 }}
+                       columns={[{ title: "Change", dataIndex: "status", width: 120 }, { title: "Path", dataIndex: "path" }]} />
             </Modal>
         </Layout>
     );

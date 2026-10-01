@@ -20,6 +20,7 @@ import type {
     Workspace,
     WorkspaceItemTarget,
     SourceGuard,
+    SetupPreview,
 } from "../models/Workspace.js";
 
 /** Privileged capabilities exposed to the renderer through `window.appApi`. */
@@ -90,6 +91,7 @@ export interface AppApi
         importUserSkills(ids: string[], overwrite: boolean): Promise<string>;
         removeSkill(id: string): Promise<void>;
         generate(selection?: LayerSelection[]): Promise<string>;
-        setup(selection?: LayerSelection[]): Promise<string>;
+        previewSetup(selection?: LayerSelection[]): Promise<SetupPreview>;
+        setup(previewId: string): Promise<string>;
     };
 }

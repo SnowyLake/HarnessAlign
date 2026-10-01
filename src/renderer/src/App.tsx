@@ -142,13 +142,13 @@ export function App()
     };
 
     /** Deploy generated output to existing harness directories. */
-    const handleSetup = (): void =>
+    const handleSetup = (previewId: string): void =>
     {
         const current = useAppStore.getState().workspace;
         if (!current || Object.keys(useAppStore.getState().editorDrafts).length > 0) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.setup(useAppStore.getState().layerSelection);
+            const report = await window.appApi.workspace.setup(previewId);
             showSuccess("Setup completed", report);
             await refreshWorkspace();
         }, "Setup");

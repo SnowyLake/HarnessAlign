@@ -3,6 +3,7 @@
  * The config root is always `%USERPROFILE%`; renderer input never chooses a directory.
  */
 
+import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import {
     addHarness,
@@ -30,16 +31,19 @@ import {
 import { assertContained, ensureRegularSource, lstatIfExists } from "../../engine/FsSafe.js";
 import { generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
 import { HalignError, valueText } from "../../engine/Model.js";
-import { reportSetup, setup } from "../../engine/Setup.js";
+import { previewSetup, reportSetup, setup } from "../../engine/Setup.js";
 import type { AppApi } from "../../shared/contracts/AppApi.js";
 import { assertSkillName, importUserSkills, listImportableUserSkills, loadSkills, readSkillContent, removeSkill } from "../../engine/Skills.js";
-import type { WorkspaceItemTarget } from "../../shared/models/Workspace.js";
+import type { LayerSelection, WorkspaceItemTarget } from "../../shared/models/Workspace.js";
 import * as skillRemote from "./SkillRemoteService.js";
 
 /** Tail of the single-user workspace queue, including reads that must see complete writes. */
 let workspaceQueue: Promise<unknown> = Promise.resolve();
 let hasUnsavedDrafts = true;
 let isUpdateExclusive = false;
+
+/** Only the latest Main-owned deployment preview may be applied. */
+let setupReview: { id: string; root: string; revision: string; selection: LayerSelection[] | undefined } | undefined;
 
 /** Track the trusted renderer's draft state without accepting workspace paths or update URLs. */
 export function setUpdateDraftState(hasUnsaved: boolean): void
@@ -211,6 +215,20 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     /** Generate outputs and return the report string. */
     generate: (selection) => withWorkspace(async (root) => reportGenerate(await generate(root, selection))),
 
-    /** Generate then deploy into existing user harness roots. */
-    setup: (selection) => withWorkspace(async (root) => reportSetup(await setup(root, selection))),
+    /** Review source and target contents without generating or deploying. */
+    previewSetup: (selection) => withWorkspace(async (root) =>
+    {
+        const preview = await previewSetup(root, selection);
+        setupReview = { id: randomUUID(), root, revision: preview.revision, selection };
+        return { id: setupReview.id, changes: preview.changes };
+    }),
+
+    /** Apply only the latest reviewed plan after checking its content revision. */
+    setup: (previewId) => withWorkspace(async (root) =>
+    {
+        const review = setupReview;
+        if (!review || review.id !== previewId || review.root !== root) throw new HalignError("Setup preview is missing or expired; preview again before deploying");
+        setupReview = undefined;
+        return reportSetup(await setup(root, review.selection, undefined, review.revision));
+    }),
 };

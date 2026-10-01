@@ -102,7 +102,8 @@ const appApi: AppApi = {
         importUserSkills: (ids, overwrite) => ipcRenderer.invoke(IPC_CHANNELS.workspaceImportUserSkills, ids, overwrite),
         removeSkill: (id) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRemoveSkill, id),
         generate: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceGenerate, selection),
-        setup: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetup, selection),
+        previewSetup: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetupPreview, selection),
+        setup: (previewId) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetup, previewId),
     },
 };
 

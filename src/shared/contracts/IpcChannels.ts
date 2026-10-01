@@ -59,5 +59,6 @@ export const IPC_CHANNELS = {
     workspaceImportUserSkills: "workspace:import-user-skills",
     workspaceRemoveSkill: "workspace:remove-skill",
     workspaceGenerate: "workspace:generate",
+    workspaceSetupPreview: "workspace:setup-preview",
     workspaceSetup: "workspace:setup",
 } as const;

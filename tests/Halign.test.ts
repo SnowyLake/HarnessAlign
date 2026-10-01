@@ -37,7 +37,7 @@ import {
 import { loadConfig, validateConfig } from "../src/engine/Load.js";
 import { HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
-import { reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
+import { previewSetup, reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
 import { assertSafeZipEntry, importUserSkills, listImportableUserSkills, listUserSkills, readSkillContent, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
@@ -59,6 +59,46 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("deployment previews classify changes without writes and refuse changed sources, targets, and skipped roots", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const userProfile = await mkdtemp(join(tmpdir(), "halign-preview-user-"));
+        try
+        {
+            await saveSharedRule(root, ".harness-align/rules/shared/preview.md", "Shared preview");
+            const agents = join(userProfile, ".codex", "agents");
+            await mkdir(agents, { recursive: true });
+            const outputs = await buildOutputs(root);
+            await writeFile(join(agents, "explorer.toml"), outputs.get("codex/agents/explorer.toml")!);
+            await writeFile(join(agents, "extra.md"), "Manual extra");
+            await writeFile(join(userProfile, ".codex", "AGENTS.md"), "Previous instructions");
+            await writeFile(join(userProfile, ".codex", "unrelated.json"), "Keep");
+            const preview = await previewSetup(root, undefined, userProfile);
+            assert.deepEqual(new Set(preview.changes.map((change) => change.status)), new Set(["added", "modified", "deleted", "unchanged", "skipped"]));
+            assert.ok(preview.changes.some((change) => change.path === "~/.codex/agents/extra.md" && change.status === "deleted"));
+            await assert.rejects(readFile(join(root, ".harness-align", "generated", ".manifest.json")), /ENOENT/u);
+            const rulePath = join(root, ".harness-align", "rules", "base.md");
+            const original = await readFile(rulePath);
+            await writeFile(rulePath, Buffer.concat([original, Buffer.from("\n")]));
+            await assert.rejects(setup(root, undefined, userProfile, preview.revision), /preview expired/u);
+            assert.equal(await readFile(join(userProfile, ".codex", "AGENTS.md"), "utf8"), "Previous instructions");
+            await writeFile(rulePath, original);
+            await writeFile(join(agents, "later.md"), "External later");
+            await assert.rejects(setup(root, undefined, userProfile, preview.revision), /preview expired/u);
+            await unlink(join(agents, "later.md"));
+            await mkdir(join(userProfile, ".cursor"));
+            await assert.rejects(setup(root, undefined, userProfile, preview.revision), /preview expired/u);
+            const fresh = await previewSetup(root, undefined, userProfile);
+            await setup(root, undefined, userProfile, fresh.revision);
+            assert.equal(await readFile(join(userProfile, ".codex", "unrelated.json"), "utf8"), "Keep");
+            await assert.rejects(readFile(join(agents, "extra.md")), /ENOENT/u);
+            assert.ok((await previewSetup(root, undefined, userProfile)).changes.every((change) => change.status === "unchanged" || change.status === "skipped"));
+        }
+        finally { await rm(userProfile, { recursive: true, force: true }); }
+    });
+});
 
 test("application downloads drain workspace work, exclude new writes, protect new drafts, and release after failure", async () =>
 {
