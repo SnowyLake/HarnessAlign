@@ -196,7 +196,7 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     checkSkillUpdates: () => withWorkspace((root) => skillRemote.checkSkillUpdates(root)),
 
     /** Apply remote updates for selected installed skills. */
-    applySkillUpdates: (ids) => withWorkspace((root) => skillRemote.applySkillUpdates(root, ids)),
+    applySkillUpdates: (previewIds) => withWorkspace((root) => skillRemote.applySkillUpdates(root, previewIds)),
 
     /** Read one installed skill's main Markdown file. */
     readSkillContent: (id) => withWorkspace((root) => readSkillContent(root, id)),

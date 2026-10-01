@@ -22,7 +22,7 @@ import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownP
 import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
-import { checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent } from "../src/main/services/SkillRemoteService.js";
+import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent } from "../src/main/services/SkillRemoteService.js";
 import { applySync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
@@ -59,6 +59,51 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("skill archives reuse immutable commits and updates install only the reviewed version", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const { zipSync } = await import("fflate");
+        const archives = new Map(["A", "B", "C"].map((version) =>
+        {
+            const bytes = zipSync({ "repo-main/demo/SKILL.md": Buffer.from(`# Version ${version}\n`) });
+            return [createHash("sha1").update(bytes).digest("hex"), bytes] as const;
+        }));
+        const commits = [...archives.keys()];
+        let branch = commits[0]!;
+        let downloads = 0;
+        t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) =>
+        {
+            const url = String(input);
+            if (url.includes("/commits/")) return Response.json({ sha: branch });
+            downloads += 1;
+            const commit = url.split("/").at(-1)!.replace(".zip", "");
+            return new Response(Buffer.from(archives.get(commit)!));
+        });
+        await addSkillSource(root, { url: "https://github.com/cache-review/repo" });
+        await discoverSkills(root);
+        await installSkills(root, ["demo"]);
+        await checkSkillUpdates(root);
+        assert.equal(downloads, 1);
+        branch = commits[1]!;
+        const review = (await checkSkillUpdates(root))[0]!;
+        assert.ok(review.previewId);
+        assert.notEqual(review.currentHash, review.remoteHash);
+        branch = commits[2]!;
+        await applySkillUpdates(root, [review.previewId]);
+        assert.equal(downloads, 2);
+        assert.match(await readSkillContent(root, "demo"), /Version B/u);
+        const origin = (await loadSkills(root))[0]!.origin;
+        assert.equal(origin.kind, "github");
+        if (origin.kind === "github") assert.equal(origin.commit, commits[1]);
+        await assert.rejects(applySkillUpdates(root, [review.previewId]), /preview expired/u);
+        const next = (await checkSkillUpdates(root))[0]!;
+        await discoverSkills(root);
+        await assert.rejects(applySkillUpdates(root, [next.previewId!]), /preview expired/u);
+        assert.equal(downloads, 3);
+    });
+});
 
 test("generated status follows source and actual output bytes, missing files and interrupted generations", async (t) =>
 {
@@ -1559,6 +1604,11 @@ test("sync uploads only local skill bytes and restores pinned remote skills with
         await addSkillSource(first, { url: "https://github.com/example/repo" });
         await discoverSkills(first);
         await installSkills(first, ["demo"]);
+        // A later repository commit can retain identical skill content but need a cold download on another device.
+        const provenance = await loadSkillIndex(first);
+        const installedEntry = provenance.demo!;
+        if (installedEntry.origin === "github") installedEntry.commit = "b".repeat(40);
+        await writeFile(join(first, ".harness-align", "skills", "index.json"), JSON.stringify({ skills: provenance }));
         const source = join(first, "incoming");
         await mkdir(source);
         await writeFile(join(source, "SKILL.md"), "# Local\n");
@@ -1593,7 +1643,7 @@ test("sync uploads only local skill bytes and restores pinned remote skills with
         assert.equal(remote.controls.patchCount, patches);
         assert.equal((await getSyncStatus(secondState)).hasPendingUpload, false);
         assert.deepEqual(await readSyncSnapshot(second), full);
-        assert.ok(archives.every((url) => url.endsWith(`${"a".repeat(40)}.zip`)));
+        assert.ok(archives.every((url) => url.endsWith(`${"a".repeat(40)}.zip`) || url.endsWith(`${"b".repeat(40)}.zip`)));
         const stable = await previewSync(second, secondState, input.token);
         assert.equal(stable.uploadCount + stable.downloadCount, 0);
         const hidden = join(second, ".harness-align/skills/demo/.custom.json");
@@ -1604,7 +1654,7 @@ test("sync uploads only local skill bytes and restores pinned remote skills with
         assert.equal(cached.uploadCount + cached.downloadCount, 0);
         const downloads = archives.length;
         await applySync(second, secondState, input.token, { previewId: cached.id, mode: "merge", choices: {} });
-        assert.equal(archives.length, downloads + 1);
+        assert.equal(archives.length, downloads);
         assert.equal(remote.controls.patchCount, patches);
         assert.deepEqual(await readSyncSnapshot(second), full);
     }));
@@ -3298,7 +3348,7 @@ test("repository-root skills survive batch installation, workspace reload, reins
             + "L1NLSUxMLm1kUEsBAhQAFAAAAAgAjHAsXfTGoYcJAAAABwAAABcAAAAAAAAAAAAAAAAAOQAAAHJlcG8tbWFpbi9kZW1vL1NLSUxMLm1kUEsFBgAAAAACAAIAhQAAAHcAAAAAAA==",
             "base64",
         );
-        const mocked = t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) => String(url).includes("/commits/") ? Response.json({ sha: "a".repeat(40) }) : new Response(archive));
+        const mocked = t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) => String(url).includes("/commits/") ? Response.json({ sha: createHash("sha1").update(archive).digest("hex") }) : new Response(archive));
         try
         {
             const discovered = await discoverSkills(root);
@@ -3357,7 +3407,7 @@ test("discovered SKILL.md previews use the current cache and report invalid Mark
         const mocked = t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) =>
         {
             requests += 1;
-            return String(url).includes("/commits/") ? Response.json({ sha: "a".repeat(40) }) : new Response(archive);
+            return String(url).includes("/commits/") ? Response.json({ sha: createHash("sha1").update(archive).digest("hex") }) : new Response(archive);
         });
         try
         {
@@ -3396,7 +3446,7 @@ test("discovery preserves network errors and only falls back to another branch o
             if (mode === "network") throw new TypeError("fetch failed", { cause: Object.assign(new Error("connection timed out"), { code: "ETIMEDOUT" }) });
             if (mode === "unavailable") return new Response(null, { status: 503 });
             if (requests.length === 1) return new Response(null, { status: 404 });
-            return String(url).includes("/commits/") ? Response.json({ sha: "a".repeat(40) }) : new Response(TEST_SKILL_ARCHIVE);
+            return String(url).includes("/commits/") ? Response.json({ sha: "c".repeat(40) }) : new Response(TEST_SKILL_ARCHIVE);
         });
         try
         {
@@ -3409,7 +3459,7 @@ test("discovery preserves network errors and only falls back to another branch o
             mode = "fallback";
             requests.length = 0;
             assert.equal((await discoverSkills(root))[0]?.branch, "master");
-            assert.deepEqual(requests.map((url) => new URL(url).pathname), ["/repos/example/repo/commits/main", "/repos/example/repo/commits/master", `/example/repo/archive/${"a".repeat(40)}.zip`]);
+            assert.deepEqual(requests.map((url) => new URL(url).pathname), ["/repos/example/repo/commits/main", "/repos/example/repo/commits/master", `/example/repo/archive/${"c".repeat(40)}.zip`]);
         }
         finally
         {
@@ -3585,7 +3635,7 @@ test("discovery rejects backslash paths before installing archive contents", asy
         await addSkillSource(root, { url: "https://github.com/example/repo" });
         const archive = Buffer.from(TEST_SKILL_ARCHIVE.toString("latin1").replaceAll("repo-main/", "repo-main\\"), "latin1");
         assert.notDeepEqual(archive, TEST_SKILL_ARCHIVE);
-        t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) => String(url).includes("/commits/") ? Response.json({ sha: "a".repeat(40) }) : new Response(archive));
+        t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) => String(url).includes("/commits/") ? Response.json({ sha: createHash("sha1").update(archive).digest("hex") }) : new Response(archive));
         await assert.rejects(discoverSkills(root), /zip entry path is unsafe/u);
         assert.deepEqual(await loadSkills(root), []);
     });

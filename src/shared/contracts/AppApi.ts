@@ -84,7 +84,7 @@ export interface AppApi
         installDiscoveredSkill(previewId: string): Promise<string>;
         installSkills(ids: string[]): Promise<string>;
         checkSkillUpdates(): Promise<SkillUpdate[]>;
-        applySkillUpdates(ids: string[]): Promise<string>;
+        applySkillUpdates(previewIds: string[]): Promise<string>;
         readSkillContent(id: string): Promise<string>;
         saveSkillContent(id: string, content: string, expectedContent: string): Promise<void>;
         listUserSkills(): Promise<UserSkill[]>;

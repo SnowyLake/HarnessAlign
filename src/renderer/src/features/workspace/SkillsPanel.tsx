@@ -515,7 +515,9 @@ export function SkillsPanel()
         if (ids.length === 0) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.applySkillUpdates(ids);
+            const previewIds = ids.map((id) => updates.find((update) => update.id === id)?.previewId);
+            if (previewIds.some((id) => !id)) throw new Error("Skill update preview expired; check updates again.");
+            const report = await window.appApi.workspace.applySkillUpdates(previewIds.filter((id): id is string => Boolean(id)));
             showSuccess("Updates applied", report);
             setUpdates((current) => current.filter((item) => !ids.includes(item.id)));
             setDiscovered([]);

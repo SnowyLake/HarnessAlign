@@ -162,7 +162,7 @@ export function registerWorkspaceHandlers(): void
 
     ipcMain.handle(IPC_CHANNELS.workspaceApplySkillUpdates, (event, ids: unknown) => runIpc(event, async () =>
     {
-        return workspaceService.applySkillUpdates(SKILL_IDS_SCHEMA.parse(ids));
+        return workspaceService.applySkillUpdates(z.array(z.uuid()).min(1).max(1000).refine((items) => new Set(items).size === items.length).parse(ids));
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceReadSkillContent, (event, id: unknown) => runIpc(event, async () =>

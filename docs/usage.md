@@ -117,6 +117,8 @@ Harness 改名或删除会同时更新 Config, Rules, Layer Options 和 Agents. 
 
 Generated 页面显示相对已保存源内容和已保存 Layer 选择的实际状态: `current` 表示托管文件字节一致, `stale` 表示内容或 manifest 过期, `missing` 表示尚无输出, `partial` 表示缺失文件或无效 manifest. 状态列出需要更新的路径, 不把上次点击成功当作当前完整状态. Reload 重新检查磁盘, Generate 更新结果; 本地未保存的 Layer 选择可能与保存选择不同. 未由 manifest 管理的其他文件保留, 不计入过期输出.
 
+Skills 的 Discover 和 Check updates 每次重新解析分支 commit, 同一个来源仓库与 commit 的已验证下载及解压内容在本次会话中复用, 缓存有总量限制. Apply updates 只安装本次检查已审阅的固定 commit, 不在执行时改装分支的新版本. 再次 Discover 或检查, 来源配置变化, 或已安装 provenance 变化会使旧预览失效; 请重新检查后应用.
+
 ## 查看日志与排查问题
 
 顶部提示显示简短结果, Console 按时间保留操作记录, 完整报告和错误详情. 日志只保留在本次运行中, 切换页面或刷新窗口不会丢失, 关闭应用后清空. Console 支持自动滚动和手动清空, 操作进行中或工作区加载失败时也能查看. 加载失败后可点击 Retry 重试.

@@ -76,6 +76,7 @@ export interface SkillUpdate
     id: string;
     currentHash: string;
     remoteHash: string;
+    previewId?: string;
     error?: string;
 }
 
