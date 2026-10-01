@@ -83,3 +83,36 @@ export function moveLayerSelection(selection: readonly LayerSelection[], sourceN
     next.splice(targetIndex, 0, source!);
     return next;
 }
+
+/** One saved source's inclusion or exclusion for a configured Harness. */
+export interface HarnessEffect
+{
+    kind: "Rule" | "Layer option" | "Agent";
+    path: string;
+    active: boolean;
+    reason: string;
+}
+
+/** Explain the same explicit allowlists and ordered Layer choices used for generation. */
+export function harnessEffects(workspace: Workspace, harness: string, selection: readonly LayerSelection[]): HarnessEffect[]
+{
+    const effects: HarnessEffect[] = workspace.rootRules.map((rule) => ({ kind: "Rule", path: rule.path, active: rule.targets.includes(harness),
+        reason: rule.targets.length === 0 ? "No targets selected" : rule.targets.includes(harness) ? `Included at priority ${rule.priority}` : "Harness is outside targets" }));
+    for (const [layer, options] of Object.entries(workspace.layerOptions))
+    {
+        const index = selection.findIndex((item) => item.name === layer);
+        for (const option of options)
+        {
+            const selected = index >= 0 && selection[index]!.option === option.name;
+            const active = selected && option.targets.includes(harness);
+            effects.push({ kind: "Layer option", path: option.path, active,
+                reason: index < 0 ? "Layer is disabled" : !selected ? "Another option is selected" : option.targets.length === 0 ? "No targets selected" : !active ? "Harness is outside targets" : `Included at Layer position ${index + 1}${option.body.trim() ? "" : " (empty no-op)"}` });
+        }
+    }
+    for (const agent of workspace.agents)
+    {
+        const active = Object.hasOwn(agent.harnesses, harness);
+        effects.push({ kind: "Agent", path: agent.path, active, reason: active ? "Harness metadata block is present" : "No Harness metadata block" });
+    }
+    return effects;
+}

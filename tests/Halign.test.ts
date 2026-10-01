@@ -15,7 +15,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { assertUpdateDraftsSaved, resolveWorkspaceItemFolder, setUpdateDraftState, withWorkspace, withWorkspaceForUpdate, workspaceService } from "../src/main/services/WorkspaceService.js";
-import { defaultLayerOption, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
+import { defaultLayerOption, harnessEffects, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
 import type { ProjectSkill, RemoteSkill, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
@@ -59,6 +59,27 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("Harness explanations match strict targets, selected Layers, empty no-ops and own Agent blocks", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await saveRule(root, { path: ".harness-align/rules/inactive.md", priority: 4, targets: [], body: "Inactive unique content" });
+        await addLayer(root, "disabled");
+        await addLayerOption(root, "disabled", "empty");
+        await saveLayerOption(root, { path: ".harness-align/layers/soul/noop.md", targets: ["codex"], body: "" });
+        const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] } };
+        const choices = [{ name: "soul", option: "noop" }];
+        const effects = harnessEffects(workspace, "codex", choices);
+        assert.equal(effects.find((effect) => effect.path.endsWith("inactive.md"))?.reason, "No targets selected");
+        assert.equal(effects.find((effect) => effect.path.endsWith("disabled/empty.md"))?.reason, "Layer is disabled");
+        assert.equal(effects.find((effect) => effect.path.endsWith("soul/arona.md"))?.reason, "Another option is selected");
+        assert.equal(effects.find((effect) => effect.path.endsWith("soul/noop.md"))?.reason, "Included at Layer position 1 (empty no-op)");
+        assert.equal(harnessEffects(workspace, "cursor", choices).find((effect) => effect.path.endsWith("soul/noop.md"))?.active, false);
+        assert.equal(harnessEffects(workspace, "toString", choices).filter((effect) => effect.kind === "Agent").some((effect) => effect.active), false);
+        assert.equal((await buildOutputs(root, choices)).get("codex/AGENTS.md")!.toString().includes("Inactive unique content"), false);
+    });
+});
 
 test("skill archives reuse immutable commits and updates install only the reviewed version", async (t) =>
 {

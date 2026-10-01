@@ -4,12 +4,12 @@
 
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined, SaveOutlined, UndoOutlined } from "@ant-design/icons";
 import type { HarnessConfig, Workspace } from "@shared/models/Workspace";
-import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Typography } from "antd";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
 import { showError, showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
 import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { fileName, ruleDisplayName } from "@/lib/Utils";
+import { fileName, harnessEffects, ruleDisplayName, type HarnessEffect } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
 /** Form bindings that preserve drafts and respond to tree commands. */
@@ -712,6 +712,8 @@ export function HarnessesPanel()
     const isBusy = useAppStore((state) => state.isBusy);
     const drafts = useAppStore((state) => state.editorDrafts);
     const [isEditorOpen, setIsEditorOpen] = useState(false);
+    const [explainHarness, setExplainHarness] = useState<string>();
+    const layerSelection = useAppStore((state) => state.layerSelection);
 
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
     const selectedHarness = selection.kind === "harness" ? workspace.config.harnesses.find((harness) => harness.name === selection.name) : undefined;
@@ -756,6 +758,7 @@ export function HarnessesPanel()
                                 Edit
                             </Button>
                         </div>
+                        <Button type="link" disabled={isBusy} onClick={() => setExplainHarness(harness.name)} aria-label={`Explain effects for ${harness.name}`}>Explain effects</Button>
                     </Card>
                 ))}
             </div>
@@ -770,6 +773,21 @@ export function HarnessesPanel()
                 onClose={() => setIsEditorOpen(false)}
             >
                 <HarnessForm key={`${selectionKey(selection)}:${JSON.stringify(selectedHarness)}`} workspace={workspace} harness={selectedHarness} onDone={() => setIsEditorOpen(false)} />
+            </Drawer>
+            <Drawer title={`Effects for ${explainHarness ?? "Harness"}`} open={Boolean(explainHarness)} size={900} destroyOnHidden onClose={() => setExplainHarness(undefined)}>
+                <Typography.Paragraph type="secondary">Saved source content and current ordered Layer choices. Empty targets exclude every Harness. Shared rules and Skills deploy independently.</Typography.Paragraph>
+                <Table<HarnessEffect> size="small" rowKey="path" pagination={false} dataSource={explainHarness ? harnessEffects(workspace, explainHarness, layerSelection) : []}
+                    columns={[
+                        { title: "Type", dataIndex: "kind" },
+                        { title: "Source", dataIndex: "path", render: (path: string, effect) => <Button type="link" onClick={() =>
+                        {
+                            const store = useAppStore.getState();
+                            store.setView(effect.kind === "Rule" ? "rules" : effect.kind === "Agent" ? "agents" : "layers");
+                            store.setSelection(effect.kind === "Rule" ? { kind: "rule", path } : effect.kind === "Agent" ? { kind: "agent", path } : { kind: "layer-option", path });
+                        }}>{path}</Button> },
+                        { title: "Result", dataIndex: "active", render: (active: boolean) => <Tag color={active ? "green" : "default"}>{active ? "Included" : "Excluded"}</Tag> },
+                        { title: "Reason", dataIndex: "reason" },
+                    ]} />
             </Drawer>
         </div>
     );
