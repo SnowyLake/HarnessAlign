@@ -116,3 +116,11 @@ export function harnessEffects(workspace: Workspace, harness: string, selection:
     }
     return effects;
 }
+
+/** Match all query terms across source identity and body, plus an optional strict Harness filter. */
+export function matchesWorkspaceSource(source: { path: string; body: string; name?: string; description?: string; targets?: string[]; harnesses?: Record<string, unknown> }, query: string, harness = ""): boolean
+{
+    if (harness && !(source.targets?.includes(harness) || source.harnesses && Object.hasOwn(source.harnesses, harness))) return false;
+    const content = [source.name ?? "", source.description ?? "", source.path, source.body].join("\n").toLowerCase();
+    return query.trim().toLowerCase().split(/\s+/u).filter(Boolean).every((term) => content.includes(term));
+}

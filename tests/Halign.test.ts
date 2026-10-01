@@ -15,7 +15,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { assertUpdateDraftsSaved, resolveWorkspaceItemFolder, setUpdateDraftState, withWorkspace, withWorkspaceForUpdate, workspaceService } from "../src/main/services/WorkspaceService.js";
-import { defaultLayerOption, harnessEffects, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
+import { defaultLayerOption, harnessEffects, matchesWorkspaceSource, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
 import type { ProjectSkill, RemoteSkill, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
@@ -59,6 +59,18 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("source search combines name, path, body terms and strict Harness filters without treating empty targets as global", () =>
+{
+    const rule = { path: ".harness-align/rules/deep/review.md", body: "Inspect security boundaries", targets: ["codex"] };
+    assert.equal(matchesWorkspaceSource(rule, "REVIEW security", "codex"), true);
+    assert.equal(matchesWorkspaceSource(rule, "deep absent"), false);
+    assert.equal(matchesWorkspaceSource({ ...rule, targets: [] }, "security", "codex"), false);
+    const agent = { path: ".harness-align/agents/check.md", name: "Inspector", description: "Review helper", body: "Read all callers", harnesses: { codex: {} } };
+    assert.equal(matchesWorkspaceSource(agent, "inspector callers", "codex"), true);
+    assert.equal(matchesWorkspaceSource(agent, "", "cursor"), false);
+    assert.equal(matchesWorkspaceSource(agent, "", "toString"), false);
+});
 
 test("Harness explanations match strict targets, selected Layers, empty no-ops and own Agent blocks", async () =>
 {

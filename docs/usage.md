@@ -121,6 +121,8 @@ Skills 的 Discover 和 Check updates 每次重新解析分支 commit, 同一个
 
 Harness 卡片的 Explain effects 按当前 Harness 列出 Rules, Layer Options 和 Agents 的 Included / Excluded 原因. 说明使用已保存源内容和当前 Layer 顺序与选择, 显示空 targets 未生效, 未启用 Layer, 未选中的选项及缺少 Harness Agent metadata. 点击源路径跳转到编辑器. Shared rules 和 Skills 独立部署, 不进入该 Harness 的 `AGENTS.md`.
 
+Rules 与 Agents 列表支持按名称, 源路径和已保存正文搜索, 多个空格分隔词同时匹配, 不区分大小写. Harness 筛选使用严格 targets 或 Agent metadata block, 空 targets 不会匹配任何 Harness. Shared Rules 只按文字搜索, 因为它们独立部署. 点击匹配项打开现有编辑器, 搜索不会清除草稿; 筛选时暂停 Rules 拖动排序, 清除筛选后可继续排序.
+
 ## 查看日志与排查问题
 
 顶部提示显示简短结果, Console 按时间保留操作记录, 完整报告和错误详情. 日志只保留在本次运行中, 切换页面或刷新窗口不会丢失, 关闭应用后清空. Console 支持自动滚动和手动清空, 操作进行中或工作区加载失败时也能查看. 加载失败后可点击 Retry 重试.

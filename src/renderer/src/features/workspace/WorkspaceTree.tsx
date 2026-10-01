@@ -1,12 +1,12 @@
 /** Source navigation and Layer groups sharing the current generation selection. */
 
 import type { LayerOption, RuleInput, SharedRule, Workspace, WorkspaceItemTarget } from "@shared/models/Workspace";
-import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, FolderOpenOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, FolderOpenOutlined, PlusOutlined, SaveOutlined, SearchOutlined } from "@ant-design/icons";
 import { Badge, Button, Collapse, Dropdown, Empty, Flex, Input, Modal, Popover, Segmented, Select, Switch, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
 import { useEffect, useState } from "react";
 import { showError, showSuccess } from "@/components/common/Feedback";
 import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { catalogLayerNames, defaultLayerOption, moveLayerSelection, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { catalogLayerNames, defaultLayerOption, matchesWorkspaceSource, moveLayerSelection, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 
 /** New-item actions exposed below workspace trees. */
@@ -469,6 +469,8 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
     const [draggedLayer, setDraggedLayer] = useState<string>();
     const [draggedRulePath, setDraggedRulePath] = useState<string>();
     const [ruleDropTarget, setRuleDropTarget] = useState<RuleDropTarget>();
+    const [query, setQuery] = useState("");
+    const [harnessFilter, setHarnessFilter] = useState("");
     const selectedLayerName = selection.kind === "layer" ? selection.name
         : selection.kind === "layer-option-new" ? selection.layer
             : selection.kind === "layer-option" ? Object.values(workspace?.layerOptions ?? {}).flat().find((option) => option.path === selection.path)?.layer
@@ -675,9 +677,14 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                 </Tooltip> : null}
             </Flex>
             <div className="workspace-tree-content">
+                {isRuleView || view === "agents" ? <Flex vertical gap={8}>
+                    <Input aria-label="Search source name, path and body" placeholder="Search name, path, body..." prefix={<SearchOutlined />} allowClear value={query} onChange={(event) => setQuery(event.target.value)} />
+                    {view !== "shared-rules" ? <Select aria-label="Filter sources by Harness" value={harnessFilter} onChange={setHarnessFilter}
+                        options={[{ value: "", label: "All Harnesses" }, ...workspace.config.harnesses.map((harness) => ({ value: harness.name, label: harness.name }))]} /> : null}
+                </Flex> : null}
                 {view === "rules" ? (
                     <>
-                        {rootRuleTabs.map((rule) => (
+                        {rootRuleTabs.filter((rule) => matchesWorkspaceSource(rule, query, harnessFilter)).map((rule) => (
                             <TreeButton
                                 key={rule.path}
                                 label={ruleDisplayName(rule.path)}
@@ -686,7 +693,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                 selection={{ kind: "rule", path: rule.path }}
                                 canSave
                                 canDelete
-                                isDraggable
+                                isDraggable={!query.trim() && !harnessFilter}
                                 isDragging={draggedRulePath === rule.path}
                                 dropPosition={draggedRulePath !== rule.path && ruleDropTarget?.path === rule.path ? ruleDropTarget.position : undefined}
                                 onRename={(name) => renameRuleFromTree(workspace, rule, name)}
@@ -736,7 +743,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
                 {view === "shared-rules" ? (
                     <>
-                        {workspace.sharedRules.map((rule) => (
+                        {workspace.sharedRules.filter((rule) => matchesWorkspaceSource(rule, query)).map((rule) => (
                             <TreeButton
                                 key={rule.path}
                                 label={ruleDisplayName(rule.path)}
@@ -778,7 +785,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
                 {view === "agents" ? (
                     <>
-                        {workspace.agents.map((agent) => (
+                        {workspace.agents.filter((agent) => matchesWorkspaceSource(agent, query, harnessFilter)).map((agent) => (
                             <TreeButton
                                 key={agent.path}
                                 label={agent.name}
