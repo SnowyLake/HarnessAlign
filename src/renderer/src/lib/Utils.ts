@@ -1,6 +1,24 @@
 /** Workspace labels and source paths with Windows-safe collision checks. */
 
-import type { LayerConfig, LayerSelection, ProjectSkill, RemoteSkill, Workspace } from "../../../shared/models/Workspace.js";
+import type { LayerConfig, LayerSelection, ProjectSkill, RemoteSkill, SetupChange, Workspace } from "../../../shared/models/Workspace.js";
+
+/** Map deployment warnings to compact labels while leaving their full details intact. */
+export function setupExternalLabel(reason: string): string
+{
+    switch (reason)
+    {
+        case "Changed since last deployment": return "Modified";
+        case "Extra path will be deleted": return "Extra";
+        case "Existing content has no deployment baseline": return "Untracked";
+        default: return "Details";
+    }
+}
+
+/** Select deployment preview rows without altering the complete execution preview. */
+export function filterSetupChanges(changes: readonly SetupChange[], view: "changed" | "all"): SetupChange[]
+{
+    return changes.filter((change) => view === "all" || change.status === "added" || change.status === "modified" || change.status === "deleted");
+}
 
 /** Return discovered ids that have no source conflict or installed case-insensitive match. */
 export function selectableRemoteSkillIds(discovered: readonly RemoteSkill[], installed: readonly ProjectSkill[]): Set<string>

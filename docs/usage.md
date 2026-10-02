@@ -49,7 +49,7 @@
 
 1. 在对应页面编辑内容, 用 Save file 保存当前文件, 或用顶部 Save all 保存全部草稿.
 2. 点击 Generate, 在 Generated 页查看输出.
-3. 确认后点击 Setup, 更新本机助手目录.
+3. 点击 Setup 审阅部署预览. 默认 Changed 只显示新增, 修改和删除项, 切换 All 可查看未变化及跳过的路径. 列表固定表头并在限定高度内滚动, 不分页; 切换后回到列表顶部. 确认后执行 Setup, 更新本机助手目录. 外部修改仍需明确确认覆盖.
 
 文件列表顶部的 Add 用于新建内容. 编辑区的 Create 或 Save file, 文件行菜单和右键菜单中的 Save, 都只保存当前项. Discard changes 会恢复当前项的已保存内容.
 
@@ -105,7 +105,7 @@ Generate 只更新 `%USERPROFILE%\.harness-align\generated`. 每个已声明 Har
 
 Generated 的 Open in explorer 打开生成文件在 `generated/` 中所在的文件夹. 操作基于已有磁盘文件, 不会保存编辑预览或打开部署后的助手副本.
 
-点击 Setup 会先打开 Review deployment, 按路径列出 added, modified, deleted, unchanged 和 skipped. 预览不生成或部署文件. 确认后重新生成, 再按下表更新本机目录. 源内容, 目标内容或被跳过目录的状态在预览后变化时, 执行会拒绝过期预览, 请重新点击 Setup 审阅. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
+点击 Setup 会先打开 Review deployment, 按路径列出 added, modified, deleted, unchanged 和 skipped. External changes 列用 Modified, Extra 和 Untracked 分别表示部署后发生变动, 将被删除的额外路径和没有部署基线的已有内容, 点击类别查看完整原因. 预览不生成或部署文件. 确认后重新生成, 再按下表更新本机目录. 源内容, 目标内容或被跳过目录的状态在预览后变化时, 执行会拒绝过期预览, 请重新点击 Setup 审阅. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
 
 External changes 标记上次成功部署后被修改或删除的目标, 将被删除的额外路径, 以及没有文件部署基线的既有内容. 新增源文件与目标手写文件同名时, 即使其所在目录已经部署过, 也需要勾选 Overwrite modified targets and delete extra paths shown above 才能覆盖. 取消会保留目标内容. 上次成功部署的哈希保存在本机 `.harness-align/.deployment.json`, 不进入生成结果或 GitHub 同步; 正常移除未被手改的旧输出不需要额外勾选.
 
@@ -134,7 +134,7 @@ Skills 的 Discover 和 Check updates 每次重新解析分支 commit, 同一个
 
 Harness 卡片的 Explain effects 按当前 Harness 列出 Rules, Layer Options 和 Agents 的 Included / Excluded 原因. 说明使用已保存源内容和当前 Layer 顺序与选择, 显示空 targets 未生效, 未启用 Layer, 未选中的选项及缺少 Harness Agent metadata. 点击源路径跳转到编辑器. Shared rules 和 Skills 独立部署, 不进入该 Harness 的 `AGENTS.md`.
 
-Rules 与 Agents 列表支持按名称, 源路径和已保存正文搜索, 多个空格分隔词同时匹配, 不区分大小写. Harness 筛选使用严格 targets 或 Agent metadata block, 空 targets 不会匹配任何 Harness. Shared Rules 只按文字搜索, 因为它们独立部署. 点击匹配项打开现有编辑器, 搜索不会清除草稿; 筛选时暂停 Rules 拖动排序, 清除筛选后可继续排序.
+Rules, Agents 与 Skills 使用统一的紧凑搜索栏, 搜索在左, 筛选在右, 同行排列. Shared Rules 只显示搜索框. Rules 与 Agents 列表支持按名称, 源路径和已保存正文搜索, 多个空格分隔词同时匹配, 不区分大小写. Harness 筛选使用严格 targets 或 Agent metadata block, 空 targets 不会匹配任何 Harness. Shared Rules 只按文字搜索, 因为它们独立部署. 点击匹配项打开现有编辑器, 搜索不会清除草稿; 筛选时暂停 Rules 拖动排序, 清除筛选后可继续排序.
 
 首次使用没有 Harness 时, Harnesses 页面说明先初始化工具的用户配置目录再 Add harness. 每张卡片显示 Ready, Missing folder 或 Unsafe / unavailable; Reload 重新检查状态. 状态检查不创建目标目录, Setup 仍跳过缺失 Harness.
 

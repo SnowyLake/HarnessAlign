@@ -266,7 +266,7 @@ export function SyncPanel()
                                     ? "The remote configuration will be replaced by this device's configuration."
                                     : "This device's configuration will be replaced by the remote configuration. A local backup is kept."} /> : null}
                                 <Table<SyncChange> size="small" rowKey="key" dataSource={preview.changes.filter((change) => change.direction !== "same")}
-                                                   locale={{ emptyText: "Configuration is up to date" }} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 900 }} columns={[
+                                                   locale={{ emptyText: "Configuration is up to date" }} pagination={false} scroll={{ x: 900, y: "min(400px, 45vh)" }} columns={[
                                     { title: "Source", dataIndex: "key", render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
                                     { title: "Change", dataIndex: "direction", align: "center", width: 100 },
                                     { title: "Decision", align: "center", width: 190, render: (_, change) => change.direction === "conflict" ? (

@@ -380,16 +380,20 @@ select {
     padding: 0;
 }
 
-.skills-toolbar {
+.workspace-list-toolbar {
     margin-bottom: 8px;
 }
 
-.skills-filter-input {
-    width: 100%;
+.workspace-list-search {
+    min-width: 0;
+    flex: 1;
 }
 
-.skills-origin-select {
-    width: 100%;
+.workspace-list-filter {
+    width: 45%;
+    min-width: 0;
+    max-width: 160px;
+    flex-shrink: 0;
 }
 
 .app-list-row {

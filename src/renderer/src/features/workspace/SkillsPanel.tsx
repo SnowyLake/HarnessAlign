@@ -657,20 +657,19 @@ export function SkillsPanel()
                             </Dropdown>
                         </Flex>
                         <div className="workspace-tree-content">
-                            <Flex vertical gap={6} className="skills-toolbar">
+                            <Flex align="center" gap={8} className="workspace-list-toolbar">
                                 <Input
-                                    className="skills-filter-input"
+                                    className="workspace-list-search"
                                     size="small"
                                     aria-label="Search skills"
                                     allowClear
                                     prefix={<SearchOutlined />}
                                     value={filter}
                                     onChange={(event) => setFilter(event.target.value)}
-                                    placeholder="Search skills..."
                                     disabled={isBusy}
                                 />
                                 {listView === "installed" && buckets.length > 0
-                                    ? <Select size="small" aria-label="Filter by origin" value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
+                                    ? <Select size="small" aria-label="Filter by origin" value={originFilter} options={originItems} onChange={setOriginFilter} className="workspace-list-filter" />
                                     : null}
                             </Flex>
                             {listView === "installed" ? installedContent : discoverContent}

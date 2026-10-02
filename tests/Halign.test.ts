@@ -16,8 +16,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { assertUpdateDraftsSaved, resolveWorkspaceItemFolder, setUpdateDraftState, withWorkspace, withWorkspaceForUpdate, workspaceService } from "../src/main/services/WorkspaceService.js";
-import { defaultLayerOption, harnessEffects, matchesWorkspaceSource, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
-import type { ProjectSkill, RemoteSkill, Workspace, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
+import { defaultLayerOption, filterSetupChanges, harnessEffects, matchesWorkspaceSource, moveLayerSelection, selectableRemoteSkillIds, setupExternalLabel, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
+import type { ProjectSkill, RemoteSkill, SetupChange, Workspace, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount, type FormSnapshot, type Selection } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
 import { DiffText } from "../src/renderer/src/components/common/DiffText.js";
@@ -63,6 +63,31 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("deployment warning labels cover known reasons and preserve access to unknown details", () =>
+{
+    assert.equal(setupExternalLabel("Changed since last deployment"), "Modified");
+    assert.equal(setupExternalLabel("Extra path will be deleted"), "Extra");
+    assert.equal(setupExternalLabel("Existing content has no deployment baseline"), "Untracked");
+    assert.equal(setupExternalLabel("Another warning"), "Details");
+});
+
+test("deployment preview filters changed rows while preserving full preview and external warnings", () =>
+{
+    const changes: SetupChange[] = [
+        { path: "added", status: "added" },
+        { path: "modified", status: "modified", external: "Modified target" },
+        { path: "deleted", status: "deleted", external: "Extra path" },
+        { path: "unchanged", status: "unchanged" },
+        { path: "skipped", status: "skipped" },
+    ];
+    const original = structuredClone(changes);
+    assert.deepEqual(filterSetupChanges(changes, "changed"), original.slice(0, 3));
+    assert.deepEqual(filterSetupChanges(changes, "all"), original);
+    assert.deepEqual(filterSetupChanges(changes.slice(3), "changed"), []);
+    assert.deepEqual(filterSetupChanges([], "changed"), []);
+    assert.deepEqual(changes, original);
+});
 
 test("Harness root status reports missing, ready and unsafe paths without creation or following junctions", async () =>
 {

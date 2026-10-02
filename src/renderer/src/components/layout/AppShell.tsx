@@ -16,7 +16,7 @@ import {
     SyncOutlined,
     ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Button, Checkbox, Flex, Layout, Menu, Modal, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
+import { Button, Checkbox, Flex, Layout, Menu, Modal, Popover, Segmented, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useState, type ReactNode } from "react";
 import appIcon from "../../../../../build/icon.png";
 import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
@@ -24,6 +24,7 @@ import { WorkflowStatus } from "./WorkflowStatus";
 import { SyncPanel } from "@/features/settings/SyncPanel";
 import { showError } from "@/components/common/Feedback";
 import type { SetupPreview } from "@shared/models/Workspace";
+import { filterSetupChanges, setupExternalLabel } from "@/lib/Utils";
 
 const { Header, Sider, Content } = Layout;
 
@@ -66,6 +67,7 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
     const dirtyCount = useAppStore(workspaceChangeCount);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
     const [setupPreview, setSetupPreview] = useState<SetupPreview>();
+    const [setupView, setSetupView] = useState<"changed" | "all">("changed");
     const [overwriteExternal, setOverwriteExternal] = useState(false);
     const hasExternalChanges = setupPreview?.changes.some((change) => change.external && change.status !== "unchanged") ?? false;
     const [isReloadOpen, setIsReloadOpen] = useState(false);
@@ -107,6 +109,7 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
         if (!state.workspace || state.isBusy || Object.keys(state.editorDrafts).length > 0) return;
         state.setIsBusy(true);
         setSetupPreview(undefined);
+        setSetupView("changed");
         setOverwriteExternal(false);
         void window.appApi.workspace.previewSetup(state.layerSelection).then((preview) =>
         {
@@ -212,8 +215,24 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
                 <Typography.Paragraph>
                     Review added, modified, deleted, unchanged, and skipped paths. Setup checks sources and targets again before replacing them; a changed preview must be refreshed.
                 </Typography.Paragraph>
-                <Table rowKey="path" size="small" dataSource={setupPreview?.changes ?? []} pagination={{ pageSize: 10 }}
-                       columns={[{ title: "Change", dataIndex: "status", width: 120 }, { title: "Path", dataIndex: "path" }, { title: "External changes", dataIndex: "external" }]} />
+                <Flex className="workspace-list-toolbar" justify="flex-end">
+                    <Segmented<"changed" | "all"> size="small" aria-label="Deployment preview filter" value={setupView} onChange={setSetupView}
+                        options={[{ label: "Changed", value: "changed" }, { label: "All", value: "all" }]} />
+                </Flex>
+                <Table key={`${setupPreview?.id}-${setupView}`} rowKey="path" size="small" dataSource={filterSetupChanges(setupPreview?.changes ?? [], setupView)}
+                       pagination={false} scroll={{ y: "min(400px, 45vh)" }}
+                       locale={{ emptyText: setupView === "changed" ? "No changes" : "No deployment paths" }}
+                       columns={[
+                           { title: "Change", dataIndex: "status", width: 100 },
+                           { title: "Path", dataIndex: "path" },
+                           { title: "External changes", dataIndex: "external", width: 130, render: (reason: string | undefined) => reason ? (
+                               <Popover trigger="click" title={setupExternalLabel(reason)} content={reason}>
+                                   <Button type="link" size="small" styles={{ root: { paddingInline: 0 } }} aria-label={`External change details: ${reason}`}>
+                                       {setupExternalLabel(reason)}
+                                   </Button>
+                               </Popover>
+                           ) : null },
+                       ]} />
                 {hasExternalChanges ? <Checkbox checked={overwriteExternal} onChange={(event) => setOverwriteExternal(event.target.checked)}>Overwrite modified targets and delete extra paths shown above</Checkbox> : null}
             </Modal>
         </Layout>

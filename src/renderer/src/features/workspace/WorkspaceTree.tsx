@@ -677,9 +677,10 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                 </Tooltip> : null}
             </Flex>
             <div className="workspace-tree-content">
-                {isRuleView || view === "agents" ? <Flex vertical gap={8}>
-                    <Input aria-label="Search source name, path and body" placeholder="Search name, path, body..." prefix={<SearchOutlined />} allowClear value={query} onChange={(event) => setQuery(event.target.value)} />
-                    {view !== "shared-rules" ? <Select aria-label="Filter sources by Harness" value={harnessFilter} onChange={setHarnessFilter}
+                {isRuleView || view === "agents" ? <Flex align="center" gap={8} className="workspace-list-toolbar">
+                    <Input className="workspace-list-search" size="small" aria-label="Search source name, path and body"
+                        prefix={<SearchOutlined />} allowClear value={query} onChange={(event) => setQuery(event.target.value)} />
+                    {view !== "shared-rules" ? <Select className="workspace-list-filter" size="small" aria-label="Filter sources by Harness" value={harnessFilter} onChange={setHarnessFilter}
                         options={[{ value: "", label: "All Harnesses" }, ...workspace.config.harnesses.map((harness) => ({ value: harness.name, label: harness.name }))]} /> : null}
                 </Flex> : null}
                 {view === "rules" ? (
