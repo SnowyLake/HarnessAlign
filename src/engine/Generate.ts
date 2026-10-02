@@ -242,17 +242,20 @@ export interface GenerationStatus
     error?: string;
 }
 
-/** Compare actual managed output bytes rather than reporting success from a previous button click. */
+/** Compare managed output bytes using platform path casing rather than a previous button result. */
 export async function inspectGenerated(rootPath: string, actual?: Map<string, Buffer>): Promise<GenerationStatus>
 {
     const files = actual ?? await readGeneratedFiles(rootPath);
     let expected: OutputMap;
     try { expected = await buildOutputs(rootPath); }
     catch (error) { return { state: "error", changes: [], error: errorText(error) }; }
+    const generated = join(resolve(rootPath), ".harness-align", "generated");
+    const currentFiles = new Map([...files].map(([path, content]) => [pathKey(join(generated, path)), content]));
+    const expectedPaths = new Set([...expected.keys()].map((path) => pathKey(join(generated, path))));
     const changes: GenerationStatus["changes"] = [];
     for (const [path, content] of expected)
     {
-        const current = files.get(path);
+        const current = currentFiles.get(pathKey(join(generated, path)));
         if (!current) changes.push({ path, status: "missing" });
         else if (!current.equals(content)) changes.push({ path, status: "modified" });
     }
@@ -263,7 +266,7 @@ export async function inspectGenerated(rootPath: string, actual?: Map<string, Bu
         if (!(error instanceof HalignError) || !/invalid manifest|version must|files must/u.test(error.message)) throw error;
         return { state: "partial", changes };
     }
-    for (const path of managed) if (!expected.has(path)) changes.push({ path, status: "obsolete" });
+    for (const path of managed) if (!expectedPaths.has(pathKey(join(generated, path)))) changes.push({ path, status: "obsolete" });
     changes.sort((left, right) => codePointCompare(left.path, right.path));
     const state = changes.length === 0 ? "current" : files.size === 0 ? "missing" : changes.some((change) => change.status === "missing") ? "partial" : "stale";
     return { state, changes };

@@ -119,6 +119,8 @@ Harness 改名或删除会同时更新 Config, Rules, Layer Options 和 Agents. 
 
 Generated 页面显示相对已保存源内容和已保存 Layer 选择的实际状态: `current` 表示托管文件字节一致, `stale` 表示内容或 manifest 过期, `missing` 表示尚无输出, `partial` 表示缺失文件或无效 manifest, `error` 表示当前源内容无法生成并显示具体错误. 生成错误不会阻止加载可编辑的源文件, 可以在对应编辑器修正后重新 Generate. 状态列出需要更新的路径, 不把上次点击成功当作当前完整状态. Reload 重新检查磁盘, Generate 更新结果; 本地未保存的 Layer 选择可能与保存选择不同. 未由 manifest 管理的其他文件保留, 不计入过期输出.
 
+Windows 上的状态检查不区分路径大小写. Harness 名称与已有生成目录仅大小写不同时, 不会误报文件缺失; 文件内容和 manifest 内容仍按实际字节比较.
+
 Skills 的 Discover 和 Check updates 每次重新解析分支 commit, 同一个来源仓库与 commit 的已验证下载及解压内容在本次会话中复用, 缓存有总量限制. Apply updates 只安装本次检查已审阅的固定 commit, 不在执行时改装分支的新版本. 再次 Discover 或检查, 来源配置变化, 或已安装 provenance 变化会使旧预览失效; 请重新检查后应用.
 
 Harness 卡片的 Explain effects 按当前 Harness 列出 Rules, Layer Options 和 Agents 的 Included / Excluded 原因. 说明使用已保存源内容和当前 Layer 顺序与选择, 显示空 targets 未生效, 未启用 Layer, 未选中的选项及缺少 Harness Agent metadata. 点击源路径跳转到编辑器. Shared rules 和 Skills 独立部署, 不进入该 Harness 的 `AGENTS.md`.

@@ -256,6 +256,45 @@ test("generated status follows source and actual output bytes, missing files and
     });
 });
 
+test("generated status follows platform path casing while preserving content, missing and obsolete checks", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await generate(root);
+        await updateHarness(root, "codex", { ...(await loadConfig(root)).harnesses[0]!, name: "Codex" });
+        await generate(root);
+        const directory = join(root, ".harness-align", "generated");
+        if (process.platform === "win32") assert.ok((await readdir(directory)).includes("codex"));
+        assert.deepEqual(await inspectGenerated(root), { state: "current", changes: [] });
+        const actual = await readGeneratedFiles(root);
+        const upperPaths = new Map([...actual].map(([path, content]) => [path.toUpperCase(), content]));
+        assert.equal((await inspectGenerated(root, upperPaths)).state, process.platform === "win32" ? "current" : "partial");
+
+        const agents = join(directory, "Codex", "AGENTS.md");
+        await writeFile(agents, "Changed generated content");
+        const stale = await inspectGenerated(root);
+        assert.equal(stale.state, "stale");
+        assert.deepEqual(stale.changes, [{ path: "Codex/AGENTS.md", status: "modified" }]);
+        await unlink(agents);
+        const partial = await inspectGenerated(root);
+        assert.equal(partial.state, "partial");
+        assert.deepEqual(partial.changes, [{ path: "Codex/AGENTS.md", status: "missing" }]);
+        await generate(root);
+
+        const manifestPath = join(directory, ".manifest.json");
+        const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { version: number; layers: unknown; files: string[] };
+        manifest.files = manifest.files.map((path) => path.toUpperCase());
+        await writeFile(manifestPath, JSON.stringify(manifest));
+        const manifestStatus = await inspectGenerated(root);
+        assert.equal(manifestStatus.state, "stale");
+        assert.ok(manifestStatus.changes.some((change) => change.path === ".manifest.json" && change.status === "modified"));
+        assert.equal(manifestStatus.changes.some((change) => change.status === "obsolete"), process.platform !== "win32");
+        manifest.files.push("Codex/agents/removed.toml");
+        await writeFile(manifestPath, JSON.stringify(manifest));
+        assert.ok((await inspectGenerated(root)).changes.some((change) => change.path === "Codex/agents/removed.toml" && change.status === "obsolete"));
+    });
+});
+
 test("generation errors keep desktop sources editable and clear after the metadata is repaired", async () =>
 {
     await withProject(async (root) =>
