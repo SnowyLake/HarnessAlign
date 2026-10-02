@@ -36,6 +36,15 @@
 
 侧栏提供 Harnesses, Rules, Layers, Agents 和 Skills, 底部是 Generated, Console 和 Settings. 窄窗口下侧栏会收起为图标. 文件列表可以折叠或调整宽度, Layers, Rules 和 Agents 的列表默认占 28%, 可在 20% 到 45% 之间调整. 在 Rules, Layers 和 Agents 中切换条目时, 右侧编辑区会保持滚动位置.
 
+顶部状态区在所有页面以紧凑标签显示 Edits, Generated, Setup 和 Sync. 已完成项显示勾选, 待处理项显示 Pending, 未保存或异常保留具体状态. 点击状态区可查看各阶段状态、必要的错误提示和可展开的差异路径, 不展示操作日志或重复说明. Generated 页只保留产物查看, 不再单独展示保存源状态.
+
+- Edits 显示 Saved 或未保存数量, 包括全部编辑草稿和 Layer 选择. 有未保存内容时, 下游显示 Save first, 保存后再判断是否需要 Generate, Setup 或 Sync.
+- Generated 的 Current 表示输出与已保存源一致; Generate needed 表示需要重新生成.
+- Setup 对比实际部署目标, 包括 Shared Rules 和 Skills. Deploy needed 表示需要部署, Review changes 表示存在外部修改或额外路径, Skipped targets 表示部分 Harness 目录缺失. 没有 Skills 时跳过 Skills 不算待办. Setup 会重新生成, 可以直接完成生成和部署.
+- Sync 的 Locally synced 仅表示本地内容与上次同步基线一致; Sync needed 表示本地有待同步修改. 远端只在打开 Sync 时检查, 最新预览中的待处理改动或冲突也会显示在顶部. Not connected 表示尚未启用可选的 GitHub 同步.
+
+状态在加载及应用内操作后更新, 外部修改后使用 Reload 重新检查. 检查失败显示 Error 或 Check needed, 不视为已完成. 窄窗口会把状态区放到工具栏第二行.
+
 日常修改按以下顺序进行:
 
 1. 在对应页面编辑内容, 用 Save file 保存当前文件, 或用顶部 Save all 保存全部草稿.

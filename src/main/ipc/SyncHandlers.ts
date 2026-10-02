@@ -32,7 +32,7 @@ export function registerSyncHandlers(): void
 {
     ipcMain.handle(IPC_CHANNELS.syncStatus, (event) => runIpc(event, async () =>
     {
-        return withWorkspace(() => getSyncStatus(app.getPath("userData")));
+        return withWorkspace((root) => getSyncStatus(app.getPath("userData"), root));
     }));
     ipcMain.handle(IPC_CHANNELS.syncConnect, (event, input: unknown) => runIpc(event, async () =>
     {

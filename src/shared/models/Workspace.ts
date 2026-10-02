@@ -178,6 +178,14 @@ export interface SetupPreview
     changes: SetupChange[];
 }
 
+/** Content comparison against actual deployment targets, including skipped destinations. */
+export interface DeploymentStatus
+{
+    state: "current" | "pending" | "error";
+    changes: SetupChange[];
+    error?: string;
+}
+
 /** Opened source identity checked by Main before saving or renaming. */
 export interface SourceGuard
 {
@@ -197,5 +205,6 @@ export interface Workspace
     skills: ProjectSkill[];
     generatedFiles: GeneratedFile[];
     generationStatus: GenerationStatus;
+    deploymentStatus: DeploymentStatus;
     harnessRoots: Array<{ name: string; state: "ready" | "missing" | "unsafe" }>;
 }

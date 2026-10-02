@@ -261,6 +261,8 @@ export const useAppStore = create<AppState>((set) => ({
         const shouldReset = !state.workspace || !workspace;
         return {
             workspace,
+            syncStatus: state.syncStatus ? { ...state.syncStatus, localState: "unknown" as const } : undefined,
+            syncPreview: undefined,
             selection: state.view === "settings" || state.view === "console"
                 ? state.selection
                 : selectionForView(state.view, state.selection, workspace),
@@ -276,6 +278,7 @@ export const useAppStore = create<AppState>((set) => ({
     setSelection: (selection) => set({ selection }),
     resetWorkspace: (workspace) => set((state) => ({
         workspace,
+        syncStatus: state.syncStatus ? { ...state.syncStatus, localState: "unknown" as const } : undefined,
         workspaceRevision: state.workspaceRevision + 1,
         selection: state.view === "settings" || state.view === "console"
             ? state.selection

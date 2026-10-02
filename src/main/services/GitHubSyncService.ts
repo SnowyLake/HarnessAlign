@@ -190,9 +190,21 @@ function publicStatus(state: SyncState): SyncStatus
 }
 
 /** Read local connection status without contacting GitHub. */
-export async function getSyncStatus(directory: string): Promise<SyncStatus>
+export async function getSyncStatus(directory: string, root?: string): Promise<SyncStatus>
 {
-    return publicStatus(await readState(directory));
+    const state = await readState(directory);
+    const status = publicStatus(state);
+    if (!root || !state.connection) return status;
+    if (!state.base || state.base.connectionKey !== connectionKey(state.connection)) return { ...status, localState: "uninitialized" };
+    try
+    {
+        const local = portableSyncSnapshot(await readSyncSnapshot(root));
+        return { ...status, localState: syncSnapshotHash(local) === syncSnapshotHash(portableSyncSnapshot(state.base.snapshot)) ? "current" : "changed" };
+    }
+    catch (error)
+    {
+        return { ...status, localState: "unknown", localError: error instanceof Error ? error.message : String(error) };
+    }
 }
 
 /** Read encrypted credentials only for Main's OS credential boundary. */

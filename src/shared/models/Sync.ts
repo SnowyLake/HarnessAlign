@@ -18,6 +18,8 @@ export interface SyncStatus
     branch: string;
     lastSyncedAt: string | null;
     hasPendingUpload: boolean;
+    localState?: "current" | "changed" | "uninitialized" | "unknown";
+    localError?: string;
 }
 
 /** Side chosen for an entire conflicting unit. */

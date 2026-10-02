@@ -16,10 +16,11 @@ import {
     SyncOutlined,
     ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Badge, Button, Checkbox, Flex, Layout, Menu, Modal, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
+import { Button, Checkbox, Flex, Layout, Menu, Modal, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useState, type ReactNode } from "react";
 import appIcon from "../../../../../build/icon.png";
 import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
+import { WorkflowStatus } from "./WorkflowStatus";
 import { SyncPanel } from "@/features/settings/SyncPanel";
 import { showError } from "@/components/common/Feedback";
 import type { SetupPreview } from "@shared/models/Workspace";
@@ -123,10 +124,11 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
                         <span className="app-brand-name">Harness Align</span>
                     </button>
                 </Flex>
-                <Flex align="center" gap={12} wrap={false}>
+                <WorkflowStatus />
+                <Flex align="center" gap={12} wrap={false} className="app-topbar-actions">
                     <span className="app-command-status" role="status">
                         {isBusy ? <Space size={8}><Spin size="small" /><Typography.Text type="secondary">Working...</Typography.Text></Space>
-                            : dirtyCount > 0 ? <Badge status="warning" text={`${dirtyCount} unsaved`} /> : null}
+                            : null}
                     </span>
                     <Tooltip title="Save all changes (Ctrl+S)">
                         <Button icon={<SaveOutlined />} disabled={!workspace || isBusy || dirtyCount === 0}

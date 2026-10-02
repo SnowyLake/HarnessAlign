@@ -139,8 +139,13 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     load: () => withWorkspace(async (root) =>
     {
         const [workspace, generatedFiles] = await Promise.all([loadWorkspace(root), readGeneratedFiles(root)]);
+        const deploymentStatus = await previewSetup(root).then((preview) => ({
+            state: preview.changes.some((change) => change.status !== "unchanged" && change.status !== "skipped") ? "pending" as const : "current" as const,
+            changes: preview.changes,
+        })).catch((error: unknown) => ({ state: "error" as const, changes: [], error: error instanceof Error ? error.message : String(error) }));
         return {
             ...workspace,
+            deploymentStatus,
             generationStatus: await inspectGenerated(root, generatedFiles),
             harnessRoots: await inspectHarnessRoots(root),
             generatedFiles: [...generatedFiles].map(([path, content]) => ({ path, content: content.toString("utf8") })),

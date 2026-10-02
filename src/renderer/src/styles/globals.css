@@ -54,6 +54,50 @@ select {
 
 .app-topbar-context {
     min-width: 0;
+    flex-shrink: 0;
+}
+
+.app-topbar-actions { flex-shrink: 0; }
+
+.workflow-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: var(--ant-border-radius);
+    background: transparent;
+    color: var(--ant-color-text);
+    cursor: pointer;
+    text-align: left;
+}
+
+.workflow-status:hover { background: var(--ant-control-item-bg-hover); }
+.workflow-status:focus-visible { outline: 2px solid var(--ant-color-primary); }
+.workflow-stages { display: flex; gap: 6px; flex-wrap: wrap; }
+.workflow-stage.ant-tag { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 3px 8px; border-radius: 6px; }
+.workflow-stage-value { font-weight: 500; }
+.workflow-complete { color: var(--ant-color-success); }
+.workflow-details { width: min(360px, 80vw); max-height: 65vh; overflow: auto; overflow-wrap: anywhere; }
+.workflow-heading { padding: 2px 4px 12px; font-size: 13px; font-weight: 600; }
+.workflow-detail-stage { padding: 12px 4px; border-top: 1px solid var(--ant-color-border-secondary); }
+.workflow-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 500; }
+.workflow-detail-hint { margin-top: 6px; color: var(--ant-color-text-secondary); font-size: 12px; }
+.workflow-changes { margin-top: 8px; font-size: 12px; }
+.workflow-changes summary { cursor: pointer; color: var(--ant-color-text-secondary); }
+.workflow-changes summary:hover { color: var(--ant-color-primary); }
+.workflow-change-list { margin-top: 8px; padding: 6px 8px; background: var(--ant-color-fill-quaternary); border-radius: 6px; }
+.workflow-change { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 4px 0; }
+.workflow-change-path { min-width: 0; }
+.workflow-change .ant-tag { margin: 0; font-size: 11px; }
+.workflow-footnote { border-top: 1px solid var(--ant-color-border-secondary); padding: 10px 4px 0; color: var(--ant-color-text-tertiary); font-size: 11px; }
+
+@media (max-width: 1250px) {
+    .app-topbar { height: auto; min-height: 64px; flex-basis: auto; flex-wrap: wrap; gap: 8px 16px; padding-block: 8px; }
+    .workflow-status { order: 3; flex-basis: 100%; }
+    .workflow-stages { justify-content: flex-start; }
 }
 
 .app-brand {

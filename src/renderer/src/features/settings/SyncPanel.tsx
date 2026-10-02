@@ -44,6 +44,7 @@ async function reloadSyncedWorkspace(): Promise<void>
 export function SyncPanel()
 {
     const [form] = Form.useForm<SyncConnectionInput>();
+    const workspace = useAppStore((state) => state.workspace);
     const status = useAppStore((state) => state.syncStatus);
     const setStatus = useAppStore((state) => state.setSyncStatus);
     const dialog = useAppStore((state) => state.syncDialog);
@@ -62,16 +63,22 @@ export function SyncPanel()
 
     useEffect(() =>
     {
+        let cancelled = false;
         void window.appApi.sync.status().then((next) =>
         {
+            if (cancelled) return;
             setStatus(next);
             if (next.connected) form.setFieldsValue({ owner: next.owner, repository: next.repository, branch: next.branch });
         }).catch((cause: unknown) =>
         {
+            if (cancelled) return;
+            const previous = useAppStore.getState().syncStatus;
+            if (previous) setStatus({ ...previous, localState: "unknown" });
             setError("Sync status unavailable. See Console for details.");
             showError(cause, "Sync status unavailable");
         });
-    }, [form, setStatus]);
+        return () => { cancelled = true; };
+    }, [form, setStatus, workspace]);
 
     useEffect(() =>
     {
@@ -107,7 +114,12 @@ export function SyncPanel()
         }
         finally
         {
-            await window.appApi.sync.status().then(setStatus).catch((cause: unknown) => showError(cause, "Sync status refresh failed"));
+            await window.appApi.sync.status().then(setStatus).catch((cause: unknown) =>
+            {
+                const previous = useAppStore.getState().syncStatus;
+                if (previous) setStatus({ ...previous, localState: "unknown" });
+                showError(cause, "Sync status refresh failed");
+            });
             state.setIsBusy(false);
         }
     }
