@@ -16,7 +16,7 @@ import {
     SyncOutlined,
     ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Button, Checkbox, Flex, Layout, Menu, Modal, Popover, Segmented, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
+import { Badge, Button, Checkbox, Flex, Layout, Menu, Modal, Popover, Segmented, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useState, type ReactNode } from "react";
 import appIcon from "../../../../../build/icon.png";
 import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
@@ -62,6 +62,7 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
     const setView = useAppStore((state) => state.setView);
     const workspace = useAppStore((state) => state.workspace);
     const isBusy = useAppStore((state) => state.isBusy);
+    const hasAppUpdate = useAppStore((state) => state.appUpdateStatus?.availableVersion != null);
     const hasSourceDrafts = useAppStore((state) => Object.keys(state.editorDrafts).length > 0);
     const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const dirtyCount = useAppStore(workspaceChangeCount);
@@ -84,7 +85,8 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
     const utilityItems: MenuProps["items"] = [
         { key: "generated", icon: WORKSPACE_NAV_ITEMS.generated.icon, label: WORKSPACE_NAV_ITEMS.generated.label },
         { key: "console", icon: <CodeOutlined />, label: "Console" },
-        { key: "settings", icon: <SettingOutlined />, label: "Settings" },
+        { key: "settings", icon: <Badge dot={hasAppUpdate} styles={{ root: { lineHeight: 1 } }}><SettingOutlined style={{ lineHeight: 1 }} /></Badge>,
+          label: <span aria-label={hasAppUpdate ? "Settings, update available" : "Settings"}>Settings</span> },
     ];
 
     /** Select one known application view from an Ant Design menu. */

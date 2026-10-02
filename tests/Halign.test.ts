@@ -26,6 +26,7 @@ import { workflowStages } from "../src/renderer/src/lib/WorkflowStatus.js";
 import { appendLog, clearLogs, logMainError, readLogs, redactedLogText, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
+import type { AppUpdateStatus } from "../src/shared/models/AppUpdate.js";
 import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent, readSkillUpdatePreview } from "../src/main/services/SkillRemoteService.js";
 import { applySync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
@@ -4397,6 +4398,101 @@ test("skill batches reject later origin and case conflicts before installing the
     });
 });
 
+test("automatic application checks run at startup and every six hours without overlapping or downloading", async (t) =>
+{
+    const serviceUrl = new URL("../../src/main/services/AppUpdateService.ts", import.meta.url).href;
+    const electronUrl = "data:text/javascript,export const app = { isPackaged: true, getVersion: () => '1.2.1' };";
+    const updaterUrl = "data:text/javascript,export const autoUpdater = { on() {}, async checkForUpdates() { return { isUpdateAvailable: true, updateInfo: { version: '1.3.0' } }; } };";
+    const hooks = registerHooks({ resolve: (specifier, context, nextResolve) =>
+    {
+        if (specifier === "electron") return { url: electronUrl, shortCircuit: true };
+        if (specifier === "electron-updater") return { url: updaterUrl, shortCircuit: true };
+        if (context.parentURL === serviceUrl && specifier.startsWith("."))
+        {
+            return { url: new URL(specifier, new URL("../src/main/services/AppUpdateService.js", import.meta.url)).href, shortCircuit: true };
+        }
+        return nextResolve(specifier, context);
+    } });
+    const previousProxy = process.env.HTTPS_PROXY;
+    const previousLowerProxy = process.env.https_proxy;
+    const previousHttpProxy = process.env.HTTP_PROXY;
+    const previousLowerHttpProxy = process.env.http_proxy;
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.HTTP_PROXY;
+    delete process.env.http_proxy;
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    /** Stop the current schedule even when an assertion fails. */
+    let stop = (): void => {};
+    try
+    {
+        const service: {
+            startAutomaticAppUpdateChecks(isPackaged: boolean): () => void;
+            checkForAppUpdate(): Promise<AppUpdateStatus>;
+            getAppUpdateStatus(): Promise<AppUpdateStatus>;
+        } = await import(serviceUrl);
+        const { autoUpdater } = await import(updaterUrl);
+        const check = t.mock.method(autoUpdater, "checkForUpdates");
+        stop = service.startAutomaticAppUpdateChecks(false);
+        t.mock.timers.tick(6 * 60 * 60 * 1000);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 0);
+        stop();
+
+        stop = service.startAutomaticAppUpdateChecks(true);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 1);
+        assert.equal((await service.getAppUpdateStatus()).phase, "available");
+        assert.equal(autoUpdater.autoDownload, false);
+        assert.equal(autoUpdater.autoInstallOnAppQuit, false);
+        assert.equal(autoUpdater.allowPrerelease, false);
+        t.mock.timers.tick(6 * 60 * 60 * 1000 - 1);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 1);
+        t.mock.timers.tick(1);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 2);
+
+        let finishCheck!: () => void;
+        check.mock.mockImplementationOnce(() => new Promise((resolve) =>
+        {
+            finishCheck = () => resolve({ isUpdateAvailable: false });
+        }));
+        const manual = service.checkForAppUpdate();
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 3);
+        t.mock.timers.tick(6 * 60 * 60 * 1000);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 3);
+        finishCheck();
+        await manual;
+        assert.equal((await service.getAppUpdateStatus()).availableVersion, null);
+
+        check.mock.mockImplementationOnce(async () => { throw new Error("offline"); });
+        t.mock.timers.tick(6 * 60 * 60 * 1000);
+        await new Promise(setImmediate);
+        assert.equal((await service.getAppUpdateStatus()).phase, "error");
+        t.mock.timers.tick(6 * 60 * 60 * 1000);
+        await new Promise(setImmediate);
+        assert.equal((await service.getAppUpdateStatus()).phase, "available");
+        assert.equal(check.mock.callCount(), 5);
+        stop();
+        t.mock.timers.tick(6 * 60 * 60 * 1000);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 5);
+    }
+    finally
+    {
+        stop();
+        hooks.deregister();
+        t.mock.timers.reset();
+        if (previousProxy === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = previousProxy;
+        if (previousLowerProxy === undefined) delete process.env.https_proxy; else process.env.https_proxy = previousLowerProxy;
+        if (previousHttpProxy === undefined) delete process.env.HTTP_PROXY; else process.env.HTTP_PROXY = previousHttpProxy;
+        if (previousLowerHttpProxy === undefined) delete process.env.http_proxy; else process.env.http_proxy = previousLowerHttpProxy;
+    }
+});
+
 test("application update installs only a downloaded offered release and rejects unsafe proxy values", () =>
 {
     const initial = initialAppUpdateStatus("1.2.1");
@@ -4411,6 +4507,11 @@ test("application update installs only a downloaded offered release and rejects 
     const checking = beginAppUpdateCheck(initial);
     const available = markAppUpdateAvailable(checking, "1.3.0-beta.1");
     assert.equal(available.availableVersion, "1.3.0-beta.1");
+    const rechecking = beginAppUpdateCheck(available);
+    assert.equal(rechecking.availableVersion, available.availableVersion);
+    const failedRecheck = failAppUpdate(rechecking, "offline");
+    assert.equal(failedRecheck.availableVersion, available.availableVersion);
+    assert.throws(() => beginAppUpdateDownload(failedRecheck), /cannot download while error/u);
     const downloading = beginAppUpdateDownload(available);
     assert.equal(updateAppUpdateProgress(downloading, 140.2).percent, 100);
     assert.throws(() => updateAppUpdateProgress(downloading, Number.NaN), /finite/u);

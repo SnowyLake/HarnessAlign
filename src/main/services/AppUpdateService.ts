@@ -1,5 +1,5 @@
 /**
- * User-started updates for the packaged NSIS app.
+ * Automatic update checks and user-started installs for the packaged NSIS app.
  * The feed is the packaged app-update.yml. Renderer input cannot select a URL or installer.
  */
 
@@ -23,6 +23,7 @@ import {
 
 /** Session partition used by electron-updater for its own network requests. */
 const UPDATER_SESSION_PARTITION = "electron-updater";
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const listeners = new Set<(status: AppUpdateStatus) => void>();
 let status: AppUpdateStatus = initialAppUpdateStatus("");
@@ -30,6 +31,25 @@ let operation: Promise<AppUpdateStatus> | null = null;
 let isConfigured = false;
 let isInstallPending = false;
 let proxyCredentials: { readonly username: string; readonly password: string } | null = null;
+
+/** Check on startup and every six hours, returning cleanup for application shutdown. */
+export function startAutomaticAppUpdateChecks(isPackaged: boolean): () => void
+{
+    if (!isPackaged) return () => {};
+    /** Skip active update operations and keep background failures out of dialogs. */
+    const check = (): void =>
+    {
+        if (operation !== null || isInstallPending) return;
+        void checkForAppUpdate().catch(() =>
+        {
+            // The check already published its error status and recorded the failure in Console.
+        });
+    };
+    const timer = setInterval(check, UPDATE_CHECK_INTERVAL_MS);
+    timer.unref();
+    check();
+    return () => clearInterval(timer);
+}
 
 /** Report whether quit must proceed because the update installer has already been started. */
 export function isAppUpdateInstallPending(): boolean

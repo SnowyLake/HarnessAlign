@@ -5,7 +5,7 @@
 import { CloudDownloadOutlined } from "@ant-design/icons";
 import type { AppUpdatePhase, AppUpdateStatus } from "@shared/models/AppUpdate";
 import { Alert, Button, Card, Flex, Progress, Space, Typography } from "antd";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { showError, writeLog } from "@/components/common/Feedback";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 
@@ -44,39 +44,14 @@ export function AppUpdateCard()
 {
     const workspaceBusy = useAppStore((state) => state.isBusy);
     const dirtyCount = useAppStore(workspaceChangeCount);
-    const [status, setStatus] = useState<AppUpdateStatus | null>(null);
+    const status = useAppStore((state) => state.appUpdateStatus);
+    const setStatus = useAppStore((state) => state.setAppUpdateStatus);
     const [pending, setPending] = useState<"check" | "download" | null>(null);
     const isBusy = useRef(false);
     const phase: AppUpdatePhase = status?.phase ?? "idle";
     const isChecking = phase === "checking" || pending === "check";
     const isInstalling = phase === "downloading" || phase === "downloaded" || pending === "download";
-    const showDownload = phase === "available" || isInstalling;
-
-    useEffect(() =>
-    {
-        let isCancelled = false;
-        let isReady = false;
-        const queued: AppUpdateStatus[] = [];
-        const unsubscribe = window.appApi.appUpdate.onChanged((next) =>
-        {
-            if (isReady) setStatus(next);
-            else queued.push(next);
-        });
-        void window.appApi.appUpdate.status().then((next) =>
-        {
-            if (isCancelled) return;
-            isReady = true;
-            setStatus(queued.at(-1) ?? next);
-        }).catch((error: unknown) =>
-        {
-            if (!isCancelled) showError(error, "Update status unavailable");
-        });
-        return () =>
-        {
-            isCancelled = true;
-            unsubscribe();
-        };
-    }, []);
+    const showDownload = status?.availableVersion != null || isInstalling;
 
     /** Ignore a second click until the in-flight update request settles. */
     function runUpdateAction(action: "check" | "download", work: () => Promise<void>): void
@@ -140,7 +115,7 @@ export function AppUpdateCard()
                         <Typography.Text type="secondary">{updateDescription(status)}</Typography.Text>
                     </Space>
                     <Space wrap>
-                        {showDownload ? <Button type="primary" loading={isInstalling} disabled={isChecking || isInstalling || workspaceBusy || dirtyCount > 0} onClick={handleDownload}>Download and install</Button> : null}
+                        {showDownload ? <Button type="primary" loading={isInstalling} disabled={phase !== "available" || isChecking || isInstalling || workspaceBusy || dirtyCount > 0} onClick={handleDownload}>Download and install</Button> : null}
                         <Button loading={isChecking} disabled={status === null || isChecking || isInstalling} onClick={handleCheck}>Check for updates</Button>
                     </Space>
                 </Flex>

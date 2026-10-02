@@ -12,6 +12,7 @@ import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
 import { refreshWorkspace, reloadWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
+import type { AppUpdateStatus } from "@shared/models/AppUpdate";
 
 /** Root React tree for the desktop shell. */
 export function App()
@@ -24,6 +25,36 @@ export function App()
     const [loadAttempt, setLoadAttempt] = useState(0);
     const [prefersDark, setPrefersDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
     const isDark = themeMode === "dark" || (themeMode === "system" && prefersDark);
+
+    useEffect(() =>
+    {
+        let isCancelled = false;
+        let isReady = false;
+        let latest: AppUpdateStatus | null = null;
+        const setStatus = useAppStore.getState().setAppUpdateStatus;
+        const unsubscribe = window.appApi.appUpdate.onChanged((next) =>
+        {
+            latest = next;
+            if (isReady) setStatus(next);
+        });
+        void window.appApi.appUpdate.status().then((next) =>
+        {
+            if (isCancelled) return;
+            isReady = true;
+            setStatus(latest ?? next);
+        }).catch((error: unknown) =>
+        {
+            if (isCancelled) return;
+            isReady = true;
+            if (latest !== null) setStatus(latest);
+            showError(error, "Update status unavailable");
+        });
+        return () =>
+        {
+            isCancelled = true;
+            unsubscribe();
+        };
+    }, []);
 
     useEffect(() =>
     {

@@ -4,6 +4,7 @@
 
 import { create } from "zustand";
 import type { ThemeMode } from "../../../shared/models/AppSettings.js";
+import type { AppUpdateStatus } from "../../../shared/models/AppUpdate.js";
 import type { LayerSelection, Workspace } from "../../../shared/models/Workspace.js";
 import type { SyncPreview, SyncStatus } from "../../../shared/models/Sync.js";
 import type { LogChange, LogEntry, LogSnapshot } from "../../../shared/models/Console.js";
@@ -198,6 +199,7 @@ interface AppState
     workspaceRevision: number;
     syncPreview: SyncPreview | undefined;
     syncStatus: SyncStatus | undefined;
+    appUpdateStatus: AppUpdateStatus | null;
     syncDialog: "review" | "connection" | undefined;
     selection: Selection;
     layerSelection: LayerSelection[];
@@ -213,6 +215,7 @@ interface AppState
     resetWorkspace: (workspace: Workspace) => void;
     setSyncPreview: (preview: SyncPreview | undefined) => void;
     setSyncStatus: (status: SyncStatus) => void;
+    setAppUpdateStatus: (status: AppUpdateStatus) => void;
     setSyncDialog: (dialog: "review" | "connection" | undefined) => void;
     setSelection: (selection: Selection) => void;
     setLayerSelection: (selection: LayerSelection[]) => void;
@@ -240,6 +243,7 @@ export const useAppStore = create<AppState>((set) => ({
     workspaceRevision: 0,
     syncPreview: undefined,
     syncStatus: undefined,
+    appUpdateStatus: null,
     syncDialog: undefined,
     selection: { kind: "config" },
     layerSelection: [],
@@ -299,6 +303,7 @@ export const useAppStore = create<AppState>((set) => ({
     setTheme: (theme) => set({ theme }),
     setSyncPreview: (syncPreview) => set({ syncPreview }),
     setSyncStatus: (syncStatus) => set({ syncStatus }),
+    setAppUpdateStatus: (appUpdateStatus) => set({ appUpdateStatus }),
     setSyncDialog: (syncDialog) => set({ syncDialog }),
     setEditorDraft: (key, draft) => set((state) =>
     {
