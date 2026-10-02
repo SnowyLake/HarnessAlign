@@ -303,64 +303,79 @@ select {
     line-height: 36px;
 }
 
+.harnesses-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
 .harnesses-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
 }
 
 .harness-card {
     min-width: 0;
+    overflow: hidden;
 }
 
-.harness-card .harness-card-body {
-    padding: 16px 20px;
-}
-
-.harness-card-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
+.harness-card .harness-card-body { height: 100%; padding: 24px 24px 0; display: flex; flex-direction: column; }
+.harness-card-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .harness-card-mark {
     display: grid;
-    width: 36px;
-    height: 36px;
-    flex: 0 0 36px;
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
     place-items: center;
     border: 1px solid var(--ant-color-primary-border);
-    border-radius: var(--ant-border-radius-lg);
+    border-radius: var(--ant-border-radius);
     background: var(--ant-color-primary-bg);
     color: var(--ant-color-primary-text);
     font-weight: 600;
-    font-size: 15px;
+    font-size: var(--ant-font-size-lg);
 }
 
-.harness-card-heading {
-    min-width: 0;
-    flex: 1;
-}
-
-.harness-card-name.ant-typography {
-    margin: 0;
-    font-size: 16px;
-    overflow-wrap: anywhere;
-}
-
+.harness-card-heading { min-width: 0; flex: 1; }
+.harness-card-name.ant-typography { margin: 0; font-size: var(--ant-font-size-lg); overflow-wrap: anywhere; }
+.harness-card-status.ant-tag { margin: 0; }
 .harness-card-path.ant-btn {
     display: flex;
+    width: 100%;
     height: auto;
-    align-items: center;
-    margin-top: 4px;
-    padding-inline: 0;
-    font-size: 13px;
+    min-height: var(--ant-control-height);
+    justify-content: flex-start;
+    gap: 10px;
+    margin: 16px 0;
+    padding: 8px 12px;
+    background: var(--ant-color-fill-quaternary);
+    color: var(--ant-color-text-secondary);
+    font-size: var(--ant-font-size-sm);
+    text-align: left;
+    white-space: normal;
 }
 
-.harness-card-path code {
-    min-width: 0;
-    font-family: "Cascadia Mono", Consolas, monospace;
-    overflow-wrap: anywhere;
+.harness-card-path.ant-btn:not(:disabled):hover { background: var(--ant-control-item-bg-hover); color: var(--ant-color-primary); }
+.harness-card-path code { min-width: 0; flex: 1; font-family: "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
+.harness-card-path > .anticon:last-child { margin-left: auto; font-size: 12px; }
+.harness-card-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0 0 20px; }
+.harness-card-stats > div { display: flex; flex-direction: column-reverse; gap: 2px; padding-left: 20px; border-left: 1px solid var(--ant-color-border-secondary); }
+.harness-card-stats > div:first-child { padding-left: 0; border-left: 0; }
+.harness-card-stats dt { color: var(--ant-color-text-secondary); font-size: var(--ant-font-size-sm); }
+.harness-card-stats dd { margin: 0; font-size: var(--ant-font-size-heading-3); font-weight: 600; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.harness-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: auto -24px 0;
+    padding: 12px 24px;
+    border-top: 1px solid var(--ant-color-border-secondary);
+}
+
+.harness-card-explain.ant-btn { padding-inline: 0; }
+.harness-card-edit { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.harness-card-edit .ant-tag { margin: 0; }
+
+@media (max-width: 1000px) {
+    .harnesses-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .skills-section-header {

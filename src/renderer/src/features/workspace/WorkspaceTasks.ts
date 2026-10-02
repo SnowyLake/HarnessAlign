@@ -333,13 +333,12 @@ export async function reloadWorkspace(): Promise<void>
     useAppStore.getState().resetWorkspace(workspace);
 }
 
-/** Log the operation start and retain failures while holding the workspace busy boundary. */
+/** Retain failures while holding the workspace busy boundary for an operation. */
 export async function runCommand(work: () => Promise<void>, operation = "Command"): Promise<void>
 {
     const { isBusy, setIsBusy } = useAppStore.getState();
     if (isBusy) return;
     setIsBusy(true);
-    writeLog("info", `${operation} started`);
     try
     {
         await work();

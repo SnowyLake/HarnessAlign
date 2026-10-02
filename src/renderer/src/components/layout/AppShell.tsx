@@ -5,7 +5,7 @@
 import {
     BuildOutlined,
     CodeOutlined,
-    DeploymentUnitOutlined,
+    HomeOutlined,
     FileDoneOutlined,
     FileTextOutlined,
     RobotOutlined,
@@ -37,7 +37,7 @@ interface NavItem
 
 /** Primary workspace modules shown in the desktop sidebar. */
 const WORKSPACE_NAV_ITEMS: Readonly<Record<Exclude<WorkspaceView, "shared-rules">, NavItem>> = {
-    project: { label: "Harnesses", icon: <DeploymentUnitOutlined /> },
+    project: { label: "Home", icon: <HomeOutlined /> },
     rules: { label: "Rules", icon: <FileTextOutlined /> },
     layers: { label: "Layers", icon: <BuildOutlined /> },
     agents: { label: "Agents", icon: <RobotOutlined /> },

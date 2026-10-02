@@ -15,7 +15,7 @@
 
 应用会自动加载 `%USERPROFILE%\.harness-align` 中的配置. 首次启动时, 如果存在旧的 `.halign` 目录, 应用会迁移它; 没有配置时会创建目录和默认 `config.json`. 配置目录固定, 与应用安装位置无关, 界面不提供修改入口. 迁移规则见[配置目录](configuration.md#配置目录).
 
-新建配置时, 应用依次检测用户目录下的 `.codex`, `.cursor`, `.grok` 和 `.config/opencode`, 只将已有配置目录的 Codex, Cursor, Grok Build 和 OpenCode 加入 Harnesses. 文件, 符号链接和 junction 不计入检测结果. 检测依据是配置目录, 卸载后的残留目录仍可能被识别; 已安装但尚未初始化目录的工具需要先启动一次, 再通过 Add harness 手动添加. 全部未检测到时列表为空, 应用仍可正常使用. 已有配置和迁移配置保持原样, 后续启动不会自动增删 Harnesses.
+新建配置时, 应用依次检测用户目录下的 `.codex`, `.cursor`, `.grok` 和 `.config/opencode`, 只将已有配置目录的 Codex, Cursor, Grok Build 和 OpenCode 加入 Home 页面. 文件, 符号链接和 junction 不计入检测结果. 检测依据是配置目录, 卸载后的残留目录仍可能被识别; 已安装但尚未初始化目录的工具需要先启动一次, 再通过 Add harness 手动添加. 全部未检测到时列表为空, 应用仍可正常使用. 已有配置和迁移配置保持原样, 后续启动不会自动增删 Harnesses.
 
 应用同时只运行一个窗口, 再次启动会聚焦已有窗口. Settings 中可以切换主题. 主题和窗口位置保存在本机.
 
@@ -36,7 +36,7 @@
 
 ## 编辑和保存
 
-侧栏提供 Harnesses, Rules, Layers, Agents 和 Skills, 底部是 Generated, Console 和 Settings. 窄窗口下侧栏会收起为图标. 文件列表可以折叠或调整宽度, Layers, Rules 和 Agents 的列表默认占 28%, 可在 20% 到 45% 之间调整. 在 Rules, Layers 和 Agents 中切换条目时, 右侧编辑区会保持滚动位置.
+侧栏提供 Home, Rules, Layers, Agents 和 Skills, 底部是 Generated, Console 和 Settings. 窄窗口下侧栏会收起为图标. 文件列表可以折叠或调整宽度, Layers, Rules 和 Agents 的列表默认占 28%, 可在 20% 到 45% 之间调整. 在 Rules, Layers 和 Agents 中切换条目时, 右侧编辑区会保持滚动位置.
 
 顶部状态区在所有页面以紧凑标签显示 Edits, Generated, Setup 和 Sync. 已完成项显示勾选, 待处理项显示 Pending, 未保存或异常保留具体状态. 点击状态区可查看各阶段状态、必要的错误提示和可展开的差异路径, 不展示操作日志或重复说明. Generated 页只保留产物查看, 不再单独展示保存源状态.
 
@@ -77,9 +77,11 @@ Settings 中的 `AGENTS.md title` 只控制生成文档的一级标题, 随 Save
 
 ## 管理助手与规则
 
-### Harnesses
+### Home
 
 一个 Harness 对应一个编码助手的输出格式和配置目录. 点击 Add harness 新建, 或点击卡片上的 Edit 编辑. 路径填写 `.codex` 这样的相对用户主目录路径, 卡片会显示为 `~/.codex`. 点击路径可以打开已经存在的文件夹, 应用不会创建缺失目录.
+
+Home 页标题为 Harness Align, 以双列卡片展示助手, 窄窗口下切换为单列. 每张卡片展示目录状态和纳入输出的 Rules, Layers 和 Agents 数量; Agent 文件格式在编辑面板中查看和配置. 数量使用已保存源内容和当前 Layer 选择, 包含被选中的空 Layer Option; 不表示已生成或已部署. 点击卡片底部 Explain effects 查看纳入或排除的具体原因. Ready 只表示配置目录可用.
 
 Save harness 只保存当前助手. 关闭编辑面板会保留草稿, 卡片用 Unsaved 标记未保存项. 新建草稿可以通过 Continue new harness 继续编辑. Discard changes 放弃当前草稿; 删除操作位于编辑面板内, 需要再次确认. 保存 Harness 后再执行 Generate 或 Setup.
 
@@ -138,9 +140,11 @@ Harness 卡片的 Explain effects 按当前 Harness 列出 Rules, Layer Options 
 
 Rules, Agents 与 Skills 使用统一的紧凑搜索栏, 搜索在左, 筛选在右, 同行排列. Shared Rules 只显示搜索框. Rules 与 Agents 列表支持按名称, 源路径和已保存正文搜索, 多个空格分隔词同时匹配, 不区分大小写. Harness 筛选使用严格 targets 或 Agent metadata block, 空 targets 不会匹配任何 Harness. Shared Rules 只按文字搜索, 因为它们独立部署. 点击匹配项打开现有编辑器, 搜索不会清除草稿; 筛选时暂停 Rules 拖动排序, 清除筛选后可继续排序.
 
-首次使用没有 Harness 时, Harnesses 页面说明先初始化工具的用户配置目录再 Add harness. 每张卡片显示 Ready, Missing folder 或 Unsafe / unavailable; Reload 重新检查状态. 状态检查不创建目标目录, Setup 仍跳过缺失 Harness.
+首次使用没有 Harness 时, Home 页面说明先初始化工具的用户配置目录再 Add harness. 每张卡片显示 Ready, Missing folder 或 Unsafe / unavailable; Reload 重新检查状态. 状态检查不创建目标目录, Setup 仍跳过缺失 Harness.
 
 ## 查看日志与排查问题
+
+Console 保留保存, 生成, 部署等操作结果和完整错误信息. 启动完成, 操作开始, 主题切换和已经显示在界面中的列表或同步预览不再重复记录; Skills 发现完成仅记录数量.
 
 Console 的 `Load timing`, `Save Rule timing`, `Discover Skills timing` 等记录分别列出 Queue 排队, Initialize 初始化和操作耗时, 失败操作也保留计时. Skills 下载另列压缩字节数和耗时, 解压另列文件数和耗时, 缓存命中会显示复用记录. 排队很长时先查看前一操作; 下载很长时检查网络, 解压很长时检查仓库大小和文件数. 这些指标只保留在本次会话中.
 

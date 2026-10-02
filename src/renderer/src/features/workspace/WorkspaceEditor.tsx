@@ -2,7 +2,9 @@
  * Ant Design workspace editors that preserve native FormData drafts and Main-process path validation.
  */
 
-import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined, SaveOutlined, UndoOutlined } from "@ant-design/icons";
+import {
+    ArrowRightOutlined, CheckCircleFilled, DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined, SaveOutlined, UndoOutlined, WarningOutlined,
+} from "@ant-design/icons";
 import type { HarnessConfig, Workspace } from "@shared/models/Workspace";
 import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Typography } from "antd";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
@@ -703,7 +705,7 @@ function MissingEditorEmpty({ title, description }: { title: string; description
     return <Empty description={<Space orientation="vertical" size={2}><Typography.Text strong>{title}</Typography.Text><Typography.Text type="secondary">{description}</Typography.Text></Space>} />;
 }
 
-/** Render the Harnesses page without unrelated project configuration. */
+/** Render Home with configured harnesses and their included sources. */
 export function HarnessesPanel()
 {
     const workspace = useAppStore((state) => state.workspace);
@@ -727,45 +729,59 @@ export function HarnessesPanel()
 
     return (
         <div className="project-page">
-            <Flex align="center" justify="space-between" gap={16} wrap>
-                <Typography.Title level={3} className="page-title">Harnesses</Typography.Title>
+            <div className="harnesses-header">
+                <Typography.Title level={2} className="page-title">Harness Align</Typography.Title>
                 <Button type="primary" icon={<PlusOutlined />} disabled={isBusy} onClick={() => openEditor({ kind: "harness-new" })}>
                     {drafts["harness-new"] ? "Continue new harness" : "Add harness"}
                 </Button>
-            </Flex>
+            </div>
             {workspace.config.harnesses.length === 0 ? <Alert type="info" showIcon title="No Harness configured yet"
-                description="Initialize your tool's configuration directory in your user profile, then use Add harness. Setup skips missing Harness folders; shared rules and installed Skills can still deploy independently." /> : null}
+                description="Initialize your assistant's configuration folder, then add a harness." /> : null}
             <div className="harnesses-grid">
-                {workspace.config.harnesses.map((harness) => (
-                    <Card key={harness.name} className="harness-card" classNames={{ body: "harness-card-body" }}>
-                        <div className="harness-card-header">
-                            <span className="harness-card-mark" aria-hidden="true">{harness.name.slice(0, 2).toUpperCase()}</span>
-                            <div className="harness-card-heading">
-                                <Typography.Title level={4} className="harness-card-name">{harness.name}</Typography.Title>
-                                <Tag color={workspace.harnessRoots.find((item) => item.name === harness.name)?.state === "ready" ? "green" : "gold"}>
-                                    {workspace.harnessRoots.find((item) => item.name === harness.name)?.state === "ready" ? "Ready" : workspace.harnessRoots.find((item) => item.name === harness.name)?.state === "missing" ? "Missing folder" : "Unsafe / unavailable"}
+                {workspace.config.harnesses.map((harness) =>
+                {
+                    const rootState = workspace.harnessRoots.find((item) => item.name === harness.name)?.state;
+                    const activeEffects = harnessEffects(workspace, harness.name, layerSelection).filter((effect) => effect.active);
+                    return (
+                        <Card key={harness.name} className="harness-card" classNames={{ body: "harness-card-body" }}>
+                            <div className="harness-card-header">
+                                <span className="harness-card-mark" aria-hidden="true">{harness.name.slice(0, 2).toUpperCase()}</span>
+                                <div className="harness-card-heading">
+                                    <Typography.Title level={3} className="harness-card-name">{harness.name}</Typography.Title>
+                                </div>
+                                <Tag className="harness-card-status" color={rootState === "ready" ? "success" : "warning"}
+                                     icon={rootState === "ready" ? <CheckCircleFilled /> : <WarningOutlined />}>
+                                    {rootState === "ready" ? "Ready" : rootState === "missing" ? "Missing folder" : "Unsafe / unavailable"}
                                 </Tag>
-                                <Button
-                                    type="link"
-                                    size="small"
-                                    className="harness-card-path"
-                                    icon={<FolderOutlined aria-hidden="true" />}
-                                    disabled={isBusy}
-                                    autoInsertSpace={false}
-                                    aria-label={`Open ${harness.name} folder`}
-                                    onClick={() => void window.appApi.workspace.openHarnessRoot(harness.name).catch((error: unknown) => showError(error, "Open folder failed"))}
-                                >
-                                    <code>~/{harness.configPath}</code>
-                                </Button>
-                                {drafts[selectionKey({ kind: "harness", name: harness.name })] ? <Tag color="gold">Unsaved</Tag> : null}
                             </div>
-                            <Button icon={<EditOutlined />} disabled={isBusy} aria-label={`Edit ${harness.name}`} onClick={() => openEditor({ kind: "harness", name: harness.name })}>
-                                Edit
+                            <Button
+                                type="text"
+                                className="harness-card-path"
+                                icon={<FolderOutlined aria-hidden="true" />}
+                                disabled={isBusy}
+                                autoInsertSpace={false}
+                                aria-label={`Open ${harness.name} folder`}
+                                title={`Open ~/${harness.configPath}`}
+                                onClick={() => void window.appApi.workspace.openHarnessRoot(harness.name).catch((error: unknown) => showError(error, "Open folder failed"))}
+                            >
+                                <code>~/{harness.configPath}</code><ArrowRightOutlined aria-hidden="true" />
                             </Button>
-                        </div>
-                        <Button type="link" disabled={isBusy} onClick={() => setExplainHarness(harness.name)} aria-label={`Explain effects for ${harness.name}`}>Explain effects</Button>
-                    </Card>
-                ))}
+                            <dl className="harness-card-stats" aria-label="Included sources" title="Saved sources and current Layer choices">
+                                <div><dt>Rules</dt><dd>{activeEffects.filter((effect) => effect.kind === "Rule").length}</dd></div>
+                                <div><dt>Layers</dt><dd>{activeEffects.filter((effect) => effect.kind === "Layer option").length}</dd></div>
+                                <div><dt>Agents</dt><dd>{activeEffects.filter((effect) => effect.kind === "Agent").length}</dd></div>
+                            </dl>
+                            <div className="harness-card-footer">
+                                <Button type="link" className="harness-card-explain" disabled={isBusy} onClick={() => setExplainHarness(harness.name)}
+                                        aria-label={`Explain effects for ${harness.name}`} icon={<ArrowRightOutlined />} iconPlacement="end">Explain effects</Button>
+                                <div className="harness-card-edit">
+                                    {drafts[selectionKey({ kind: "harness", name: harness.name })] ? <Tag color="gold">Unsaved</Tag> : null}
+                                    <Button icon={<EditOutlined />} disabled={isBusy} aria-label={`Edit ${harness.name}`} onClick={() => openEditor({ kind: "harness", name: harness.name })}>Edit</Button>
+                                </div>
+                            </div>
+                        </Card>
+                    );
+                })}
             </div>
             <Drawer
                 title={selectedHarness ? `Edit ${selectedHarness.name}` : "New harness"}
@@ -780,7 +796,6 @@ export function HarnessesPanel()
                 <HarnessForm key={`${selectionKey(selection)}:${JSON.stringify(selectedHarness)}`} workspace={workspace} harness={selectedHarness} onDone={() => setIsEditorOpen(false)} />
             </Drawer>
             <Drawer title={`Effects for ${explainHarness ?? "Harness"}`} open={Boolean(explainHarness)} size={900} destroyOnHidden onClose={() => setExplainHarness(undefined)}>
-                <Typography.Paragraph type="secondary">Saved source content and current ordered Layer choices. Empty targets exclude every Harness. Shared rules and Skills deploy independently.</Typography.Paragraph>
                 <Table<HarnessEffect> size="small" rowKey="path" pagination={false} dataSource={explainHarness ? harnessEffects(workspace, explainHarness, layerSelection) : []}
                     columns={[
                         { title: "Type", dataIndex: "kind" },

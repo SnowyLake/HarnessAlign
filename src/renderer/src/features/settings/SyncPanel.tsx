@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import type { SyncApplyInput, SyncChange, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileView } from "@shared/models/Sync";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
-import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
+import { showError, showSuccess } from "@/components/common/Feedback";
 import { DiffText } from "@/components/common/DiffText";
 import { diffLines, type DiffLine } from "@/lib/TextDiff";
 
@@ -134,7 +134,6 @@ export function SyncPanel()
         setPreview(next);
         setChoices({});
         setMode(next.remoteEmpty ? "initialize" : "merge");
-        writeLog("success", "Sync preview ready", JSON.stringify(next, null, 2));
     }
 
     /** Apply only the reviewed preview and refresh the local editor's saved baseline. */

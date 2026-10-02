@@ -5,7 +5,7 @@
 
 import { App as AntApp, Button, ConfigProvider, Result, Spin, theme as antTheme } from "antd";
 import { useEffect, useState } from "react";
-import { FeedbackBridge, showError, showSuccess, writeLog } from "@/components/common/Feedback";
+import { FeedbackBridge, showError, showSuccess } from "@/components/common/Feedback";
 import { AppShell } from "@/components/layout/AppShell";
 import { ConsolePage } from "@/features/console/ConsolePage";
 import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
@@ -69,7 +69,6 @@ export function App()
             const loaded = await window.appApi.workspace.load();
             if (isCancelled) return;
             useAppStore.getState().setWorkspace(loaded);
-            writeLog("info", "Workspace loaded");
         })().catch((error: unknown) =>
         {
             if (!isCancelled)

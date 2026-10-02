@@ -20,7 +20,7 @@ import {
 import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, SkillUpdatePreview, UserSkill, Workspace } from "@shared/models/Workspace";
 import { Alert, Avatar, Button, Card, Checkbox, Col, Drawer, Dropdown, Empty, Flex, Form, Input, Listy, Modal, Row, Segmented, Select, Space, Splitter, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
+import { showError, showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
 import { DiffText } from "@/components/common/DiffText";
 import { diffLines } from "@/lib/TextDiff";
@@ -483,7 +483,7 @@ export function SkillsPanel()
             setFilter("");
             setOriginFilter("all");
             setListView("discover");
-            showSuccess("Discover completed", `Discovered ${skills.length} skill(s).\n${JSON.stringify(skills, null, 2)}`);
+            showSuccess("Discover completed", `Discovered ${skills.length} skill(s).`);
         }, "Discover");
     };
 
@@ -556,7 +556,6 @@ export function SkillsPanel()
         {
             const skills = await window.appApi.workspace.listUserSkills();
             setUserSkills(skills);
-            writeLog("info", "User skills listed", JSON.stringify(skills, null, 2));
             setSelectedImport([]);
             setIsImportOpen(true);
         }, "List user skills");
