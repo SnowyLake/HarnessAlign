@@ -8,7 +8,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { join, posix, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { stringify as stringifyYaml } from "yaml";
-import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, isAtomicWriteTemporary, lstatIfExists, pathKey, reparseError, resolveUserHome } from "./FsSafe.js";
+import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, isAtomicWriteTemporary, isTreeSubset,
+         lstatIfExists, pathKey, reparseError, resolveUserHome } from "./FsSafe.js";
 import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, type SharedRule, validateAgentHarnesses, validateConfig, validateTargets } from "./Load.js";
 import {
     IDENTIFIER_NAME,
@@ -284,6 +285,7 @@ interface EditMove
     to: string;
     revision: string;
     remove: boolean;
+    cleanup?: Record<string, string>;
 }
 
 /** Exact affected bytes preserve unrelated sources and avoid synchronization archive limits. */
@@ -295,8 +297,8 @@ interface EditJournal
     move?: EditMove;
 }
 
-/** Hash a layer tree without following links, including empty directories and exact file bytes. */
-async function editTreeRevision(root: string, path: string): Promise<string>
+/** Hash a guarded layer tree, optionally recording content identities for resumable deletion. */
+async function editTreeRevision(root: string, path: string, contents?: Record<string, string>): Promise<string>
 {
     const hash = createHash("sha256");
     /** Visit each guarded relative tree entry in deterministic order. */
@@ -308,9 +310,15 @@ async function editTreeRevision(root: string, path: string): Promise<string>
         if (stats.isDirectory())
         {
             hash.update("directory\0");
+            if (contents) contents[name === "." ? name : name.slice(2)] = "directory";
             for (const child of (await fs.readdir(current)).sort(codePointCompare)) await visit(join(current, child), `${name}/${child}`);
         }
-        else if (stats.isFile()) hash.update(await fs.readFile(current)).update("\0");
+        else if (stats.isFile())
+        {
+            const content = await fs.readFile(current);
+            hash.update(content).update("\0");
+            if (contents) contents[name === "." ? name : name.slice(2)] = createHash("sha256").update(content).digest("hex");
+        }
         else throw new HalignError(`${current}: expected a regular layer source`);
     };
     await visit(path, ".");
@@ -335,7 +343,7 @@ export async function recoverSourceEdits(root: string): Promise<"none" | "restor
     const stats = await lstatIfExists(recordPath);
     if (!stats) return "none";
     if (!stats.isFile() || stats.size > 96 * 1024 * 1024) throw new HalignError(`${recordPath}: expected a regular recovery record no larger than 96 MiB`);
-    const record = await fs.readFile(recordPath);
+    let record = await fs.readFile(recordPath);
     let value: unknown;
     try { value = JSON.parse(record.toString("utf8")); }
     catch (error) { throw new HalignError(`${recordPath}: invalid JSON: ${errorText(error)}`); }
@@ -365,6 +373,21 @@ export async function recoverSourceEdits(root: string): Promise<"none" | "restor
         if (!item.remove && (from.split("/").length !== to.split("/").length || (from.split("/").length === 4 && posix.dirname(from) !== posix.dirname(to)))) throw new HalignError(`${recordPath}: option move must remain in its layer`);
         assertContained(root, join(root, ...to.split("/")), recordPath);
         move = { from, to, remove: item.remove, revision: item.revision };
+        if (item.cleanup !== undefined)
+        {
+            if (value.phase !== "committed" || !item.remove || !isRecord(item.cleanup) || !Object.hasOwn(item.cleanup, "."))
+            {
+                throw new HalignError(`${recordPath}: cleanup requires a committed removal and recorded root`);
+            }
+            const cleanup: Record<string, string> = Object.create(null);
+            for (const [name, hash] of Object.entries(item.cleanup))
+            {
+                if (typeof hash !== "string" || (hash !== "directory" && !/^[a-f0-9]{64}$/u.test(hash))) throw new HalignError(`${recordPath}: invalid cleanup hash ${valueText(hash)}`);
+                if (name !== ".") for (const part of name.split("/")) assertWindowsSafeName(part, `${recordPath}: cleanup path ${name}`);
+                cleanup[name] = hash;
+            }
+            move.cleanup = cleanup;
+        }
     }
     /** Refuse unrelated edits before any restoration or deletion. */
     const inspect = async (): Promise<{ atSource: boolean; atTarget: boolean }> =>
@@ -381,7 +404,15 @@ export async function recoverSourceEdits(root: string): Promise<"none" | "restor
         {
             if (atSource && atTarget || (!atSource && !atTarget && !(value.phase === "committed" && move.remove)) || (value.phase === "committed" && atSource)) throw new HalignError(`${recordPath}: ambiguous layer move ${move.from} to ${move.to}; preserve both paths`);
             const location = atSource ? move.from : atTarget ? move.to : undefined;
-            if (location && await editTreeRevision(root, join(root, ...location.split("/"))) !== move.revision) throw new HalignError(`${location}: changed outside the interrupted source update; preserve ${recordPath}`);
+            if (location)
+            {
+                const contents: Record<string, string> = Object.create(null);
+                const revision = await editTreeRevision(root, join(root, ...location.split("/")), move.cleanup ? contents : undefined);
+                if (move.cleanup ? !isTreeSubset(contents, move.cleanup) : revision !== move.revision)
+                {
+                    throw new HalignError(`${location}: changed outside the interrupted source update; preserve ${recordPath}`);
+                }
+            }
         }
         return { atSource, atTarget };
     };
@@ -405,6 +436,16 @@ export async function recoverSourceEdits(root: string): Promise<"none" | "restor
     {
         await inspect();
         const backup = join(root, ...move.to.split("/"));
+        if (!move.cleanup)
+        {
+            const cleanup: Record<string, string> = Object.create(null);
+            if (await editTreeRevision(root, backup, cleanup) !== move.revision) throw new HalignError(`${backup}: changed before source cleanup; preserve ${recordPath}`);
+            if (!(await fs.readFile(recordPath)).equals(record)) throw new HalignError(`${recordPath}: recovery record changed before cleanup; preserve it`);
+            move.cleanup = cleanup;
+            record = Buffer.from(`${JSON.stringify({ version: 1, phase: "committed", writes, move })}\n`);
+            await atomicWrite(recordPath, record);
+        }
+        await inspect();
         await assertNoReparseTree(root, backup);
         await fs.rm(backup, { recursive: true, force: true });
     }

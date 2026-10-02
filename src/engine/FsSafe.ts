@@ -47,6 +47,12 @@ export function pathKey(path: string): string
     return process.platform === "win32" ? full.toLowerCase() : full;
 }
 
+/** Accept only removed entries from a recorded cleanup, preserving every remaining content hash. */
+export function isTreeSubset(actual: Record<string, string>, expected: Record<string, string>): boolean
+{
+    return Object.entries(actual).every(([name, hash]) => Object.hasOwn(expected, name) && expected[name] === hash);
+}
+
 /** `lstat` a path, returning `undefined` when it does not exist. */
 export async function lstatIfExists(path: string): Promise<Stats | undefined>
 {

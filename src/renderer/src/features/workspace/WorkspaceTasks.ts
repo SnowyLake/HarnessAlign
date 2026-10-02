@@ -196,9 +196,9 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             const nextName = ruleDisplayName(snapshotText(snapshot, "name", existing?.name ?? "new-option").trim() || "new-option");
             const targets = snapshotTargets(snapshot);
             const body = snapshotText(snapshot, "body");
-            let path: string;
-            path = `.harness-align/layers/${layer}/${nextName}.md`;
-            await window.appApi.workspace.saveLayerOption({ path, targets, body }, guardFor(existing?.path ?? path));
+            const path = `.harness-align/layers/${layer}/${nextName}.md`;
+            if (!existing && workspace.layerOptions[layer]?.some((option) => option.name.toLowerCase() === nextName.toLowerCase())) throw new Error(`${path}: option already exists`);
+            await window.appApi.workspace.saveLayerOption({ path, targets, body }, existing ? guardFor(existing.path) : { path, revision: null });
             if (existing && existing.name !== nextName)
             {
                 const state = useAppStore.getState();

@@ -25,6 +25,8 @@ Discover 与 Check updates 每次解析分支最新 commit. 已验证的下载�
 
 Check updates 后, 单项 Apply update 或批量 Update 会先打开 Review Skill updates. 审阅旧/新 commit, 文件新增/修改/删除/未变列表和 `SKILL.md` 增删行后, 点击 Apply reviewed versions. 旧记录没有固定 commit 时显示 Legacy source. 文本预览最多显示 16,000 字符, 实际应用仍替换完整 Skill; 删除文件也属于该版本替换的一部分.
 
+逐项应用更新时, 其他未应用项保留同一次检查的固定版本预览, 可以继续审阅并应用. 再次 Discover 或 Check updates 会清空旧更新入口; 检查失败后也需要重新检查, 不能继续应用已经失效的预览.
+
 ## 导入本机 Skills
 
 通过顶部 More > Import, 从 `%USERPROFILE%\.agents\skills` 选择已有 Skills 导入. 本地导入和部署会保留非隐藏的空目录, 跳过名称以 `.` 开头的文件和目录.

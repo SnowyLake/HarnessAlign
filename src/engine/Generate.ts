@@ -237,15 +237,18 @@ export async function readGeneratedFiles(rootPath: string): Promise<Map<string, 
 /** Content-derived state compared with saved sources and the saved Layer selection. */
 export interface GenerationStatus
 {
-    state: "current" | "stale" | "missing" | "partial";
+    state: "current" | "stale" | "missing" | "partial" | "error";
     changes: Array<{ path: string; status: "missing" | "modified" | "obsolete" }>;
+    error?: string;
 }
 
 /** Compare actual managed output bytes rather than reporting success from a previous button click. */
 export async function inspectGenerated(rootPath: string, actual?: Map<string, Buffer>): Promise<GenerationStatus>
 {
-    const expected = await buildOutputs(rootPath);
     const files = actual ?? await readGeneratedFiles(rootPath);
+    let expected: OutputMap;
+    try { expected = await buildOutputs(rootPath); }
+    catch (error) { return { state: "error", changes: [], error: errorText(error) }; }
     const changes: GenerationStatus["changes"] = [];
     for (const [path, content] of expected)
     {

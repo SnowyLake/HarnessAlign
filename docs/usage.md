@@ -60,7 +60,7 @@ Markdown 正文默认显示 Source. 点击 Body 或 Content 标题行最右侧�
 
 Config, Rule, Layer Option, Shared Rule 和 Agent 保存会校验打开时的文件内容, 包括 Save all 和编辑器内改名. 文件被外部修改或删除时会拒绝保存, 保留草稿并在 Console 显示冲突文件及版本. 新建文件也不会覆盖同时出现的同名文件. 先复制需要保留的草稿与磁盘内容进行比较, 再决定是否 Discard and reload. Reload 不会自动合并修改.
 
-树内改名前需要先保存该文件的草稿. 编辑器内修改名称和正文可以一起保存, 冲突校验发生在改名之前.
+树内对单个文件改名前需要先保存该文件的草稿. Layer Group 改名会保留并迁移其 Option 草稿和打开时的内容基线, 改名后可以继续保存; 后续外部修改仍会触发冲突. 编辑器内修改名称和正文可以一起保存, 冲突校验发生在改名之前. 新建 Layer Option 的名称不能与已有选项重名, 匹配时不区分大小写.
 
 Settings 中的 `AGENTS.md title` 只控制生成文档的一级标题, 随 Save all 一起保存.
 
@@ -98,7 +98,7 @@ Generated 的 Open in explorer 打开生成文件在 `generated/` 中所在的�
 
 点击 Setup 会先打开 Review deployment, 按路径列出 added, modified, deleted, unchanged 和 skipped. 预览不生成或部署文件. 确认后重新生成, 再按下表更新本机目录. 源内容, 目标内容或被跳过目录的状态在预览后变化时, 执行会拒绝过期预览, 请重新点击 Setup 审阅. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
 
-External changes 标记上次成功部署后被修改或删除的目标, 将被删除的额外路径, 以及没有部署基线的既有内容. 这些内容需要勾选 Overwrite modified targets and delete extra paths shown above 才能覆盖. 取消会保留目标内容. 上次成功部署的哈希保存在本机 `.harness-align/.deployment.json`, 不进入生成结果或 GitHub 同步; 正常移除未被手改的旧输出不需要额外勾选.
+External changes 标记上次成功部署后被修改或删除的目标, 将被删除的额外路径, 以及没有文件部署基线的既有内容. 新增源文件与目标手写文件同名时, 即使其所在目录已经部署过, 也需要勾选 Overwrite modified targets and delete extra paths shown above 才能覆盖. 取消会保留目标内容. 上次成功部署的哈希保存在本机 `.harness-align/.deployment.json`, 不进入生成结果或 GitHub 同步; 正常移除未被手改的旧输出不需要额外勾选.
 
 | 目标 | 更新方式 |
 | --- | --- |
@@ -113,9 +113,11 @@ Setup 只处理配置中声明且根目录已存在的 Harness. 缺失的根目�
 
 部署进度持久保存在本机 `.harness-align/.deployment-recovery.json`. 中断后重新打开应用, 未完成替换的部署会逆序还原, 已完成替换的部署会补齐基线并清理备份. 恢复也会检查当前内容: 检测到后续外部修改, junction 或无法确定归属的部分暂存内容时, 保留目标, 备份, 暂存和恢复记录并报错. 请先保存现场并比较 Console 中的路径, 不要直接删除恢复记录或覆盖备份. 恢复记录不进入 GitHub 同步.
 
+部署和 Layer 删除会在递归清理前保存清理意图. 清理只完成一部分时, 下次加载可以继续处理记录范围内未被改写的剩余内容. 剩余文件被改写或新增了记录外的路径时, 恢复会停止并保留现场.
+
 Harness 改名或删除会同时更新 Config, Rules, Layer Options 和 Agents. Layer 改名或删除会同时更新保存的选择. 这些跨文件操作先记录本机 `.harness-align/.edit-recovery.json`, 中断后在加载前还原未提交内容, 保持引用一致. 如果后续外部修改了受影响文件或移动目录, 恢复会停止并保留记录及现场; 请先比较并保存这些内容. 此记录不进入 GitHub 同步, 不影响其他未参与操作的源文件.
 
-Generated 页面显示相对已保存源内容和已保存 Layer 选择的实际状态: `current` 表示托管文件字节一致, `stale` 表示内容或 manifest 过期, `missing` 表示尚无输出, `partial` 表示缺失文件或无效 manifest. 状态列出需要更新的路径, 不把上次点击成功当作当前完整状态. Reload 重新检查磁盘, Generate 更新结果; 本地未保存的 Layer 选择可能与保存选择不同. 未由 manifest 管理的其他文件保留, 不计入过期输出.
+Generated 页面显示相对已保存源内容和已保存 Layer 选择的实际状态: `current` 表示托管文件字节一致, `stale` 表示内容或 manifest 过期, `missing` 表示尚无输出, `partial` 表示缺失文件或无效 manifest, `error` 表示当前源内容无法生成并显示具体错误. 生成错误不会阻止加载可编辑的源文件, 可以在对应编辑器修正后重新 Generate. 状态列出需要更新的路径, 不把上次点击成功当作当前完整状态. Reload 重新检查磁盘, Generate 更新结果; 本地未保存的 Layer 选择可能与保存选择不同. 未由 manifest 管理的其他文件保留, 不计入过期输出.
 
 Skills 的 Discover 和 Check updates 每次重新解析分支 commit, 同一个来源仓库与 commit 的已验证下载及解压内容在本次会话中复用, 缓存有总量限制. Apply updates 只安装本次检查已审阅的固定 commit, 不在执行时改装分支的新版本. 再次 Discover 或检查, 来源配置变化, 或已安装 provenance 变化会使旧预览失效; 请重新检查后应用.
 

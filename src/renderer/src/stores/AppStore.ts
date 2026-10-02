@@ -318,9 +318,16 @@ export const useAppStore = create<AppState>((set) => ({
         const draft = state.editorDrafts[previousKey];
         if (!draft || previousKey === nextKey) return state;
         const editorDrafts = { ...state.editorDrafts };
+        const sourceRevisions = draft.sourceRevisions ? { ...draft.sourceRevisions } : undefined;
+        if (sourceRevisions && "path" in from && "path" in to && from.path !== to.path && Object.hasOwn(sourceRevisions, from.path))
+        {
+            sourceRevisions[to.path] = sourceRevisions[from.path]!;
+            delete sourceRevisions[from.path];
+        }
         editorDrafts[nextKey] = {
             ...draft,
             selection: to,
+            ...(sourceRevisions ? { sourceRevisions } : {}),
             baseline: name === undefined ? draft.baseline : { ...draft.baseline, name: [name] },
             current: name === undefined ? draft.current : { ...draft.current, name: [name] },
         };

@@ -9,6 +9,7 @@ import { promises as fs } from "node:fs";
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { registerHooks } from "node:module";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -16,8 +17,8 @@ import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { assertUpdateDraftsSaved, resolveWorkspaceItemFolder, setUpdateDraftState, withWorkspace, withWorkspaceForUpdate, workspaceService } from "../src/main/services/WorkspaceService.js";
 import { defaultLayerOption, harnessEffects, matchesWorkspaceSource, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
-import type { ProjectSkill, RemoteSkill, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
-import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
+import type { ProjectSkill, RemoteSkill, Workspace, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
+import { useAppStore, workspaceChangeCount, type FormSnapshot, type Selection } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
 import { DiffText } from "../src/renderer/src/components/common/DiffText.js";
 import { diffLines } from "../src/renderer/src/lib/TextDiff.js";
@@ -255,6 +256,70 @@ test("generated status follows source and actual output bytes, missing files and
     });
 });
 
+test("generation errors keep desktop sources editable and clear after the metadata is repaired", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const userProfile = process.env.USERPROFILE;
+        try
+        {
+            process.env.USERPROFILE = root;
+            const original = (await loadWorkspace(root)).agents[0]!;
+            await saveAgent(root, { ...original, harnesses: { codex: { values: [null] } } });
+            const loaded = await workspaceService.load();
+            assert.equal(loaded.agents[0]!.harnesses.codex!.values instanceof Array, true);
+            assert.equal(loaded.generationStatus.state, "error");
+            assert.match(loaded.generationStatus.error ?? "", /explorer.md.*cannot be serialized as TOML/u);
+            await assert.rejects(workspaceService.generate(), /cannot be serialized as TOML/u);
+            await workspaceService.saveAgent(original, { path: original.path, revision: loaded.sourceRevisions[original.path]! });
+            await workspaceService.generate();
+            assert.equal((await workspaceService.load()).generationStatus.state, "current");
+        }
+        finally
+        {
+            if (userProfile === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = userProfile;
+        }
+    });
+});
+
+test("Skills from one update check can be reviewed and applied individually without changing the reviewed commit", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const { zipSync } = await import("fflate");
+        const oldCommit = "7".repeat(40);
+        const reviewedCommit = "8".repeat(40);
+        const old = zipSync({ "repo/a/SKILL.md": Buffer.from("# A old\n"), "repo/b/SKILL.md": Buffer.from("# B old\n") });
+        const next = zipSync({ "repo/a/SKILL.md": Buffer.from("# A reviewed\n"), "repo/b/SKILL.md": Buffer.from("# B reviewed\n") });
+        let branch = oldCommit;
+        let requests = 0;
+        t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) =>
+        {
+            requests += 1;
+            return String(input).includes("/commits/") ? Response.json({ sha: branch }) : new Response(Buffer.from(String(input).includes(oldCommit) ? old : next));
+        });
+        await addSkillSource(root, { url: "https://github.com/sequential-update/repo" });
+        await discoverSkills(root);
+        await installSkills(root, ["a", "b"]);
+        branch = reviewedCommit;
+        const updates = await checkSkillUpdates(root);
+        const a = updates.find((item) => item.id === "a")!.previewId!;
+        const b = updates.find((item) => item.id === "b")!.previewId!;
+        const checkedRequests = requests;
+        branch = "9".repeat(40);
+        await readSkillUpdatePreview(root, a);
+        await applySkillUpdates(root, [a]);
+        await assert.rejects(readSkillUpdatePreview(root, a), /expired/u);
+        assert.equal((await readSkillUpdatePreview(root, b)).newCommit, reviewedCommit);
+        await applySkillUpdates(root, [b]);
+        assert.equal(requests, checkedRequests);
+        assert.equal(await readSkillContent(root, "b"), "# B reviewed\n");
+        assert.equal((await loadSkills(root)).find((skill) => skill.id === "b")!.origin.kind, "github");
+        await assert.rejects(applySkillUpdates(root, [b]), /expired/u);
+    });
+});
+
 test("cascaded source edits persist rollback across interruptions and refuse subsequent external changes", async (t) =>
 {
     await withProject(async (root) =>
@@ -399,6 +464,161 @@ test("committed deployment recovery completes its baseline and cleanup while pre
         assert.deepEqual(await readFile(target), deployed);
         await assert.rejects(readFile(recordPath), /ENOENT/u);
         assert.equal((await previewSetup(root, undefined, root)).changes.some((change) => change.external), false);
+    });
+});
+
+test("committed deployment cleanup resumes partial deletions and refuses changed or added backup files", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".codex", "agents"), { recursive: true });
+        await writeFile(join(root, ".codex", "agents", "a.toml"), "Old A");
+        await writeFile(join(root, ".codex", "agents", "b.toml"), "Old B");
+        await saveSharedRule(root, ".harness-align/rules/shared/new.md", "New shared");
+        const originalRemove = fs.rm;
+        let backup: string | undefined;
+        const blocked = t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) =>
+        {
+            const path = String(args[0]);
+            if (path.includes(".harness-align-backup-"))
+            {
+                if (!backup)
+                {
+                    backup = path;
+                    await unlink(join(path, "a.toml"));
+                }
+                throw new Error("Interrupted partial backup cleanup");
+            }
+            return originalRemove(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, root, undefined, true), /recovery preserved.*Interrupted partial backup cleanup/u); }
+        finally { blocked.mock.restore(); }
+        assert.ok(backup);
+        const recordPath = join(root, ".harness-align", ".deployment-recovery.json");
+        const record = await readFile(recordPath);
+        await writeFile(join(backup, "b.toml"), "Later external edit");
+        await assert.rejects(recoverDeployment(root, root), /changed outside the pending deployment/u);
+        assert.deepEqual(await readFile(recordPath), record);
+        assert.equal(await readFile(join(backup, "b.toml"), "utf8"), "Later external edit");
+        await writeFile(join(backup, "b.toml"), "Old B");
+        await writeFile(join(backup, "extra.toml"), "New external file");
+        await assert.rejects(recoverDeployment(root, root), /changed outside the pending deployment/u);
+        await unlink(join(backup, "extra.toml"));
+        await ensureUserWorkspace(root);
+        await assert.rejects(readFile(recordPath), /ENOENT/u);
+        await assert.rejects(readdir(backup), /ENOENT/u);
+        assert.equal((await previewSetup(root, undefined, root)).changes.some((change) => change.external), false);
+    });
+});
+
+test("deployment rollback resumes a partially deleted new target and preserves externally changed survivors", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await writeAgent(root, "worker");
+        await mkdir(join(root, ".codex", "agents"), { recursive: true });
+        await writeFile(join(root, ".codex", "agents", "original.toml"), "Original agent");
+        await saveSharedRule(root, ".harness-align/rules/shared/new.md", "New shared");
+        const before = await snapshot(join(root, ".codex"));
+        const target = join(root, ".codex", "agents");
+        const originalRename = fs.rename;
+        const originalRemove = fs.rm;
+        const failedSwap = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            if (String(args[0]).includes(".harness-align-stage-") && String(args[1]) === join(root, ".agents", "shared-rules")) throw new Error("Interrupted final swap");
+            return originalRename(...args);
+        });
+        let removed = false;
+        const failedCleanup = t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) =>
+        {
+            if (String(args[0]) === target)
+            {
+                if (!removed) { removed = true; await unlink(join(target, "explorer.toml")); }
+                throw new Error("Interrupted partial target cleanup");
+            }
+            return originalRemove(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, root, undefined, true), /recovery preserved.*Interrupted partial target cleanup/u); }
+        finally { failedSwap.mock.restore(); failedCleanup.mock.restore(); }
+        const survivor = join(target, "worker.toml");
+        const original = await readFile(survivor);
+        await writeFile(survivor, "External survivor edit");
+        await assert.rejects(recoverDeployment(root, root), /changed outside the pending deployment/u);
+        assert.equal(await readFile(survivor, "utf8"), "External survivor edit");
+        await writeFile(survivor, original);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await snapshot(join(root, ".codex")), before);
+        await assert.rejects(readFile(join(root, ".harness-align", ".deployment-recovery.json")), /ENOENT/u);
+    });
+});
+
+test("committed Layer removal resumes partial backup cleanup and preserves externally changed survivors", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const originalRemove = fs.rm;
+        let backup: string | undefined;
+        const blocked = t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) =>
+        {
+            const path = String(args[0]);
+            if (path.includes(".edit-backup-"))
+            {
+                if (!backup) { backup = path; await unlink(join(path, "arona.md")); }
+                throw new Error("Interrupted partial Layer cleanup");
+            }
+            return originalRemove(...args);
+        });
+        try { await assert.rejects(removeLayer(root, "soul"), /recovery preserved.*Interrupted partial Layer cleanup/u); }
+        finally { blocked.mock.restore(); }
+        assert.ok(backup);
+        const recordPath = join(root, ".harness-align", ".edit-recovery.json");
+        const record = await readFile(recordPath);
+        const survivor = join(backup, "kei.md");
+        const original = await readFile(survivor);
+        await writeFile(survivor, "External Layer edit");
+        await assert.rejects(recoverSourceEdits(root), /changed outside the interrupted source update/u);
+        assert.deepEqual(await readFile(recordPath), record);
+        assert.equal(await readFile(survivor, "utf8"), "External Layer edit");
+        await writeFile(survivor, original);
+        await writeFile(join(backup, "new.md"), "External new option");
+        await assert.rejects(recoverSourceEdits(root), /changed outside the interrupted source update/u);
+        await unlink(join(backup, "new.md"));
+        await ensureUserWorkspace(root);
+        assert.deepEqual((await loadConfig(root)).layers, []);
+        await assert.rejects(readFile(recordPath), /ENOENT/u);
+        await assert.rejects(readdir(backup), /ENOENT/u);
+        assert.equal(Object.hasOwn((await loadWorkspace(root)).layerOptions, "soul"), false);
+    });
+});
+
+test("new source paths colliding with manually created deployment files always require overwrite approval", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "collision-home");
+        await mkdir(join(home, ".codex"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared base");
+        const skillSource = join(root, "skill-source");
+        await mkdir(skillSource);
+        await writeFile(join(skillSource, "SKILL.md"), "# Demo\n");
+        await installSkillFromDirectory(root, "demo", skillSource, { kind: "local", contentHash: "" });
+        await setup(root, undefined, home);
+        const targets = [".codex/agents/worker.toml", ".agents/shared-rules/worker.md", ".agents/skills/demo/worker.md"];
+        for (const path of targets) await writeFile(join(home, path), "Hand-written target");
+        await saveAgent(root, { path: ".harness-align/agents/worker.md", name: "worker", description: "Worker", harnesses: { codex: {} }, body: "Generated worker" });
+        await saveSharedRule(root, ".harness-align/rules/shared/worker.md", "Generated shared");
+        await writeFile(join(root, ".harness-align", "skills", "demo", "worker.md"), "Generated Skill asset");
+        const preview = await previewSetup(root, undefined, home);
+        for (const path of targets)
+        {
+            const change = preview.changes.find((item) => item.path === `~/${path}`)!;
+            assert.equal(change.status, "modified");
+            assert.match(change.external ?? "", /no deployment baseline/u);
+        }
+        await assert.rejects(setup(root, undefined, home, preview.revision), /explicit overwrite approval/u);
+        for (const path of targets) assert.equal(await readFile(join(home, path), "utf8"), "Hand-written target");
+        await setup(root, undefined, home, preview.revision, true);
+        for (const path of targets) assert.notEqual(await readFile(join(home, path), "utf8"), "Hand-written target");
     });
 });
 
@@ -641,6 +861,87 @@ test("opened source guards reject external edits, deletion, creation races, and 
             assert.deepEqual(useAppStore.getState().editorDrafts[`rule:${rule.path}`]?.current.body, ["Draft"]);
         }
         finally { useAppStore.setState(previous); }
+    });
+});
+
+test("Renderer option creation rejects existing names and files created after the form was opened", async () =>
+{
+    const { persistEditorSnapshot } = await loadRendererTasks();
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        try
+        {
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, harnessRoots: [] };
+            initial.resetWorkspace(workspace);
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                saveLayerOption: (input: Parameters<typeof workspaceService.saveLayerOption>[0], guard: Parameters<typeof workspaceService.saveLayerOption>[1]) => saveLayerOption(root, input, guard),
+            } } } });
+            const selection = { kind: "layer-option-new" as const, layer: "soul" };
+            const original = await readFile(join(root, ".harness-align", "layers", "soul", "arona.md"));
+            for (const name of ["arona", "Arona"])
+            {
+                await assert.rejects(persistEditorSnapshot(workspace, selection, { name: [name], body: ["Overwrite"], targets: [] }), /option already exists/u);
+                assert.deepEqual(await readFile(join(root, ".harness-align", "layers", "soul", "arona.md")), original);
+            }
+            const racePath = ".harness-align/layers/soul/race.md";
+            await saveLayerOption(root, { path: racePath, targets: [], body: "External new option" });
+            await assert.rejects(persistEditorSnapshot(workspace, selection, { name: ["race"], body: ["Overwrite"], targets: [] }), /content changed since it was opened/u);
+            assert.equal((await loadWorkspace(root)).layerOptions.soul!.find((item) => item.path === racePath)!.body, "External new option\n");
+            await persistEditorSnapshot(workspace, selection, { name: ["unique"], body: ["New option"], targets: [] });
+            assert.equal((await loadWorkspace(root)).layerOptions.soul!.find((item) => item.name === "unique")!.body, "New option\n");
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
+    });
+});
+
+test("Renderer Layer rename migrates opened draft revisions and still rejects later external edits", async () =>
+{
+    const { persistEditorSnapshot, persistLayerRename } = await loadRendererTasks();
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        try
+        {
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, harnessRoots: [] };
+            initial.resetWorkspace(workspace);
+            const option = workspace.layerOptions.soul!.find((item) => item.name === "arona")!;
+            const originalKey = `layer-option:${option.path}`;
+            initial.setEditorDraft(originalKey, { selection: { kind: "layer-option", path: option.path }, baseline: { body: [option.body] },
+                current: { name: [option.name], body: ["Retained draft"], targets: option.targets }, sourceRevisions: workspace.sourceRevisions });
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                renameLayer: (from: string, to: string) => renameLayer(root, from, to),
+                saveLayerOption: (input: Parameters<typeof workspaceService.saveLayerOption>[0], guard: Parameters<typeof workspaceService.saveLayerOption>[1]) => saveLayerOption(root, input, guard),
+            } } } });
+            await persistLayerRename("soul", "renamed");
+            const path = ".harness-align/layers/renamed/arona.md";
+            const draft = useAppStore.getState().editorDrafts[`layer-option:${path}`]!;
+            assert.equal(draft.sourceRevisions?.[path], workspace.sourceRevisions[option.path]);
+            assert.equal(draft.sourceRevisions?.[option.path], undefined);
+            assert.ok(workspace.sourceRevisions[option.path]);
+            const nextWorkspace = { ...workspace, ...await loadWorkspace(root) };
+            const original = await readFile(join(root, path));
+            await writeFile(join(root, path), "External post-rename edit");
+            await assert.rejects(persistEditorSnapshot(nextWorkspace, draft.selection, draft.current), /content changed since it was opened/u);
+            assert.equal(await readFile(join(root, path), "utf8"), "External post-rename edit");
+            assert.deepEqual(useAppStore.getState().editorDrafts[`layer-option:${path}`]!.current, draft.current);
+            await writeFile(join(root, path), original);
+            await persistEditorSnapshot(nextWorkspace, draft.selection, draft.current);
+            assert.equal((await loadWorkspace(root)).layerOptions.renamed!.find((item) => item.path === path)!.body, "Retained draft\n");
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
     });
 });
 
@@ -1866,6 +2167,27 @@ test("sync preserves legacy skill provenance and rejects unavailable or unsafe r
         await assert.rejects(validateSyncSources(portable, true), /safe GitHub owner/u);
     });
 });
+
+/** Load actual Renderer workflows with Node 24 type stripping, sharing the compiled Store and stubbing only UI feedback. */
+async function loadRendererTasks(): Promise<{
+    persistEditorSnapshot(workspace: Workspace, selection: Selection, snapshot: FormSnapshot): Promise<unknown>;
+    persistLayerRename(from: string, to: string): Promise<void>;
+}>
+{
+    const source = new URL("../../src/renderer/src/features/workspace/WorkspaceTasks.ts", import.meta.url).href;
+    const dependencies = new Map([
+        ["@/lib/Utils", new URL("../src/renderer/src/lib/Utils.js", import.meta.url).href],
+        ["@/stores/AppStore", new URL("../src/renderer/src/stores/AppStore.js", import.meta.url).href],
+        ["@/components/common/Feedback", "data:text/javascript,export function showError(){};export function showSuccess(){};export function writeLog(){}"],
+    ]);
+    const hooks = registerHooks({ resolve: (specifier, context, nextResolve) =>
+    {
+        const url = context.parentURL === source ? dependencies.get(specifier) : undefined;
+        return url ? { url, shortCircuit: true } : nextResolve(specifier, context);
+    } });
+    try { return await import(source); }
+    finally { hooks.deregister(); }
+}
 
 /** Create a temporary `.harness-align` project, run the case, then delete the directory. */
 async function withProject(run: (root: string) => Promise<void>): Promise<void>

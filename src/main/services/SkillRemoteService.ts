@@ -546,6 +546,7 @@ export async function applySkillUpdates(root: string, previewIds: readonly strin
     }
     if (selected.length === 0) return "No skill updates to apply.\n";
     const report = await installCachedSkills(root, selected.map((skill) => skill.id), selected);
-    updateReview = undefined;
+    updateReview.items = updateReview.items.filter((item) => !previewIds.includes(item.skill.previewId));
+    if (updateReview.items.length === 0) updateReview = undefined;
     return report;
 }

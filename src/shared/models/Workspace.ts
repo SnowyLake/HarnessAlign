@@ -152,8 +152,9 @@ export interface GeneratedFile
 /** Actual managed output status relative to saved sources, independent of operation history. */
 export interface GenerationStatus
 {
-    state: "current" | "stale" | "missing" | "partial";
+    state: "current" | "stale" | "missing" | "partial" | "error";
     changes: Array<{ path: string; status: "missing" | "modified" | "obsolete" }>;
+    error?: string;
 }
 
 /** Existing workspace file identity whose containing folder may be opened by Main. */

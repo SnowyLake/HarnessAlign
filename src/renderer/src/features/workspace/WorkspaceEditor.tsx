@@ -875,10 +875,11 @@ export function WorkspaceEditor()
             <div className="workspace-scroll" ref={scrollRef}>
                 <div key={revision} className="workspace-editor-page">
                     {selection.kind === "generated" || selection.kind === "generated-file" ? <Alert showIcon
-                        type={workspace.generationStatus.state === "current" ? "success" : "warning"}
+                        type={workspace.generationStatus.state === "current" ? "success" : workspace.generationStatus.state === "error" ? "error" : "warning"}
                         title={`Saved source status: ${workspace.generationStatus.state}`}
                         description={<Space orientation="vertical">
                             <Typography.Text>Compared with saved sources and saved Layer choices. Reload checks disk changes; Generate refreshes output.</Typography.Text>
+                            {workspace.generationStatus.error ? <Typography.Text type="danger">{workspace.generationStatus.error}</Typography.Text> : null}
                             {workspace.generationStatus.changes.map((change) => <Typography.Text key={change.path}>{change.status}: {change.path}</Typography.Text>)}
                         </Space>} /> : null}
                     {editor}

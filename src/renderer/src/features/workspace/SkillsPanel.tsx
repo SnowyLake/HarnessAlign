@@ -441,6 +441,8 @@ export function SkillsPanel()
         setDiscovered([]);
         setHasDiscovered(false);
         setSelectedRemoteIdentity(undefined);
+        setUpdates([]);
+        setUpdateDetails([]);
     }, [sourceKey]);
 
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
@@ -472,6 +474,8 @@ export function SkillsPanel()
     {
         void runCommand(async () =>
         {
+            setUpdates([]);
+            setUpdateDetails([]);
             const skills = await window.appApi.workspace.discoverSkills();
             setDiscovered(skills);
             setHasDiscovered(true);
@@ -500,6 +504,8 @@ export function SkillsPanel()
     {
         void runCommand(async () =>
         {
+            setUpdates([]);
+            setUpdateDetails([]);
             const next = await window.appApi.workspace.checkSkillUpdates();
             setUpdates(next);
             setDiscovered([]);

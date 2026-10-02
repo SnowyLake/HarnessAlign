@@ -6,7 +6,7 @@
 import { promises as fs } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { atomicWrite, ensureRegularSource, lstatIfExists, pathKey, resolveUserHome } from "./FsSafe.js";
+import { atomicWrite, ensureRegularSource, isTreeSubset, lstatIfExists, pathKey, resolveUserHome } from "./FsSafe.js";
 import { buildOutputs, generate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
 import { type Harness, type LayerSelection, type OutputMap, assertWindowsSafeName, codePointCompare, errorText, HalignError, isRecord, valueText } from "./Model.js";
@@ -101,6 +101,7 @@ interface DeploymentEntry
     before: Record<string, string>;
     after: Record<string, string>;
     progress: "pending" | "prepared" | "backed-up" | "installed" | "restored";
+    cleanup?: Partial<Record<"target" | "backup" | "temporary", "before" | "after">>;
 }
 
 /** Durable progress whose paths never select a user profile during recovery. */
@@ -309,7 +310,19 @@ async function deploymentJournal(root: string, home: string, value: unknown, lab
             if (name === "before" && Object.keys(tree).length === 0) continue;
             if (isFile ? Object.keys(tree).length !== 1 || !/^[a-f0-9]{64}$/u.test(tree["."] ?? "") : tree["."] !== "directory") throw new HalignError(`${label}: ${target} ${name} must describe a ${isFile ? "regular file" : "directory"}`);
         }
-        entries.push({ target, temporary, backup, before, after, progress });
+        const cleanup: NonNullable<DeploymentEntry["cleanup"]> = {};
+        if (item.cleanup !== undefined)
+        {
+            if (!isRecord(item.cleanup)) throw new HalignError(`${label}: expected cleanup intents`);
+            for (const [name, tree] of Object.entries(item.cleanup))
+            {
+                if (name === "backup" && tree === "before" && value.phase === "committed") cleanup.backup = tree;
+                else if (name === "temporary" && tree === "after") cleanup.temporary = tree;
+                else if (name === "target" && (tree === "before" || tree === "after") && value.phase === "applying") cleanup.target = tree;
+                else throw new HalignError(`${label}: invalid ${name} cleanup intent ${valueText(tree)} for phase ${String(value.phase)}`);
+            }
+        }
+        entries.push({ target, temporary, backup, before, after, progress, ...(item.cleanup !== undefined ? { cleanup } : {}) });
     }
     const baselineBefore = value.baselineBefore === null ? null : recoveryBytes(value.baselineBefore, label).toString("base64");
     const baselineAfter = recoveryBytes(value.baselineAfter, label).toString("base64");
@@ -355,10 +368,18 @@ export async function recoverDeployment(rootPath: string, userProfile = process.
         const temporary = await snapshotTree(home, join(home, ...entry.temporary.split("/")));
         const hasBackup = Object.keys(backup).length > 0;
         const hasTarget = Object.keys(target).length > 0;
-        const stageValid = journal.phase === "staging" ? Object.entries(temporary).every(([name, hash]) => Object.hasOwn(entry.after, name) && entry.after[name] === hash) : Object.keys(temporary).length === 0 || sameTree(temporary, entry.after);
-        const targetValid = journal.phase === "committed" ? sameTree(target, entry.after) : sameTree(target, entry.before) || (journal.phase === "applying" && (sameTree(target, entry.after) || (!hasTarget && hasBackup)));
+        const stageValid = journal.phase === "staging" || entry.cleanup?.temporary ? isTreeSubset(temporary, entry.after) : Object.keys(temporary).length === 0 || sameTree(temporary, entry.after);
+        const targetCleanup = entry.cleanup?.target;
+        const targetValid = journal.phase === "committed" ? sameTree(target, entry.after)
+            : sameTree(target, entry.before) || (journal.phase === "applying"
+                && (sameTree(target, entry.after) || (!hasTarget && hasBackup) || (targetCleanup && isTreeSubset(target, entry[targetCleanup]))));
+        const backupValid = !hasBackup || (entry.cleanup?.backup ? isTreeSubset(backup, entry.before) : sameTree(backup, entry.before));
         const missingBackup = journal.phase === "applying" && !hasBackup && Object.keys(entry.before).length > 0 && !sameTree(target, entry.before);
-        if (!stageValid || !targetValid || (hasBackup && !sameTree(backup, entry.before)) || missingBackup || (journal.phase === "staging" && hasBackup)) throw new HalignError(`${join(home, entry.target)} (backup: ${join(home, entry.backup)}, stage: ${join(home, entry.temporary)}): changed outside the pending deployment; preserve ${recordPath}`);
+        if (!stageValid || !targetValid || !backupValid || missingBackup || (journal.phase === "staging" && hasBackup))
+        {
+            throw new HalignError(`${join(home, entry.target)} (backup: ${join(home, entry.backup)}, stage: ${join(home, entry.temporary)}): ` +
+                                 `changed outside the pending deployment; preserve ${recordPath}`);
+        }
         return { target, backup, temporary, hasBackup, hasTarget };
     };
     await Promise.all(journal.entries.map(inspect));
@@ -371,25 +392,36 @@ export async function recoverDeployment(rootPath: string, userProfile = process.
         if (journal.baselineBefore === null) await fs.unlink(baselinePath);
         else await atomicWrite(baselinePath, Buffer.from(journal.baselineBefore, "base64"));
     }
+    /** Persist the exact authorized deletion before allowing a partially removed tree on retry. */
+    const cleanup = async (entry: DeploymentEntry, kind: "target" | "backup" | "temporary", tree: Record<string, string>): Promise<void> =>
+    {
+        if (!entry.cleanup?.[kind])
+        {
+            entry.cleanup ??= {};
+            entry.cleanup[kind] = kind === "backup" || (kind === "target" && sameTree(tree, entry.before)) ? "before" : "after";
+            record = await persistDeploymentJournal(root, journal, record);
+        }
+        await inspect(entry);
+        await removeDeploymentPath(home, join(home, ...entry[kind].split("/")));
+    };
     for (const entry of [...journal.entries].reverse())
     {
         const state = await inspect(entry);
         const target = join(home, ...entry.target.split("/"));
         const backup = join(home, ...entry.backup.split("/"));
-        const temporary = join(home, ...entry.temporary.split("/"));
         if (journal.phase !== "committed")
         {
             if (state.hasBackup)
             {
-                if (state.hasTarget) await removeDeploymentPath(home, target);
+                if (state.hasTarget) await cleanup(entry, "target", state.target);
                 await fs.rename(backup, target);
             }
-            else if (state.hasTarget && !sameTree(state.target, entry.before)) await removeDeploymentPath(home, target);
+            else if (state.hasTarget && !sameTree(state.target, entry.before)) await cleanup(entry, "target", state.target);
             entry.progress = "restored";
             record = await persistDeploymentJournal(root, journal, record);
         }
-        else if (state.hasBackup) await removeDeploymentPath(home, backup);
-        if (Object.keys(state.temporary).length > 0) await removeDeploymentPath(home, temporary);
+        else if (state.hasBackup) await cleanup(entry, "backup", state.backup);
+        if (Object.keys(state.temporary).length > 0) await cleanup(entry, "temporary", state.temporary);
     }
     await ensureRegularSource(root, recordPath);
     if (!(await fs.readFile(recordPath)).equals(record)) throw new HalignError(`${recordPath}: recovery record changed before finalization; preserve it`);
@@ -464,7 +496,7 @@ function scopeChanges(path: string, before: Record<string, string>, after: Recor
         const status: SetupChange["status"] = !Object.hasOwn(before, name) ? Object.hasOwn(after, name) ? "added" : "unchanged" : !Object.hasOwn(after, name) ? "deleted" : before[name] === after[name] ? "unchanged" : "modified";
         const external = previous && Object.hasOwn(previous, name) && previous[name] !== before[name] ? "Changed since last deployment"
             : status === "deleted" && (!previous || !Object.hasOwn(previous, name)) ? "Extra path will be deleted"
-                : !previous && status === "modified" ? "Existing content has no deployment baseline" : undefined;
+                : status === "modified" && (!previous || !Object.hasOwn(previous, name)) ? "Existing content has no deployment baseline" : undefined;
         return { path: name === "." ? path : `${path}/${name}`, status, ...(external ? { external } : {}) };
     });
 }
