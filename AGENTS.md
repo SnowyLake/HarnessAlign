@@ -140,8 +140,9 @@
 - `setup` 只更新配置中声明且根目录已经存在的 Harness. 不因部署而创建缺失的 Harness 根目录. 桌面壳的 Setup 按钮遵守同一规则.
 - 对已启用 Harness, `setup` 替换其 `agents` 目录并更新根 `AGENTS.md`. 没有生成 Subagent 时仍把目标 `agents/` 替换为空目录.
 - `setup` 用完整目录替换更新 `%USERPROFILE%\.agents\shared-rules`.
-- `setup` 按 skill id 覆盖部署 `%USERPROFILE%\.agents\skills\<id>\`, 不删除无关兄弟目录, 也不复制 `index.json`.
-- 缺失, 空, 或仅有 `index.json` 的 `.harness-align/skills/` 时, skills 部署跳过并成功; `shared-rules` 仍为必需.
+- `setup` 按 skill id 覆盖部署 `%USERPROFILE%\.agents\skills\<id>\`, 删除归属 lock 记录但源中已移除的 Skill, 不删除未记录的无关兄弟目录, 也不复制 `index.json`.
+- `%USERPROFILE%\.agents\.harness-align.lock.json` 使用版本 `1` 和 `scopes` 内容哈希映射, 只接受 `.agents/shared-rules` 与合法 `.agents/skills/<id>` 范围. lock 缺失时不从旧基线或现有目录推断归属. lock 更新与受管理 Skill 删除进入同一部署预览和恢复流程, 不进入生成结果或同步快照; Harness `config_path` 不得占用此 lock 路径及其子路径.
+- 缺失, 空, 或仅有 `index.json` 的 `.harness-align/skills/` 仍清理 lock 中的过期 Skill; 没有待清理项时 skills 部署跳过并成功; `shared-rules` 仍为必需.
 - 部署前必须验证解析后的目标位于 `USERPROFILE` 或项目生成目录内, 并拒绝既有 symlink 或 junction.
 - `setup` 相关验证只使用测试构造的临时 `USERPROFILE`, 不触碰开发机上的真实用户目录.
 - 不递归删除含有 reparse point 的部署目标.

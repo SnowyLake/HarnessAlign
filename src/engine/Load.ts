@@ -311,6 +311,10 @@ export function validateConfig(value: unknown): Config
         {
             throw new HalignError(`${path}: harness config_path must not use the managed skills target, got ${valueText(harness.configPath)}`);
         }
+        if (foldedPath === ".agents/.harness-align.lock.json" || foldedPath.startsWith(".agents/.harness-align.lock.json/"))
+        {
+            throw new HalignError(`${path}: harness config_path must not use the deployment ownership lock, got ${valueText(harness.configPath)}`);
+        }
         if (foldedPath === ".harness-align" || foldedPath.startsWith(".harness-align/"))
         {
             throw new HalignError(`${path}: harness config_path must not use the managed config directory, got ${valueText(harness.configPath)}`);

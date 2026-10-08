@@ -39,9 +39,11 @@ Check updates 后, 单项 Apply update 或批量 Update 会先打开 Review Skil
 
 ## 部署到用户目录
 
-安装或导入后, 点击 Setup, 将 `.harness-align/skills/` 中的内容部署到 `%USERPROFILE%\.agents\skills\<id>\`. 同名 Skill 目录会被覆盖, 无关 Skills 会保留, `index.json` 不会复制过去.
+安装或导入后, 点击 Setup, 将 `.harness-align/skills/` 中的内容部署到 `%USERPROFILE%\.agents\skills\<id>\`. 同名 Skill 目录会被覆盖, 无关 Skills 会保留, `index.json` 不会复制过去. 本次部署的归属和内容哈希记录在 `%USERPROFILE%\.agents\.harness-align.lock.json`.
 
-Skills 安装与导入直接生效, 编辑 `SKILL.md` 需要保存. Setup 只部署已经安装且已保存的内容. 如果没有项目 Skills, 或目录中只有 `index.json`, 会跳过 Skills 部署并视为成功. shared-rules 仍然必需, 详见[生成和部署](usage.md#生成和部署).
+Skills 安装与导入直接生效, 编辑 `SKILL.md` 需要保存. Setup 只部署已经安装且已保存的内容. Remove 移除项目 Skill 后, 下次 Setup 会删除 lock 记录的部署副本, 删除最后一个 Skill 也会清理. 被手改或含有额外文件的目标需要在预览中确认; 未记录的其他来源 Skills 会保留. 首次使用或 lock 缺失时不追认历史部署副本, 应先部署需要管理的 Skills 建立归属记录.
+
+没有项目 Skills (包括目录缺失, 为空或只有 `index.json`) 且 lock 中没有待清理 Skill 时, 跳过 Skills 部署并视为成功. shared-rules 仍然必需, 详见[生成和部署](usage.md#生成和部署).
 
 ## 多设备同步时的版本
 

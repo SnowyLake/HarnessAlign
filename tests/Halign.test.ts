@@ -3105,6 +3105,10 @@ test("skill_sources config omit, write, unknown field, duplicates, version, and 
             ...config,
             harnesses: [{ ...config.harnesses[0], config_path: ".agents/skills/nested" }],
         })), /managed skills target/u);
+        for (const configPath of [".agents/.harness-align.lock.json", ".agents/.HARNESS-ALIGN.lock.json/nested"])
+        {
+            assert.throws(() => validateConfig({ ...config, harnesses: [{ ...config.harnesses[0], config_path: configPath }] }), /deployment ownership lock/u);
+        }
         await saveConfig(root, { ...withSources, skillSources: [] });
         const omitted = JSON.parse(await readFile(join(root, ".harness-align", "config.json"), "utf8")) as { skill_sources?: unknown };
         assert.equal(omitted.skill_sources, undefined);
@@ -3350,6 +3354,183 @@ test("setup overwrites same-name skills and keeps unrelated siblings", async () 
         assert.equal(await readFile(join(userProfile, ".agents", "skills", "unrelated", "SKILL.md"), "utf8"), "keep\n");
         assert.ok(reportSetup(result).includes(`Updated skills at ${join(userProfile, ".agents", "skills")}`));
         assert.ok(reportSetup(result).includes("  demo"));
+    });
+});
+
+test("setup lock removes retired skills and shared rules while preserving untracked skills", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "lock-home");
+        await mkdir(join(home, ".agents", "skills", "unrelated"), { recursive: true });
+        await writeFile(join(home, ".agents", "skills", "unrelated", "SKILL.md"), "Keep");
+        await saveSharedRule(root, ".harness-align/rules/shared/old.md", "Old shared");
+        const source = join(root, "incoming");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Demo\n");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" });
+        await setup(root, undefined, home);
+        const lockPath = join(home, ".agents", ".harness-align.lock.json");
+        const lock = JSON.parse(await readFile(lockPath, "utf8")) as { scopes: Record<string, unknown> };
+        assert.deepEqual(Object.keys(lock.scopes), [".agents/shared-rules", ".agents/skills/demo"]);
+        await removeSkill(root, "demo");
+        await unlink(join(root, ".harness-align", "rules", "shared", "old.md"));
+        const preview = await previewSetup(root, undefined, home);
+        assert.equal(preview.changes.find((item) => item.path === "~/.agents/skills/demo")?.status, "deleted");
+        assert.equal(preview.changes.find((item) => item.path.endsWith("/old.md"))?.status, "deleted");
+        assert.equal(preview.changes.some((item) => item.external), false);
+        const result = await setup(root, undefined, home, preview.revision);
+        assert.equal(result.skills.skipped, false);
+        assert.deepEqual(result.skills.removedIds, ["demo"]);
+        assert.match(reportSetup(result), /Removed demo/u);
+        await assert.rejects(readdir(join(home, ".agents", "skills", "demo")), /ENOENT/u);
+        assert.deepEqual(await readdir(join(home, ".agents", "shared-rules")), []);
+        assert.equal(await readFile(join(home, ".agents", "skills", "unrelated", "SKILL.md"), "utf8"), "Keep");
+        assert.deepEqual(Object.keys((JSON.parse(await readFile(lockPath, "utf8")) as typeof lock).scopes), [".agents/shared-rules"]);
+        assert.equal((await setup(root, undefined, home)).skills.skipped, true);
+    });
+});
+
+test("missing locks preserve historical skills and recorded ownership cleans up missing source directories", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "lock-home");
+        await mkdir(home);
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared");
+        const source = join(root, "incoming");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Demo\n");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" });
+        await setup(root, undefined, home);
+        const lockPath = join(home, ".agents", ".harness-align.lock.json");
+        const lock = await readFile(lockPath);
+        await rename(join(root, ".harness-align", "skills"), join(root, "removed-sources"));
+        await unlink(lockPath);
+        assert.equal((await setup(root, undefined, home)).skills.skipped, true);
+        const target = join(home, ".agents", "skills", "demo");
+        assert.equal(await readFile(join(target, "SKILL.md"), "utf8"), "# Demo\n");
+        await writeFile(lockPath, lock);
+        assert.deepEqual((await setup(root, undefined, home)).skills.removedIds, ["demo"]);
+        await assert.rejects(readdir(target), /ENOENT/u);
+    });
+});
+
+test("setup lock validates ownership, preview freshness and external edits before retired skill deletion", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "lock-home");
+        await mkdir(home);
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared");
+        const source = join(root, "incoming");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Demo\n");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" });
+        await setup(root, undefined, home);
+        await removeSkill(root, "demo");
+        const lockPath = join(home, ".agents", ".harness-align.lock.json");
+        const lock = await readFile(lockPath);
+        const preview = await previewSetup(root, undefined, home);
+        await writeFile(lockPath, `${lock.toString("utf8")}\n`);
+        await assert.rejects(setup(root, undefined, home, preview.revision), /preview expired/u);
+        for (const scopes of [{ "../outside": { ".": "directory" } }, { ".agents/skills/../outside": { ".": "directory" } }, { ".agents/skills/demo": {} }])
+        {
+            await writeFile(lockPath, JSON.stringify({ version: 1, scopes }));
+            const before = await snapshot(home);
+            await assert.rejects(setup(root, undefined, home));
+            assert.deepEqual(await snapshot(home), before);
+        }
+        await unlink(lockPath);
+        await symlink(join(home, ".agents", "skills"), lockPath, "junction");
+        await assert.rejects(previewSetup(root, undefined, home), /reparse/u);
+        await unlink(lockPath);
+        await writeFile(lockPath, lock);
+        const target = join(home, ".agents", "skills", "demo");
+        const held = join(home, "held-demo");
+        await rename(target, held);
+        await symlink(held, target, "junction");
+        await assert.rejects(setup(root, undefined, home), /reparse/u);
+        await unlink(target);
+        await rename(held, target);
+        await writeFile(join(target, "SKILL.md"), "Manual edit");
+        const edited = await previewSetup(root, undefined, home);
+        assert.match(edited.changes.find((item) => item.path.endsWith("demo/SKILL.md"))?.external ?? "", /Changed since last deployment/u);
+        await assert.rejects(setup(root, undefined, home, edited.revision), /explicit overwrite approval/u);
+        assert.deepEqual(await readFile(lockPath), lock);
+        await setup(root, undefined, home, edited.revision, true);
+        await assert.rejects(readdir(target), /ENOENT/u);
+    });
+});
+
+test("retired skill deletion and ownership lock recover together after interrupted replacement and cleanup", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "lock-home");
+        await mkdir(home);
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared");
+        const source = join(root, "incoming");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Demo\n");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" });
+        await setup(root, undefined, home);
+        await removeSkill(root, "demo");
+        const lockPath = join(home, ".agents", ".harness-align.lock.json");
+        const oldLock = await readFile(lockPath);
+        const target = join(home, ".agents", "skills", "demo");
+        const originalRename = fs.rename;
+        const blockedSwap = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            if (String(args[0]).includes(".harness-align-stage-") && String(args[1]) === lockPath) throw new Error("Interrupted lock replacement");
+            if (String(args[0]).includes(".harness-align-backup-") && String(args[1]) === target) throw new Error("Interrupted skill restore");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, home), /recovery preserved.*Interrupted skill restore/u); }
+        finally { blockedSwap.mock.restore(); }
+        assert.equal(await recoverDeployment(root, home), "restored");
+        assert.deepEqual(await readFile(lockPath), oldLock);
+        assert.equal(await readFile(join(target, "SKILL.md"), "utf8"), "# Demo\n");
+        const originalRemove = fs.rm;
+        const blockedCleanup = t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) =>
+        {
+            if (String(args[0]).includes(join("skills", ".harness-align-backup-"))) throw new Error("Interrupted lock cleanup");
+            return originalRemove(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, home), /recovery preserved.*Interrupted lock cleanup/u); }
+        finally { blockedCleanup.mock.restore(); }
+        const newLock = await readFile(lockPath);
+        await writeFile(lockPath, "External lock edit");
+        await assert.rejects(recoverDeployment(root, home), /changed outside/u);
+        await writeFile(lockPath, newLock);
+        assert.equal(await recoverDeployment(root, home), "completed");
+        await assert.rejects(readdir(target), /ENOENT/u);
+        assert.equal(Object.hasOwn((JSON.parse(newLock.toString("utf8")) as { scopes: Record<string, unknown> }).scopes, ".agents/skills/demo"), false);
+        assert.equal((await previewSetup(root, undefined, home)).changes.some((item) => item.status === "deleted"), false);
+    });
+});
+
+test("setup refuses oversized recovery records before replacing targets or publishing a journal", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "lock-home");
+        await mkdir(home);
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared");
+        await setup(root, undefined, home);
+        const tree = Object.fromEntries([[".", "directory"], ...Array.from({ length: 65000 }, (_, index) => [`assets/document-${String(index).padStart(5, "0")}.md`, "a".repeat(64)])]);
+        const lockPath = join(home, ".agents", ".harness-align.lock.json");
+        const lock = JSON.stringify({ version: 1, scopes: { ".agents/skills/demo": tree } }, null, 2);
+        assert.ok(Buffer.byteLength(lock) < 8 * 1024 * 1024);
+        await writeFile(lockPath, lock);
+        const baselinePath = join(root, ".harness-align", ".deployment.json");
+        const baseline = JSON.stringify({ version: 1, scopes: { ".agents/skills/demo": tree, ".inactive/agents": tree } }, null, 2);
+        await writeFile(baselinePath, baseline);
+        const before = await snapshot(home);
+        await assert.rejects(setup(root, undefined, home, undefined, true), /recovery record including cleanup progress must not exceed 32 MiB/u);
+        assert.deepEqual(await snapshot(home), before);
+        assert.equal(await readFile(baselinePath, "utf8"), baseline);
+        await assert.rejects(readFile(join(root, ".harness-align", ".deployment-recovery.json")), /ENOENT/u);
     });
 });
 

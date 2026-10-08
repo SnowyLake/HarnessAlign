@@ -102,7 +102,7 @@
 | `agent_extension` | 文件扩展名, 不含点或路径分隔符. 名称规则见[名称和大小写](#名称和大小写) |
 | `instructions_field` | TOML Harness 必填, 用于保存共享 Markdown 正文; YAML Harness 不使用 |
 
-不同 `config_path` 不能重叠, 也不能占用 `.agents/shared-rules`, `.agents/skills` 或 `.harness-align`. Setup 只更新已经存在的 Harness 根目录, 详见[生成和部署](usage.md#生成和部署).
+不同 `config_path` 不能重叠, 也不能占用 `.agents/shared-rules`, `.agents/skills`, `.agents/.harness-align.lock.json` 或 `.harness-align`. Setup 只更新已经存在的 Harness 根目录, 详见[生成和部署](usage.md#生成和部署).
 
 ### Layer 字段
 

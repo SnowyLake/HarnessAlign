@@ -118,13 +118,16 @@ External changes 标记上次成功部署后被修改或删除的目标, 将被�
 | `%USERPROFILE%\<config_path>\AGENTS.md` | 替换为本次生成的规则 |
 | `%USERPROFILE%\<config_path>\agents\` | 整个目录替换为本次生成的 Subagent; 没有生成项时替换为空目录 |
 | `%USERPROFILE%\.agents\shared-rules\` | 整个目录替换为 `.harness-align/rules/shared/` 的内容 |
-| `%USERPROFILE%\.agents\skills\<id>\` | 按 Skill id 覆盖同名目录, 保留无关 Skills, 不复制 `index.json` |
+| `%USERPROFILE%\.agents\skills\<id>\` | 按 Skill id 覆盖同名目录, 删除 lock 记录且源中已移除的 Skill, 保留无关 Skills, 不复制 `index.json` |
+| `%USERPROFILE%\.agents\.harness-align.lock.json` | 记录本应用部署的 Shared Rules 和 Skill 目录及内容哈希, 随部署更新 |
 
-Setup 只处理配置中声明且根目录已存在的 Harness. 缺失的根目录会被跳过, 需要先由对应助手初始化. `generated/` 中的未知文件不会部署. 没有已安装 Skills 时会跳过 Skills 部署, shared-rules 仍然必需.
+Setup 只处理配置中声明且根目录已存在的 Harness. 缺失的根目录会被跳过, 需要先由对应助手初始化. `generated/` 中的未知文件不会部署. 没有已安装 Skills 且 lock 中没有待清理 Skill 时会跳过 Skills 部署, shared-rules 仍然必需.
+
+`.agents/.harness-align.lock.json` 是部署归属清单. 从项目中移除 Skill 后, 下次 Setup 会在预览中列出对应目录的删除项; 目标被手工修改或增加文件时, 仍需明确确认覆盖和删除. 首次使用或 lock 缺失时, 只记录本次实际部署的 Skill, 不根据目录名或旧 `.deployment.json` 推断历史归属, 因而不会自动清理未记录的旧副本. Shared Rules 仍按整目录管理. 请保留 lock; 格式损坏或路径不安全时, Setup 会停止并报错.
 
 应用会拒绝路径逃逸, 符号链接, junction 和其他 reparse point. 配置或目标校验失败时会停止后续写入, 在 Console 显示原因. 部署会先准备完整替换内容, 替换失败时尝试恢复原文件. 如果恢复失败, 日志会列出目标和备份位置.
 
-部署进度持久保存在本机 `.harness-align/.deployment-recovery.json`. 中断后重新打开应用, 未完成替换的部署会逆序还原, 已完成替换的部署会补齐基线并清理备份. 恢复也会检查当前内容: 检测到后续外部修改, junction 或无法确定归属的部分暂存内容时, 保留目标, 备份, 暂存和恢复记录并报错. 请先保存现场并比较 Console 中的路径, 不要直接删除恢复记录或覆盖备份. 恢复记录不进入 GitHub 同步.
+部署进度持久保存在本机 `.harness-align/.deployment-recovery.json`. 过期 Skill 删除和 lock 更新参与同一恢复流程. 中断后重新打开应用, 未完成替换的部署会逆序还原目标及 lock, 已完成替换的部署会补齐基线并清理备份. 恢复也会检查当前内容: 检测到后续外部修改, junction 或无法确定归属的部分暂存内容时, 保留目标, 备份, 暂存和恢复记录并报错. 请先保存现场并比较 Console 中的路径, 不要直接删除恢复记录或覆盖备份. 恢复记录和 lock 不进入 GitHub 同步.
 
 部署和 Layer 删除会在递归清理前保存清理意图. 清理只完成一部分时, 下次加载可以继续处理记录范围内未被改写的剩余内容. 剩余文件被改写或新增了记录外的路径时, 恢复会停止并保留现场.
 
