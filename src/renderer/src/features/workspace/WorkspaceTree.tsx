@@ -37,6 +37,7 @@ interface TreeButtonProps
     active: boolean;
     disabled?: boolean;
     muted?: boolean;
+    hasUpdate?: boolean;
     selection?: Selection;
     canSave?: boolean;
     canDelete?: boolean;
@@ -55,7 +56,8 @@ interface TreeButtonProps
 }
 
 /** One selectable row in a workspace module tree. */
-export function TreeButton({ label, active, disabled, muted, selection, canSave = false, canDelete = false, actions, onAction, isDraggable = false, isDragging = false, dropPosition, onRename, onDragStart, onDragEnd, onDragPositionChange, onDragLeave, onDrop, onClick }: TreeButtonProps)
+export function TreeButton({ label, active, disabled, muted, hasUpdate = false, selection, canSave = false, canDelete = false, actions, onAction, isDraggable = false,
+                            isDragging = false, dropPosition, onRename, onDragStart, onDragEnd, onDragPositionChange, onDragLeave, onDrop, onClick }: TreeButtonProps)
 {
     const editorKey = selection ? selectionKey(selection) : undefined;
     const isDirty = useAppStore((state) => editorKey ? Boolean(state.editorDrafts[editorKey]) : false);
@@ -191,6 +193,7 @@ export function TreeButton({ label, active, disabled, muted, selection, canSave 
                     type="text"
                     block
                     title={label}
+                    aria-label={hasUpdate ? `${label}, update available` : undefined}
                     aria-current={active ? "page" : undefined}
                     disabled={Boolean(disabled)}
                     onClick={onClick}
@@ -203,6 +206,7 @@ export function TreeButton({ label, active, disabled, muted, selection, canSave 
                     {label}
                 </Button>
             )}
+            {hasUpdate ? <Badge dot title="Skill update available" aria-hidden="true" styles={{ root: { marginInlineEnd: 10 } }} /> : null}
             {isDirty ? (
                 <Badge className="workspace-tree-dirty" status="processing" title="Unsaved changes" aria-label="Unsaved changes" />
             ) : null}

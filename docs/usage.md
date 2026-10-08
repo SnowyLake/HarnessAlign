@@ -139,6 +139,8 @@ Windows 上的状态检查不区分路径大小写. Harness 名称与已有生�
 
 Skills 的 Discover 和 Check updates 每次重新解析分支 commit, 同一个来源仓库与 commit 的已验证下载及解压内容在本次会话中复用, 缓存有总量限制. Apply updates 只安装本次检查已审阅的固定 commit, 不在执行时改装分支的新版本. 再次 Discover 或检查, 来源配置变化, 或已安装 provenance 变化会使旧预览失效; 请重新检查后应用.
 
+启动后会静默检测一次已安装 GitHub Skills 的更新, More > Check updates 可手动重新检测. 可用更新在 Skill 行和侧栏 Skills 图标上显示红色小圆点, 使用与 Settings 应用更新相同的 Badge 样式; 切换页面不会清除结果. 后台检测不安装或部署内容, 错误记录在 Console. 详细流程见 [Skills 管理](skills.md#从-github-安装).
+
 Harness 卡片的 Explain effects 按当前 Harness 列出 Rules, Layer Options 和 Agents 的 Included / Excluded 原因. 说明使用已保存源内容和当前 Layer 顺序与选择, 显示空 targets 未生效, 未启用 Layer, 未选中的选项及缺少 Harness Agent metadata. 点击源路径跳转到编辑器. Shared rules 和 Skills 独立部署, 不进入该 Harness 的 `AGENTS.md`.
 
 Rules, Agents 与 Skills 使用统一的紧凑搜索栏, 搜索在左, 筛选在右, 同行排列. Shared Rules 只显示搜索框. Rules 与 Agents 列表支持按名称, 源路径和已保存正文搜索, 多个空格分隔词同时匹配, 不区分大小写. Harness 筛选使用严格 targets 或 Agent metadata block, 空 targets 不会匹配任何 Harness. Shared Rules 只按文字搜索, 因为它们独立部署. 点击匹配项打开现有编辑器, 搜索不会清除草稿; 筛选时暂停 Rules 拖动排序, 清除筛选后可继续排序.

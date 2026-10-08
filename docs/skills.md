@@ -11,6 +11,10 @@
 
 在侧栏打开 Skills, 通过顶部 More > Sources 登记 GitHub 仓库. 切换到 Discover 视图, 通过 More > Discover skills 发现 Skills. 左侧选择一项后, 右侧显示只读的 `SKILL.md`, 文件名旁提供来源仓库链接; 点击右上角 Install 安装当前项. Installed 视图用于管理已安装项; 检查和批量应用更新也在 More 菜单中.
 
+每次启动应用, 工作区加载成功后会在后台检测一次已安装 GitHub Skills 的更新. 没有已安装的 GitHub Skill 或没有登记来源时跳过自动检测. 检测不自动安装或部署, 结果和错误记录在 Console, 不弹出启动检测消息. 检测期间可浏览其他页面和编辑草稿, 保存, 同步和部署等工作区操作仍按队列等待; Skills 的 More 按钮显示检测进度, 相关操作暂不可用.
+
+手动点击 More > Check updates 可重新检测. 有更新的 Installed Skill 行和侧栏 Skills 图标显示红色小圆点, 与 Settings 的应用更新提示使用相同的 Ant Design Badge 样式. 检测结果在切换页面和 Reload 后保留, 应用或移除对应 Skill 后清除该项提示; 来源配置或已安装来源记录改变时清除失效结果. 检测错误不视为有更新. 手动检测完成后, 消息会明确显示更新数量, 无更新或检测错误.
+
 Skills 页左侧列出已安装项, 右侧显示选中 Skill 的 `SKILL.md`. GitHub 来源的内容只读. 本地导入和来源不明的 Skill 可以在右侧编辑并点击 Save file 保存; 未保存的内容会保留为草稿, 也可使用 Save all 一起保存. 这里只编辑 `SKILL.md`, 同目录脚本和参考文件仍保留原样.
 
 Installed 文件行的省略号菜单和右键菜单提供 Open in explorer, 打开该已安装 Skill 的 `SKILL.md` 所在目录, 可在那里查看脚本和参考文件. Discover 中尚未安装的条目没有此操作.

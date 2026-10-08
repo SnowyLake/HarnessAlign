@@ -4,7 +4,7 @@
  */
 
 import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
-import { fileName, hasLayerChanges, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { fileName, hasLayerChanges, isSkillUpdateAvailable, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type FormSnapshot, type Selection } from "@/stores/AppStore";
 import type { AgentFormat, Config, HarnessConfig, RuleInput, Workspace } from "@shared/models/Workspace";
 
@@ -331,6 +331,43 @@ export async function reloadWorkspace(): Promise<void>
 {
     const workspace = await window.appApi.workspace.load();
     useAppStore.getState().resetWorkspace(workspace);
+}
+
+/** Check Skills once at startup or on demand without locking Renderer editing. */
+export async function checkWorkspaceSkillUpdates(isAutomatic = false): Promise<void>
+{
+    const state = useAppStore.getState();
+    const workspace = state.workspace;
+    if (!workspace || state.isCheckingSkillUpdates || (isAutomatic && (state.hasStartedSkillUpdateCheck || state.isBusy))) return;
+    state.setIsCheckingSkillUpdates(true);
+    state.setSkillUpdates([]);
+    try
+    {
+        if (!workspace.skills.some((skill) => skill.origin.kind === "github") || (isAutomatic && workspace.config.skillSources.length === 0)) return;
+        const updates = await window.appApi.workspace.checkSkillUpdates();
+        state.setSkillUpdates(updates, workspace);
+        const retained = useAppStore.getState().skillUpdates;
+        if (updates.length > 0 && retained.length === 0)
+        {
+            const title = "Skill update check expired; check again";
+            if (isAutomatic) writeLog("info", title);
+            else showError(title, title);
+            return;
+        }
+        const errors = retained.filter((update) => update.error).length;
+        const count = retained.filter(isSkillUpdateAvailable).length;
+        const title = errors > 0 ? "Skill update check completed with errors" : count > 0 ? `${count} Skill update(s) available` : "Skills are up to date";
+        const report = `Checked ${updates.length} GitHub skill(s).\n${JSON.stringify(updates, null, 2)}`;
+        if (isAutomatic) writeLog(errors > 0 ? "error" : "success", title, report);
+        else if (errors > 0) showError(report, title);
+        else showSuccess(title, report);
+    }
+    catch (error)
+    {
+        if (isAutomatic) writeLog("error", "Skill update check failed", errorMessage(error));
+        else showError(error, "Skill update check failed");
+    }
+    finally { state.setIsCheckingSkillUpdates(false); }
 }
 
 /** Retain failures while holding the workspace busy boundary for an operation. */

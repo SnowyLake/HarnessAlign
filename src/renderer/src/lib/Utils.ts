@@ -1,6 +1,12 @@
 /** Workspace labels and source paths with Windows-safe collision checks. */
 
-import type { LayerConfig, LayerSelection, ProjectSkill, RemoteSkill, SetupChange, Workspace } from "../../../shared/models/Workspace.js";
+import type { LayerConfig, LayerSelection, ProjectSkill, RemoteSkill, SetupChange, SkillUpdate, Workspace } from "../../../shared/models/Workspace.js";
+
+/** Return whether a checked Skill has an actionable fixed-version update. */
+export function isSkillUpdateAvailable(update: SkillUpdate): boolean
+{
+    return !update.error && Boolean(update.previewId) && update.currentHash !== update.remoteHash;
+}
 
 /** Map deployment warnings to compact labels while leaving their full details intact. */
 export function setupExternalLabel(reason: string): string

@@ -16,8 +16,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { assertUpdateDraftsSaved, resolveWorkspaceItemFolder, setUpdateDraftState, withWorkspace, withWorkspaceForUpdate, workspaceService } from "../src/main/services/WorkspaceService.js";
-import { defaultLayerOption, filterSetupChanges, harnessEffects, matchesWorkspaceSource, moveLayerSelection, selectableRemoteSkillIds, setupExternalLabel, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
-import type { ProjectSkill, RemoteSkill, SetupChange, Workspace, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
+import {
+    defaultLayerOption, filterSetupChanges, harnessEffects, isSkillUpdateAvailable, matchesWorkspaceSource, moveLayerSelection,
+    selectableRemoteSkillIds, setupExternalLabel, uniqueAgentPath, uniqueRulePath,
+} from "../src/renderer/src/lib/Utils.js";
+import type { ProjectSkill, RemoteSkill, SetupChange, SkillUpdate, Workspace, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount, type FormSnapshot, type Selection } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
 import { DiffText } from "../src/renderer/src/components/common/DiffText.js";
@@ -2306,6 +2309,7 @@ test("sync preserves legacy skill provenance and rejects unavailable or unsafe r
 async function loadRendererTasks(): Promise<{
     persistEditorSnapshot(workspace: Workspace, selection: Selection, snapshot: FormSnapshot): Promise<unknown>;
     persistLayerRename(from: string, to: string): Promise<void>;
+    checkWorkspaceSkillUpdates(isAutomatic?: boolean): Promise<void>;
 }>
 {
     const source = new URL("../../src/renderer/src/features/workspace/WorkspaceTasks.ts", import.meta.url).href;
@@ -4448,6 +4452,106 @@ test("discovery rejects backslash paths before installing archive contents", asy
         t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) => String(url).includes("/commits/") ? Response.json({ sha: createHash("sha1").update(archive).digest("hex") }) : new Response(archive));
         await assert.rejects(discoverSkills(root), /zip entry path is unsafe/u);
         assert.deepEqual(await loadSkills(root), []);
+    });
+});
+
+test("Skill checks run once at startup and retain only actionable results for unchanged sources and provenance", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        try
+        {
+            const loaded = await loadWorkspace(root);
+            const skills: ProjectSkill[] = ["first", "second", "unchanged", "failed"].map((id) => ({ id, title: id, description: "",
+                origin: { kind: "github", owner: "example", name: "repo", branch: "main", sourcePath: id, contentHash: "a".repeat(64), commit: "a".repeat(40) } }));
+            const workspace: Workspace = { ...loaded, config: { ...loaded.config, skillSources: [{ owner: "example", name: "repo", branch: "main" }] }, skills,
+                generatedFiles: [], generationStatus: { state: "missing", changes: [] }, deploymentStatus: { state: "pending", changes: [] }, harnessRoots: [] };
+            const updates: SkillUpdate[] = skills.map((skill) => ({ id: skill.id, currentHash: "a".repeat(64),
+                remoteHash: skill.id === "unchanged" ? "a".repeat(64) : "b".repeat(64), previewId: `${skill.id}-preview`,
+                ...(skill.id === "failed" ? { error: "Repository unavailable" } : {}) }));
+            useAppStore.setState({ workspace, skillUpdates: [], isCheckingSkillUpdates: false, hasStartedSkillUpdateCheck: false, isBusy: true });
+            let calls = 0;
+            let finish: (value: SkillUpdate[]) => void = () => { throw new Error("Missing pending check"); };
+            let response = new Promise<SkillUpdate[]>((resolveCheck) => { finish = resolveCheck; });
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                checkSkillUpdates: () => { calls++; return response; },
+            } } } });
+            const tasks = await loadRendererTasks();
+            await tasks.checkWorkspaceSkillUpdates(true);
+            assert.equal(calls, 0);
+            assert.equal(useAppStore.getState().hasStartedSkillUpdateCheck, false);
+            initial.setIsBusy(false);
+            const startup = tasks.checkWorkspaceSkillUpdates(true);
+            assert.equal(useAppStore.getState().isCheckingSkillUpdates, true);
+            assert.equal(useAppStore.getState().isBusy, false);
+            await tasks.checkWorkspaceSkillUpdates(true);
+            await tasks.checkWorkspaceSkillUpdates();
+            assert.equal(calls, 1);
+            finish(updates);
+            await startup;
+            assert.equal(useAppStore.getState().isCheckingSkillUpdates, false);
+            assert.deepEqual(useAppStore.getState().skillUpdates.filter(isSkillUpdateAvailable).map((update) => update.id), ["first", "second"]);
+            assert.equal(isSkillUpdateAvailable({ id: "missing-preview", currentHash: "a", remoteHash: "b" }), false);
+            await tasks.checkWorkspaceSkillUpdates(true);
+            assert.equal(calls, 1);
+            initial.setView("console");
+            initial.setView("skills");
+            initial.resetWorkspace(workspace);
+            assert.equal(useAppStore.getState().skillUpdates.filter(isSkillUpdateAvailable).length, 2);
+            assert.equal(useAppStore.getState().hasStartedSkillUpdateCheck, true);
+
+            const changed: Workspace = { ...workspace, skills: skills.map((skill) => skill.id === "first" && skill.origin.kind === "github"
+                ? { ...skill, origin: { ...skill.origin, commit: "b".repeat(40) } } : skill) };
+            initial.setWorkspace(changed);
+            assert.deepEqual(useAppStore.getState().skillUpdates.filter(isSkillUpdateAvailable).map((update) => update.id), ["second"]);
+            initial.setWorkspace({ ...changed, skills: changed.skills.filter((skill) => skill.id !== "second") });
+            assert.equal(useAppStore.getState().skillUpdates.some(isSkillUpdateAvailable), false);
+            initial.setWorkspace(workspace);
+            initial.setSkillUpdates(updates, workspace);
+            initial.setSkillUpdates(useAppStore.getState().skillUpdates.filter((update) => update.id !== "first"));
+            assert.deepEqual(useAppStore.getState().skillUpdates.filter(isSkillUpdateAvailable).map((update) => update.id), ["second"]);
+
+            response = new Promise<SkillUpdate[]>((resolveCheck) => { finish = resolveCheck; });
+            const manual = tasks.checkWorkspaceSkillUpdates();
+            assert.equal(calls, 2);
+            assert.deepEqual(useAppStore.getState().skillUpdates, []);
+            initial.setWorkspace({ ...workspace, config: { ...workspace.config, skillSources: [] } });
+            finish(updates);
+            await manual;
+            assert.deepEqual(useAppStore.getState().skillUpdates, []);
+            initial.setWorkspace(workspace);
+            response = Promise.reject(new Error("Network unavailable"));
+            await tasks.checkWorkspaceSkillUpdates();
+            assert.equal(calls, 3);
+            assert.equal(useAppStore.getState().isCheckingSkillUpdates, false);
+            assert.deepEqual(useAppStore.getState().skillUpdates, []);
+            response = Promise.resolve(updates);
+            await tasks.checkWorkspaceSkillUpdates();
+            assert.equal(calls, 4);
+            assert.equal(useAppStore.getState().skillUpdates.filter(isSkillUpdateAvailable).length, 2);
+            initial.setSkillUpdates([]);
+            assert.equal(useAppStore.getState().skillUpdates.some(isSkillUpdateAvailable), false);
+            initial.setSkillUpdates(updates, workspace);
+            initial.setWorkspace({ ...workspace, config: { ...workspace.config, skillSources: [] } });
+            assert.deepEqual(useAppStore.getState().skillUpdates, []);
+
+            useAppStore.setState({ workspace: { ...workspace, skills: [] }, hasStartedSkillUpdateCheck: false });
+            await tasks.checkWorkspaceSkillUpdates(true);
+            assert.equal(calls, 4);
+            assert.equal(useAppStore.getState().hasStartedSkillUpdateCheck, true);
+            useAppStore.setState({ workspace: { ...workspace, config: { ...workspace.config, skillSources: [] } }, hasStartedSkillUpdateCheck: false });
+            await tasks.checkWorkspaceSkillUpdates(true);
+            assert.equal(calls, 4);
+            assert.equal(useAppStore.getState().isCheckingSkillUpdates, false);
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
     });
 });
 

@@ -24,7 +24,7 @@ import { WorkflowStatus } from "./WorkflowStatus";
 import { SyncPanel } from "@/features/settings/SyncPanel";
 import { showError } from "@/components/common/Feedback";
 import type { SetupPreview } from "@shared/models/Workspace";
-import { filterSetupChanges, setupExternalLabel } from "@/lib/Utils";
+import { filterSetupChanges, isSkillUpdateAvailable, setupExternalLabel } from "@/lib/Utils";
 
 const { Header, Sider, Content } = Layout;
 
@@ -63,6 +63,7 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
     const workspace = useAppStore((state) => state.workspace);
     const isBusy = useAppStore((state) => state.isBusy);
     const hasAppUpdate = useAppStore((state) => state.appUpdateStatus?.availableVersion != null);
+    const hasSkillUpdate = useAppStore((state) => state.skillUpdates.some(isSkillUpdateAvailable));
     const hasSourceDrafts = useAppStore((state) => Object.keys(state.editorDrafts).length > 0);
     const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const dirtyCount = useAppStore(workspaceChangeCount);
@@ -80,12 +81,13 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
         { key: "rules", icon: WORKSPACE_NAV_ITEMS.rules.icon, label: WORKSPACE_NAV_ITEMS.rules.label },
         { key: "layers", icon: WORKSPACE_NAV_ITEMS.layers.icon, label: WORKSPACE_NAV_ITEMS.layers.label },
         { key: "agents", icon: WORKSPACE_NAV_ITEMS.agents.icon, label: WORKSPACE_NAV_ITEMS.agents.label },
-        { key: "skills", icon: WORKSPACE_NAV_ITEMS.skills.icon, label: WORKSPACE_NAV_ITEMS.skills.label },
+        { key: "skills", icon: <Badge dot={hasSkillUpdate} title="Skill updates available" styles={{ root: { lineHeight: 1 } }}><ThunderboltOutlined style={{ lineHeight: 1 }} /></Badge>,
+          label: <span aria-label={hasSkillUpdate ? "Skills, updates available" : "Skills"}>Skills</span> },
     ];
     const utilityItems: MenuProps["items"] = [
         { key: "generated", icon: WORKSPACE_NAV_ITEMS.generated.icon, label: WORKSPACE_NAV_ITEMS.generated.label },
         { key: "console", icon: <CodeOutlined />, label: "Console" },
-        { key: "settings", icon: <Badge dot={hasAppUpdate} styles={{ root: { lineHeight: 1 } }}><SettingOutlined style={{ lineHeight: 1 }} /></Badge>,
+        { key: "settings", icon: <Badge dot={hasAppUpdate} title="Application update available" styles={{ root: { lineHeight: 1 } }}><SettingOutlined style={{ lineHeight: 1 }} /></Badge>,
           label: <span aria-label={hasAppUpdate ? "Settings, update available" : "Settings"}>Settings</span> },
     ];
 

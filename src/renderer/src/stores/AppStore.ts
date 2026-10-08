@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import type { ThemeMode } from "../../../shared/models/AppSettings.js";
 import type { AppUpdateStatus } from "../../../shared/models/AppUpdate.js";
-import type { LayerSelection, Workspace } from "../../../shared/models/Workspace.js";
+import type { LayerSelection, SkillUpdate, Workspace } from "../../../shared/models/Workspace.js";
 import type { SyncPreview, SyncStatus } from "../../../shared/models/Sync.js";
 import type { LogChange, LogEntry, LogSnapshot } from "../../../shared/models/Console.js";
 import { defaultLayerOption, hasLayerChanges } from "../lib/Utils.js";
@@ -191,6 +191,18 @@ function reconcileLayerSelection(current: readonly LayerSelection[], workspace: 
     return next;
 }
 
+/** Retain checked versions only while their sources and installed provenance still match. */
+function reconcileSkillUpdates(updates: SkillUpdate[], previous: Workspace | undefined, workspace: Workspace | undefined): SkillUpdate[]
+{
+    if (!previous || !workspace || JSON.stringify(previous.config.skillSources) !== JSON.stringify(workspace.config.skillSources)) return [];
+    return updates.filter((update) =>
+    {
+        const origin = workspace.skills.find((skill) => skill.id === update.id)?.origin;
+        return origin?.kind === "github" && origin.contentHash === update.currentHash
+            && JSON.stringify(origin) === JSON.stringify(previous.skills.find((skill) => skill.id === update.id)?.origin);
+    });
+}
+
 /** Zustand state and setters for the desktop shell. */
 interface AppState
 {
@@ -200,6 +212,9 @@ interface AppState
     syncPreview: SyncPreview | undefined;
     syncStatus: SyncStatus | undefined;
     appUpdateStatus: AppUpdateStatus | null;
+    skillUpdates: SkillUpdate[];
+    isCheckingSkillUpdates: boolean;
+    hasStartedSkillUpdateCheck: boolean;
     syncDialog: "review" | "connection" | undefined;
     selection: Selection;
     layerSelection: LayerSelection[];
@@ -216,6 +231,8 @@ interface AppState
     setSyncPreview: (preview: SyncPreview | undefined) => void;
     setSyncStatus: (status: SyncStatus) => void;
     setAppUpdateStatus: (status: AppUpdateStatus) => void;
+    setSkillUpdates: (updates: SkillUpdate[], checkedWorkspace?: Workspace) => void;
+    setIsCheckingSkillUpdates: (isChecking: boolean) => void;
     setSyncDialog: (dialog: "review" | "connection" | undefined) => void;
     setSelection: (selection: Selection) => void;
     setLayerSelection: (selection: LayerSelection[]) => void;
@@ -244,6 +261,9 @@ export const useAppStore = create<AppState>((set) => ({
     syncPreview: undefined,
     syncStatus: undefined,
     appUpdateStatus: null,
+    skillUpdates: [],
+    isCheckingSkillUpdates: false,
+    hasStartedSkillUpdateCheck: false,
     syncDialog: undefined,
     selection: { kind: "config" },
     layerSelection: [],
@@ -265,6 +285,7 @@ export const useAppStore = create<AppState>((set) => ({
         const shouldReset = !state.workspace || !workspace;
         return {
             workspace,
+            skillUpdates: reconcileSkillUpdates(state.skillUpdates, state.workspace, workspace),
             syncStatus: state.syncStatus ? { ...state.syncStatus, localState: "unknown" as const } : undefined,
             syncPreview: undefined,
             selection: state.view === "settings" || state.view === "console"
@@ -282,6 +303,7 @@ export const useAppStore = create<AppState>((set) => ({
     setSelection: (selection) => set({ selection }),
     resetWorkspace: (workspace) => set((state) => ({
         workspace,
+        skillUpdates: reconcileSkillUpdates(state.skillUpdates, state.workspace, workspace),
         syncStatus: state.syncStatus ? { ...state.syncStatus, localState: "unknown" as const } : undefined,
         workspaceRevision: state.workspaceRevision + 1,
         selection: state.view === "settings" || state.view === "console"
@@ -304,6 +326,13 @@ export const useAppStore = create<AppState>((set) => ({
     setSyncPreview: (syncPreview) => set({ syncPreview }),
     setSyncStatus: (syncStatus) => set({ syncStatus }),
     setAppUpdateStatus: (appUpdateStatus) => set({ appUpdateStatus }),
+    setSkillUpdates: (skillUpdates, checkedWorkspace) => set((state) => ({
+        skillUpdates: checkedWorkspace ? reconcileSkillUpdates(skillUpdates, checkedWorkspace, state.workspace) : skillUpdates,
+    })),
+    setIsCheckingSkillUpdates: (isCheckingSkillUpdates) => set((state) => ({
+        isCheckingSkillUpdates,
+        hasStartedSkillUpdateCheck: state.hasStartedSkillUpdateCheck || isCheckingSkillUpdates,
+    })),
     setSyncDialog: (syncDialog) => set({ syncDialog }),
     setEditorDraft: (key, draft) => set((state) =>
     {
