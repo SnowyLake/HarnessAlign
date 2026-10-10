@@ -5,13 +5,14 @@
 
 import { App as AntApp, Button, ConfigProvider, Result, Spin, theme as antTheme } from "antd";
 import { useEffect, useState } from "react";
-import { FeedbackBridge, showError, showSuccess, writeLog } from "@/components/common/Feedback";
+import { FeedbackBridge, showError, showSuccess } from "@/components/common/Feedback";
 import { AppShell } from "@/components/layout/AppShell";
 import { ConsolePage } from "@/features/console/ConsolePage";
 import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
-import { refreshWorkspace, reloadWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
+import { checkWorkspaceSkillUpdates, refreshWorkspace, reloadWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
+import type { AppUpdateStatus } from "@shared/models/AppUpdate";
 
 /** Root React tree for the desktop shell. */
 export function App()
@@ -20,10 +21,43 @@ export function App()
     const themeMode = useAppStore((state) => state.theme);
     const workspace = useAppStore((state) => state.workspace);
     const workspaceRevision = useAppStore((state) => state.workspaceRevision);
+    const isBusy = useAppStore((state) => state.isBusy);
+    const hasStartedSkillUpdateCheck = useAppStore((state) => state.hasStartedSkillUpdateCheck);
+    const hasWorkspace = Boolean(workspace);
     const [loadError, setLoadError] = useState<string>();
     const [loadAttempt, setLoadAttempt] = useState(0);
     const [prefersDark, setPrefersDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
     const isDark = themeMode === "dark" || (themeMode === "system" && prefersDark);
+
+    useEffect(() =>
+    {
+        let isCancelled = false;
+        let isReady = false;
+        let latest: AppUpdateStatus | null = null;
+        const setStatus = useAppStore.getState().setAppUpdateStatus;
+        const unsubscribe = window.appApi.appUpdate.onChanged((next) =>
+        {
+            latest = next;
+            if (isReady) setStatus(next);
+        });
+        void window.appApi.appUpdate.status().then((next) =>
+        {
+            if (isCancelled) return;
+            isReady = true;
+            setStatus(latest ?? next);
+        }).catch((error: unknown) =>
+        {
+            if (isCancelled) return;
+            isReady = true;
+            if (latest !== null) setStatus(latest);
+            showError(error, "Update status unavailable");
+        });
+        return () =>
+        {
+            isCancelled = true;
+            unsubscribe();
+        };
+    }, []);
 
     useEffect(() =>
     {
@@ -38,7 +72,6 @@ export function App()
             const loaded = await window.appApi.workspace.load();
             if (isCancelled) return;
             useAppStore.getState().setWorkspace(loaded);
-            writeLog("info", "Workspace loaded");
         })().catch((error: unknown) =>
         {
             if (!isCancelled)
@@ -58,6 +91,26 @@ export function App()
             unsubscribe();
         };
     }, [loadAttempt]);
+
+    useEffect(() =>
+    {
+        if (hasWorkspace && !isBusy && !hasStartedSkillUpdateCheck) void checkWorkspaceSkillUpdates(true);
+    }, [hasWorkspace, isBusy, hasStartedSkillUpdateCheck]);
+
+    useEffect(() =>
+    {
+        /** Report every draft transition, including changes while an update is in flight. */
+        const reportDrafts = (): void =>
+        {
+            const state = useAppStore.getState();
+            void window.appApi.appUpdate.setDraftState(!state.workspace || workspaceChangeCount(state) > 0).catch((error: unknown) => showError(error, "Draft protection unavailable"));
+        };
+        reportDrafts();
+        return useAppStore.subscribe((state, previous) =>
+        {
+            if (state.workspace !== previous.workspace || workspaceChangeCount(state) !== workspaceChangeCount(previous)) reportDrafts();
+        });
+    }, []);
 
     useEffect(() =>
     {
@@ -119,23 +172,29 @@ export function App()
         if (!current || Object.keys(useAppStore.getState().editorDrafts).length > 0) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.generate(useAppStore.getState().layerSelection);
-            showSuccess("Generate completed", report);
-            await refreshWorkspace();
+            try
+            {
+                const report = await window.appApi.workspace.generate(useAppStore.getState().layerSelection);
+                showSuccess("Generate completed", report);
+            }
+            finally { await refreshWorkspace(); }
             if (useAppStore.getState().view !== "console") useAppStore.getState().setView("generated");
         }, "Generate");
     };
 
     /** Deploy generated output to existing harness directories. */
-    const handleSetup = (): void =>
+    const handleSetup = (previewId: string, overwriteExternal: boolean): void =>
     {
         const current = useAppStore.getState().workspace;
         if (!current || Object.keys(useAppStore.getState().editorDrafts).length > 0) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.setup(useAppStore.getState().layerSelection);
-            showSuccess("Setup completed", report);
-            await refreshWorkspace();
+            try
+            {
+                const report = await window.appApi.workspace.setup(previewId, overwriteExternal);
+                showSuccess("Setup completed", report);
+            }
+            finally { await refreshWorkspace(); }
         }, "Setup");
     };
 

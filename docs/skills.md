@@ -11,6 +11,10 @@
 
 在侧栏打开 Skills, 通过顶部 More > Sources 登记 GitHub 仓库. 切换到 Discover 视图, 通过 More > Discover skills 发现 Skills. 左侧选择一项后, 右侧显示只读的 `SKILL.md`, 文件名旁提供来源仓库链接; 点击右上角 Install 安装当前项. Installed 视图用于管理已安装项; 检查和批量应用更新也在 More 菜单中.
 
+每次启动应用, 工作区加载成功后会在后台检测一次已安装 GitHub Skills 的更新. 没有已安装的 GitHub Skill 或没有登记来源时跳过自动检测. 检测不自动安装或部署, 结果和错误记录在 Console, 不弹出启动检测消息. 检测期间可浏览其他页面和编辑草稿, 保存, 同步和部署等工作区操作仍按队列等待; Skills 的 More 按钮显示检测进度, 相关操作暂不可用.
+
+手动点击 More > Check updates 可重新检测. 有更新的 Installed Skill 行和侧栏 Skills 图标显示红色小圆点, 与 Settings 的应用更新提示使用相同的 Ant Design Badge 样式. 检测结果在切换页面和 Reload 后保留, 应用或移除对应 Skill 后清除该项提示; 来源配置或已安装来源记录改变时清除失效结果. 检测错误不视为有更新. 手动检测完成后, 消息会明确显示更新数量, 无更新或检测错误.
+
 Skills 页左侧列出已安装项, 右侧显示选中 Skill 的 `SKILL.md`. GitHub 来源的内容只读. 本地导入和来源不明的 Skill 可以在右侧编辑并点击 Save file 保存; 未保存的内容会保留为草稿, 也可使用 Save all 一起保存. 这里只编辑 `SKILL.md`, 同目录脚本和参考文件仍保留原样.
 
 Installed 文件行的省略号菜单和右键菜单提供 Open in explorer, 打开该已安装 Skill 的 `SKILL.md` 所在目录, 可在那里查看脚本和参考文件. Discover 中尚未安装的条目没有此操作.
@@ -20,6 +24,12 @@ Installed 文件行的省略号菜单和右键菜单提供 Open in explorer, 打
 应用可以发现仓库根目录和子目录中的 `SKILL.md`. 根目录 Skill 使用仓库名作为 id, 同样支持安装和检查更新. 移除来源需要确认, 已安装的 Skills 会保留.
 
 安装后的内容保存在 `.harness-align/skills/<id>/`. 每个 Skill 目录带有 `SKILL.md`, `skills/index.json` 记录来源, 请让应用维护这个文件. 根目录 Skill 的 `sourcePath` 为空字符串是正常记录.
+
+Discover 与 Check updates 每次解析分支最新 commit. 已验证的下载与解压内容按来源 repo + commit 在本次会话中复用, 最多保留 8 个仓库版本且总内容不超过 512 MiB. Apply updates 使用检查时的固定版本. 再次发现或检查, 来源配置变化, 或已安装来源记录变化后, 需要重新检查并审阅.
+
+Check updates 后, 单项 Apply update 或批量 Update 会先打开 Review Skill updates. 审阅旧/新 commit, 文件新增/修改/删除/未变列表和 `SKILL.md` 增删行后, 点击 Apply reviewed versions. 旧记录没有固定 commit 时显示 Legacy source. 文本预览最多显示 16,000 字符, 实际应用仍替换完整 Skill; 删除文件也属于该版本替换的一部分.
+
+逐项应用更新时, 其他未应用项保留同一次检查的固定版本预览, 可以继续审阅并应用. 再次 Discover 或 Check updates 会清空旧更新入口; 检查失败后也需要重新检查, 不能继续应用已经失效的预览.
 
 ## 导入本机 Skills
 
@@ -33,9 +43,11 @@ Installed 文件行的省略号菜单和右键菜单提供 Open in explorer, 打
 
 ## 部署到用户目录
 
-安装或导入后, 点击 Setup, 将 `.harness-align/skills/` 中的内容部署到 `%USERPROFILE%\.agents\skills\<id>\`. 同名 Skill 目录会被覆盖, 无关 Skills 会保留, `index.json` 不会复制过去.
+安装或导入后, 点击 Setup, 将 `.harness-align/skills/` 中的内容部署到 `%USERPROFILE%\.agents\skills\<id>\`. 同名 Skill 目录会被覆盖, 无关 Skills 会保留, `index.json` 不会复制过去. 本次部署的归属和内容哈希记录在 `%USERPROFILE%\.agents\.harness-align.lock.json`.
 
-Skills 安装与导入直接生效, 编辑 `SKILL.md` 需要保存. Setup 只部署已经安装且已保存的内容. 如果没有项目 Skills, 或目录中只有 `index.json`, 会跳过 Skills 部署并视为成功. shared-rules 仍然必需, 详见[生成和部署](usage.md#生成和部署).
+Skills 安装与导入直接生效, 编辑 `SKILL.md` 需要保存. Setup 只部署已经安装且已保存的内容. Remove 移除项目 Skill 后, 下次 Setup 会删除 lock 记录的部署副本, 删除最后一个 Skill 也会清理. 被手改或含有额外文件的目标需要在预览中确认; 未记录的其他来源 Skills 会保留. 首次使用或 lock 缺失时不追认历史部署副本, 应先部署需要管理的 Skills 建立归属记录.
+
+没有项目 Skills (包括目录缺失, 为空或只有 `index.json`) 且 lock 中没有待清理 Skill 时, 跳过 Skills 部署并视为成功. shared-rules 仍然必需, 详见[生成和部署](usage.md#生成和部署).
 
 ## 多设备同步时的版本
 

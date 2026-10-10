@@ -1,9 +1,9 @@
 /** Application session history with full diagnostic output and optional scroll following. */
 
-import { ClearOutlined } from "@ant-design/icons";
+import { ClearOutlined, CopyOutlined } from "@ant-design/icons";
 import { Button, Empty, Flex, Switch, Tag, Typography } from "antd";
 import { useEffect, useRef, useState } from "react";
-import { showError } from "@/components/common/Feedback";
+import { showError, showSuccess } from "@/components/common/Feedback";
 import { useAppStore } from "@/stores/AppStore";
 
 /** Render every session record in chronological order, including failures during ongoing work. */
@@ -26,6 +26,7 @@ export function ConsolePage()
                     <Typography.Text type="secondary">{logs.length} {logs.length === 1 ? "entry" : "entries"} · Cleared when the application closes</Typography.Text>
                 </div>
                 <Flex align="center" gap={16}>
+                    <Button icon={<CopyOutlined />} disabled={logs.length === 0} onClick={() => void window.appApi.console.copyRedacted().then(() => showSuccess("Redacted Console copied")).catch((error: unknown) => showError(error, "Copy failed"))}>Copy redacted</Button>
                     <Flex align="center" gap={8}>
                         <Switch size="small" checked={isFollowing} onChange={setIsFollowing} aria-label="Auto-scroll" />
                         <Typography.Text>Auto-scroll</Typography.Text>

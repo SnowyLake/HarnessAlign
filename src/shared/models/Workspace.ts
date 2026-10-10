@@ -3,6 +3,9 @@
  * These types must stay JSON-serializable and must not import the engine.
  */
 
+/** Current configuration format accepted by editor writes; kept in step with the engine. */
+export const CONFIG_VERSION = 3;
+
 /** Subagent metadata format declared by a harness. */
 export type AgentFormat = "toml" | "yaml";
 /** Untyped harness-specific metadata mapping. */
@@ -43,7 +46,7 @@ export interface SkillSource
 /** Validated `.harness-align/config.json` document. */
 export interface Config
 {
-    version: 1;
+    version: typeof CONFIG_VERSION;
     name: string;
     layers: LayerConfig[];
     harnesses: HarnessConfig[];
@@ -76,7 +79,21 @@ export interface SkillUpdate
     id: string;
     currentHash: string;
     remoteHash: string;
+    previewId?: string;
     error?: string;
+}
+
+/** Fixed-version update review with bounded Markdown text and file classifications. */
+export interface SkillUpdatePreview
+{
+    previewId: string;
+    id: string;
+    oldCommit: string | null;
+    newCommit: string;
+    files: Array<{ path: string; status: "added" | "modified" | "deleted" | "unchanged" }>;
+    oldText: string;
+    newText: string;
+    truncated: boolean;
 }
 
 /** Skill discovered under the user profile skills directory. */
@@ -135,15 +152,54 @@ export interface GeneratedFile
     content: string;
 }
 
+/** Actual managed output status relative to saved sources, independent of operation history. */
+export interface GenerationStatus
+{
+    state: "current" | "stale" | "missing" | "partial" | "error";
+    changes: Array<{ path: string; status: "missing" | "modified" | "obsolete" }>;
+    error?: string;
+}
+
 /** Existing workspace file identity whose containing folder may be opened by Main. */
 export type WorkspaceItemTarget =
     | { kind: "source"; path: string }
     | { kind: "generated"; path: string }
     | { kind: "skill"; id: string };
 
+/** One reviewed deployment change under a user harness, shared-rule, or skill directory. */
+export interface SetupChange
+{
+    path: string;
+    status: "added" | "modified" | "deleted" | "unchanged" | "skipped";
+    external?: string;
+}
+
+/** Server-owned deployment preview; execution accepts only its identity. */
+export interface SetupPreview
+{
+    id: string;
+    changes: SetupChange[];
+}
+
+/** Content comparison against actual deployment targets, including skipped destinations. */
+export interface DeploymentStatus
+{
+    state: "current" | "pending" | "error";
+    changes: SetupChange[];
+    error?: string;
+}
+
+/** Opened source identity checked by Main before saving or renaming. */
+export interface SourceGuard
+{
+    path: string;
+    revision: string | null;
+}
+
 /** Loaded `.harness-align` workspace shown in the desktop shell. */
 export interface Workspace
 {
+    sourceRevisions: Record<string, string>;
     config: Config;
     rootRules: RuleInput[];
     layerOptions: Record<string, LayerOption[]>;
@@ -151,4 +207,7 @@ export interface Workspace
     agents: Agent[];
     skills: ProjectSkill[];
     generatedFiles: GeneratedFile[];
+    generationStatus: GenerationStatus;
+    deploymentStatus: DeploymentStatus;
+    harnessRoots: Array<{ name: string; state: "ready" | "missing" | "unsafe" }>;
 }

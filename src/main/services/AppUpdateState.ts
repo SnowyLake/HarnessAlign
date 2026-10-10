@@ -129,7 +129,7 @@ export function failAppUpdate(status: AppUpdateStatus, message: string): AppUpda
         return {
             phase: "error",
             currentVersion: status.currentVersion,
-            availableVersion: status.phase === "downloaded" ? status.availableVersion : null,
+            availableVersion: status.availableVersion,
             percent: null,
             message: details,
         };

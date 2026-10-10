@@ -6,13 +6,15 @@ import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import type { SyncApplyInput, SyncChange, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileView } from "@shared/models/Sync";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
-import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
+import { showError, showSuccess } from "@/components/common/Feedback";
+import { DiffText } from "@/components/common/DiffText";
+import { diffLines, type DiffLine } from "@/lib/TextDiff";
 
 const CREATE_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write";
 const MANAGE_TOKENS_URL = "https://github.com/settings/personal-access-tokens";
 
 /** Render bounded text and binary metadata without interpreting remote content as HTML. */
-function SyncFileContent({ label, value }: { label: string; value: SyncFileView | null })
+function SyncFileContent({ label, value, lines }: { label: string; value: SyncFileView | null; lines?: DiffLine[] })
 {
     return (
         <Card size="small" title={label}>
@@ -20,7 +22,7 @@ function SyncFileContent({ label, value }: { label: string; value: SyncFileView 
                 <Space orientation="vertical" size="small" style={{ width: "100%" }}>
                     <Typography.Text type="secondary">{value.bytes.toLocaleString()} bytes</Typography.Text>
                     {value.text === null ? <Typography.Text>Binary file. SHA: {value.hash}</Typography.Text> : (
-                        <pre style={{ margin: 0, maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{value.text || "(empty file)"}</pre>
+                        lines ? <DiffText lines={lines} label={`${label} differences`} /> : <pre style={{ margin: 0, maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{value.text || "(empty file)"}</pre>
                     )}
                     {value.truncated ? <Typography.Text type="warning">Preview limited to 16,000 characters.</Typography.Text> : null}
                 </Space>
@@ -42,6 +44,7 @@ async function reloadSyncedWorkspace(): Promise<void>
 export function SyncPanel()
 {
     const [form] = Form.useForm<SyncConnectionInput>();
+    const workspace = useAppStore((state) => state.workspace);
     const status = useAppStore((state) => state.syncStatus);
     const setStatus = useAppStore((state) => state.setSyncStatus);
     const dialog = useAppStore((state) => state.syncDialog);
@@ -60,16 +63,22 @@ export function SyncPanel()
 
     useEffect(() =>
     {
+        let cancelled = false;
         void window.appApi.sync.status().then((next) =>
         {
+            if (cancelled) return;
             setStatus(next);
             if (next.connected) form.setFieldsValue({ owner: next.owner, repository: next.repository, branch: next.branch });
         }).catch((cause: unknown) =>
         {
+            if (cancelled) return;
+            const previous = useAppStore.getState().syncStatus;
+            if (previous) setStatus({ ...previous, localState: "unknown" });
             setError("Sync status unavailable. See Console for details.");
             showError(cause, "Sync status unavailable");
         });
-    }, [form, setStatus]);
+        return () => { cancelled = true; };
+    }, [form, setStatus, workspace]);
 
     useEffect(() =>
     {
@@ -105,7 +114,12 @@ export function SyncPanel()
         }
         finally
         {
-            await window.appApi.sync.status().then(setStatus).catch((cause: unknown) => showError(cause, "Sync status refresh failed"));
+            await window.appApi.sync.status().then(setStatus).catch((cause: unknown) =>
+            {
+                const previous = useAppStore.getState().syncStatus;
+                if (previous) setStatus({ ...previous, localState: "unknown" });
+                showError(cause, "Sync status refresh failed");
+            });
             state.setIsBusy(false);
         }
     }
@@ -120,7 +134,6 @@ export function SyncPanel()
         setPreview(next);
         setChoices({});
         setMode(next.remoteEmpty ? "initialize" : "merge");
-        writeLog("success", "Sync preview ready", JSON.stringify(next, null, 2));
     }
 
     /** Apply only the reviewed preview and refresh the local editor's saved baseline. */
@@ -252,7 +265,7 @@ export function SyncPanel()
                                     ? "The remote configuration will be replaced by this device's configuration."
                                     : "This device's configuration will be replaced by the remote configuration. A local backup is kept."} /> : null}
                                 <Table<SyncChange> size="small" rowKey="key" dataSource={preview.changes.filter((change) => change.direction !== "same")}
-                                                   locale={{ emptyText: "Configuration is up to date" }} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 900 }} columns={[
+                                                   locale={{ emptyText: "Configuration is up to date" }} pagination={false} scroll={{ x: 900, y: "min(400px, 45vh)" }} columns={[
                                     { title: "Source", dataIndex: "key", render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
                                     { title: "Change", dataIndex: "direction", align: "center", width: 100 },
                                     { title: "Decision", align: "center", width: 190, render: (_, change) => change.direction === "conflict" ? (
@@ -281,16 +294,23 @@ export function SyncPanel()
             </Modal>
             <Modal open={Boolean(detail)} title={`Compare: ${detail?.key ?? ""}`} width={1000} footer={null} onCancel={() => setDetail(undefined)} destroyOnHidden>
                 <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                    <Typography.Text type="secondary">- Local deletions and + Remote additions are highlighted. Conflict choices still apply to the entire source group.</Typography.Text>
                     {detail?.content.files.length === 0 ? <Typography.Text>This change adds or removes an empty directory.</Typography.Text> : null}
-                    {detail?.content.files.map((file) => (
+                    {detail?.content.files.map((file) =>
+                    {
+                        const diff = (!file.local || file.local.text !== null) && (!file.remote || file.remote.text !== null)
+                            ? diffLines(file.local?.text ?? null, file.remote?.text ?? null) : undefined;
+                        return (
                         <div key={file.path} style={{ width: "100%" }}>
                             <Typography.Paragraph code>{file.path}</Typography.Paragraph>
                             <Row gutter={[12, 12]}>
-                                <Col xs={24} md={12}><SyncFileContent label="Local" value={file.local} /></Col>
-                                <Col xs={24} md={12}><SyncFileContent label="Remote" value={file.remote} /></Col>
+                                <Col xs={24} md={12}><SyncFileContent label="Local" value={file.local} {...diff ? { lines: diff.local } : {}} /></Col>
+                                <Col xs={24} md={12}><SyncFileContent label="Remote" value={file.remote} {...diff ? { lines: diff.remote } : {}} /></Col>
                             </Row>
+                            {diff?.limited ? <Typography.Text type="secondary">Large preview: the changed section is highlighted as a whole.</Typography.Text> : null}
                         </div>
-                    ))}
+                    );
+                    })}
                     {detail?.content.omittedFiles ? (
                         <Alert type="info" title={`${detail.content.omittedFiles} additional files omitted from this preview. The decision applies to the entire source group.`} />
                     ) : null}

@@ -16,15 +16,19 @@ import type {
     RemoteSkill,
     RuleInput,
     SkillUpdate,
+    SkillUpdatePreview,
     UserSkill,
     Workspace,
     WorkspaceItemTarget,
+    SourceGuard,
+    SetupPreview,
 } from "../models/Workspace.js";
 
 /** Privileged capabilities exposed to the renderer through `window.appApi`. */
 export interface AppApi
 {
     console: {
+        copyRedacted(): Promise<void>;
         read(): Promise<LogSnapshot>;
         append(input: LogInput): Promise<void>;
         clear(): Promise<void>;
@@ -44,6 +48,7 @@ export interface AppApi
         openExternal(url: string): Promise<void>;
     };
     appUpdate: {
+        setDraftState(hasUnsaved: boolean): Promise<void>;
         status(): Promise<AppUpdateStatus>;
         check(): Promise<AppUpdateStatus>;
         download(): Promise<AppUpdateStatus>;
@@ -56,11 +61,11 @@ export interface AppApi
     };
     workspace: {
         load(): Promise<Workspace>;
-        saveConfig(config: Config): Promise<Config>;
-        saveRule(input: RuleInput): Promise<void>;
-        saveLayerOption(input: LayerOptionInput): Promise<void>;
-        saveSharedRule(path: string, body: string): Promise<void>;
-        saveAgent(agent: Agent): Promise<void>;
+        saveConfig(config: Config, guard: SourceGuard): Promise<Config>;
+        saveRule(input: RuleInput, guard: SourceGuard): Promise<void>;
+        saveLayerOption(input: LayerOptionInput, guard: SourceGuard): Promise<void>;
+        saveSharedRule(path: string, body: string, guard: SourceGuard): Promise<void>;
+        saveAgent(agent: Agent, guard: SourceGuard): Promise<void>;
         deleteSource(path: string): Promise<void>;
         renameSource(from: string, to: string): Promise<void>;
         addLayer(name: string): Promise<Config>;
@@ -81,13 +86,15 @@ export interface AppApi
         installDiscoveredSkill(previewId: string): Promise<string>;
         installSkills(ids: string[]): Promise<string>;
         checkSkillUpdates(): Promise<SkillUpdate[]>;
-        applySkillUpdates(ids: string[]): Promise<string>;
+        readSkillUpdatePreview(previewId: string): Promise<SkillUpdatePreview>;
+        applySkillUpdates(previewIds: string[]): Promise<string>;
         readSkillContent(id: string): Promise<string>;
         saveSkillContent(id: string, content: string, expectedContent: string): Promise<void>;
         listUserSkills(): Promise<UserSkill[]>;
         importUserSkills(ids: string[], overwrite: boolean): Promise<string>;
         removeSkill(id: string): Promise<void>;
         generate(selection?: LayerSelection[]): Promise<string>;
-        setup(selection?: LayerSelection[]): Promise<string>;
+        previewSetup(selection?: LayerSelection[]): Promise<SetupPreview>;
+        setup(previewId: string, overwriteExternal: boolean): Promise<string>;
     };
 }

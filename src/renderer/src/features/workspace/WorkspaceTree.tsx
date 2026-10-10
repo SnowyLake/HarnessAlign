@@ -1,12 +1,12 @@
 /** Source navigation and Layer groups sharing the current generation selection. */
 
 import type { LayerOption, RuleInput, SharedRule, Workspace, WorkspaceItemTarget } from "@shared/models/Workspace";
-import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, FolderOpenOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, EllipsisOutlined, FolderOpenOutlined, PlusOutlined, SaveOutlined, SearchOutlined } from "@ant-design/icons";
 import { Badge, Button, Collapse, Dropdown, Empty, Flex, Input, Modal, Popover, Segmented, Select, Switch, Tooltip, Typography, type CollapseProps, type MenuProps } from "antd";
 import { useEffect, useState } from "react";
 import { showError, showSuccess } from "@/components/common/Feedback";
-import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation, saveRenamedSource } from "@/features/workspace/WorkspaceTasks";
-import { catalogLayerNames, defaultLayerOption, moveLayerSelection, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { persistLayerOptionRename, persistLayerRename, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { catalogLayerNames, defaultLayerOption, matchesWorkspaceSource, moveLayerSelection, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type Selection, type WorkspaceView } from "@/stores/AppStore";
 
 /** New-item actions exposed below workspace trees. */
@@ -37,6 +37,7 @@ interface TreeButtonProps
     active: boolean;
     disabled?: boolean;
     muted?: boolean;
+    hasUpdate?: boolean;
     selection?: Selection;
     canSave?: boolean;
     canDelete?: boolean;
@@ -55,7 +56,8 @@ interface TreeButtonProps
 }
 
 /** One selectable row in a workspace module tree. */
-export function TreeButton({ label, active, disabled, muted, selection, canSave = false, canDelete = false, actions, onAction, isDraggable = false, isDragging = false, dropPosition, onRename, onDragStart, onDragEnd, onDragPositionChange, onDragLeave, onDrop, onClick }: TreeButtonProps)
+export function TreeButton({ label, active, disabled, muted, hasUpdate = false, selection, canSave = false, canDelete = false, actions, onAction, isDraggable = false,
+                            isDragging = false, dropPosition, onRename, onDragStart, onDragEnd, onDragPositionChange, onDragLeave, onDrop, onClick }: TreeButtonProps)
 {
     const editorKey = selection ? selectionKey(selection) : undefined;
     const isDirty = useAppStore((state) => editorKey ? Boolean(state.editorDrafts[editorKey]) : false);
@@ -191,6 +193,7 @@ export function TreeButton({ label, active, disabled, muted, selection, canSave 
                     type="text"
                     block
                     title={label}
+                    aria-label={hasUpdate ? `${label}, update available` : undefined}
                     aria-current={active ? "page" : undefined}
                     disabled={Boolean(disabled)}
                     onClick={onClick}
@@ -203,6 +206,7 @@ export function TreeButton({ label, active, disabled, muted, selection, canSave 
                     {label}
                 </Button>
             )}
+            {hasUpdate ? <Badge dot title="Skill update available" aria-hidden="true" styles={{ root: { marginInlineEnd: 10 } }} /> : null}
             {isDirty ? (
                 <Badge className="workspace-tree-dirty" status="processing" title="Unsaved changes" aria-label="Unsaved changes" />
             ) : null}
@@ -226,10 +230,13 @@ async function renameRuleFromTree(workspace: Workspace, rule: RuleInput | Shared
     let nextPath = rule.path;
     const result = await runMutation(async () =>
     {
+        if (useAppStore.getState().editorDrafts[selectionKey({ kind: "rule", path: rule.path })]) throw new Error("Save this draft before renaming from the tree");
         nextPath = uniqueRulePath(rule.path, name, [...workspace.rootRules, ...workspace.sharedRules].map((item) => item.path));
         if (nextPath !== rule.path)
         {
-            await window.appApi.workspace.renameSource(rule.path, nextPath);
+            const guard = { path: rule.path, revision: workspace.sourceRevisions[rule.path] ?? null };
+            if ("targets" in rule) await window.appApi.workspace.saveRule({ ...rule, path: nextPath }, guard);
+            else await window.appApi.workspace.saveSharedRule(nextPath, rule.body, guard);
 
             const state = useAppStore.getState();
             state.moveEditorDraft({ kind: "rule", path: rule.path }, { kind: "rule", path: nextPath }, ruleDisplayName(nextPath));
@@ -265,7 +272,7 @@ async function persistRuleOrder(rules: readonly RuleInput[], sourcePath: string 
     const updates = ordered.filter((rule) => rules.find((current) => current.path === rule.path)?.priority !== rule.priority);
     const result = await runMutation(async () =>
     {
-        for (const rule of updates) await window.appApi.workspace.saveRule(rule);
+        for (const rule of updates) await window.appApi.workspace.saveRule(rule, { path: rule.path, revision: useAppStore.getState().workspace?.sourceRevisions[rule.path] ?? null });
         await refreshWorkspace(selection.kind === "rule" ? selection : undefined);
     });
     if (result.ok) showSuccess("Rule order updated");
@@ -293,11 +300,12 @@ async function renameAgentFromTree(workspace: Workspace, path: string, name: str
     let nextPath = agent.path;
     const result = await runMutation(async () =>
     {
+        if (useAppStore.getState().editorDrafts[selectionKey({ kind: "agent", path: agent.path })]) throw new Error("Save this draft before renaming from the tree");
         nextPath = uniqueAgentPath(agent.path, name, workspace.agents.map((item) => item.path));
         const nextName = ruleDisplayName(nextPath);
         if (nextPath !== agent.path || nextName !== agent.name)
         {
-            await saveRenamedSource(agent.path, nextPath, (savePath) => window.appApi.workspace.saveAgent({ ...agent, path: savePath, name: nextName }));
+            await window.appApi.workspace.saveAgent({ ...agent, path: nextPath, name: nextName }, { path: agent.path, revision: workspace.sourceRevisions[agent.path] ?? null });
             const state = useAppStore.getState();
             state.moveEditorDraft({ kind: "agent", path: agent.path }, { kind: "agent", path: nextPath }, nextName);
         }
@@ -465,6 +473,8 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
     const [draggedLayer, setDraggedLayer] = useState<string>();
     const [draggedRulePath, setDraggedRulePath] = useState<string>();
     const [ruleDropTarget, setRuleDropTarget] = useState<RuleDropTarget>();
+    const [query, setQuery] = useState("");
+    const [harnessFilter, setHarnessFilter] = useState("");
     const selectedLayerName = selection.kind === "layer" ? selection.name
         : selection.kind === "layer-option-new" ? selection.layer
             : selection.kind === "layer-option" ? Object.values(workspace?.layerOptions ?? {}).flat().find((option) => option.path === selection.path)?.layer
@@ -671,9 +681,15 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                 </Tooltip> : null}
             </Flex>
             <div className="workspace-tree-content">
+                {isRuleView || view === "agents" ? <Flex align="center" gap={8} className="workspace-list-toolbar">
+                    <Input className="workspace-list-search" size="small" aria-label="Search source name, path and body"
+                        prefix={<SearchOutlined />} allowClear value={query} onChange={(event) => setQuery(event.target.value)} />
+                    {view !== "shared-rules" ? <Select className="workspace-list-filter" size="small" aria-label="Filter sources by Harness" value={harnessFilter} onChange={setHarnessFilter}
+                        options={[{ value: "", label: "All Harnesses" }, ...workspace.config.harnesses.map((harness) => ({ value: harness.name, label: harness.name }))]} /> : null}
+                </Flex> : null}
                 {view === "rules" ? (
                     <>
-                        {rootRuleTabs.map((rule) => (
+                        {rootRuleTabs.filter((rule) => matchesWorkspaceSource(rule, query, harnessFilter)).map((rule) => (
                             <TreeButton
                                 key={rule.path}
                                 label={ruleDisplayName(rule.path)}
@@ -682,7 +698,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
                                 selection={{ kind: "rule", path: rule.path }}
                                 canSave
                                 canDelete
-                                isDraggable
+                                isDraggable={!query.trim() && !harnessFilter}
                                 isDragging={draggedRulePath === rule.path}
                                 dropPosition={draggedRulePath !== rule.path && ruleDropTarget?.path === rule.path ? ruleDropTarget.position : undefined}
                                 onRename={(name) => renameRuleFromTree(workspace, rule, name)}
@@ -732,7 +748,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
                 {view === "shared-rules" ? (
                     <>
-                        {workspace.sharedRules.map((rule) => (
+                        {workspace.sharedRules.filter((rule) => matchesWorkspaceSource(rule, query)).map((rule) => (
                             <TreeButton
                                 key={rule.path}
                                 label={ruleDisplayName(rule.path)}
@@ -774,7 +790,7 @@ export function WorkspaceTree({ view }: WorkspaceTreeProps)
 
                 {view === "agents" ? (
                     <>
-                        {workspace.agents.map((agent) => (
+                        {workspace.agents.filter((agent) => matchesWorkspaceSource(agent, query, harnessFilter)).map((agent) => (
                             <TreeButton
                                 key={agent.path}
                                 label={agent.name}

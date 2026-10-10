@@ -13,6 +13,7 @@ import type { Agent, Config, HarnessConfig, LayerOptionInput, RuleInput } from "
 /** Renderer-facing capability API bridged onto `window.appApi`. */
 const appApi: AppApi = {
     console: {
+        copyRedacted: () => ipcRenderer.invoke(IPC_CHANNELS.consoleCopyRedacted),
         read: () => ipcRenderer.invoke(IPC_CHANNELS.consoleRead),
         append: (input) => ipcRenderer.invoke(IPC_CHANNELS.consoleAppend, input),
         clear: () => ipcRenderer.invoke(IPC_CHANNELS.consoleClear),
@@ -38,6 +39,7 @@ const appApi: AppApi = {
         openExternal: (url) => ipcRenderer.invoke(IPC_CHANNELS.appOpenExternal, url),
     },
     appUpdate: {
+        setDraftState: (hasUnsaved) => ipcRenderer.invoke(IPC_CHANNELS.appUpdateDraftState, hasUnsaved),
         status: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateStatus),
         check: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateCheck),
         download: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateDownload),
@@ -69,11 +71,11 @@ const appApi: AppApi = {
     },
     workspace: {
         load: () => ipcRenderer.invoke(IPC_CHANNELS.workspaceLoad),
-        saveConfig: (config: Config) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveConfig, config),
-        saveRule: (input: RuleInput) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveRule, input),
-        saveLayerOption: (input: LayerOptionInput) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveLayerOption, input),
-        saveSharedRule: (path, body) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveSharedRule, path, body),
-        saveAgent: (agent: Agent) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveAgent, agent),
+        saveConfig: (config, guard) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveConfig, config, guard),
+        saveRule: (input, guard) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveRule, input, guard),
+        saveLayerOption: (input, guard) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveLayerOption, input, guard),
+        saveSharedRule: (path, body, guard) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveSharedRule, path, body, guard),
+        saveAgent: (agent, guard) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveAgent, agent, guard),
         deleteSource: (path) => ipcRenderer.invoke(IPC_CHANNELS.workspaceDeleteSource, path),
         renameSource: (from, to) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRenameSource, from, to),
         addLayer: (name) => ipcRenderer.invoke(IPC_CHANNELS.workspaceAddLayer, name),
@@ -94,14 +96,16 @@ const appApi: AppApi = {
         installDiscoveredSkill: (previewId) => ipcRenderer.invoke(IPC_CHANNELS.workspaceInstallDiscoveredSkill, previewId),
         installSkills: (ids) => ipcRenderer.invoke(IPC_CHANNELS.workspaceInstallSkills, ids),
         checkSkillUpdates: () => ipcRenderer.invoke(IPC_CHANNELS.workspaceCheckSkillUpdates),
-        applySkillUpdates: (ids) => ipcRenderer.invoke(IPC_CHANNELS.workspaceApplySkillUpdates, ids),
+        readSkillUpdatePreview: (previewId) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSkillUpdatePreview, previewId),
+        applySkillUpdates: (previewIds) => ipcRenderer.invoke(IPC_CHANNELS.workspaceApplySkillUpdates, previewIds),
         readSkillContent: (id) => ipcRenderer.invoke(IPC_CHANNELS.workspaceReadSkillContent, id),
         saveSkillContent: (id, content, expectedContent) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveSkillContent, id, content, expectedContent),
         listUserSkills: () => ipcRenderer.invoke(IPC_CHANNELS.workspaceListUserSkills),
         importUserSkills: (ids, overwrite) => ipcRenderer.invoke(IPC_CHANNELS.workspaceImportUserSkills, ids, overwrite),
         removeSkill: (id) => ipcRenderer.invoke(IPC_CHANNELS.workspaceRemoveSkill, id),
         generate: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceGenerate, selection),
-        setup: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetup, selection),
+        previewSetup: (selection) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetupPreview, selection),
+        setup: (previewId, overwriteExternal) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSetup, previewId, overwriteExternal),
     },
 };
 

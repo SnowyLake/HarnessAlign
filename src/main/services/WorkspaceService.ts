@@ -3,7 +3,8 @@
  * The config root is always `%USERPROFILE%`; renderer input never chooses a directory.
  */
 
-import { dirname, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
 import {
     addHarness,
     addLayer,
@@ -26,26 +27,125 @@ import {
     saveSharedRule,
     saveSkillContent,
     updateHarness,
+    upgradeWorkspaceConfig,
 } from "../../engine/Edit.js";
 import { assertContained, ensureRegularSource, lstatIfExists } from "../../engine/FsSafe.js";
-import { generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
+import { generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
+import { loadConfigSource } from "../../engine/Load.js";
 import { HalignError, valueText } from "../../engine/Model.js";
-import { reportSetup, setup } from "../../engine/Setup.js";
+import { inspectHarnessRoots, previewSetup, reportSetup, setup } from "../../engine/Setup.js";
 import type { AppApi } from "../../shared/contracts/AppApi.js";
 import { assertSkillName, importUserSkills, listImportableUserSkills, loadSkills, readSkillContent, removeSkill } from "../../engine/Skills.js";
-import type { WorkspaceItemTarget } from "../../shared/models/Workspace.js";
+import type { LayerSelection, WorkspaceItemTarget } from "../../shared/models/Workspace.js";
 import * as skillRemote from "./SkillRemoteService.js";
+import { appendLog } from "./ConsoleService.js";
+import { getSyncStatus } from "./GitHubSyncService.js";
 
 /** Tail of the single-user workspace queue, including reads that must see complete writes. */
 let workspaceQueue: Promise<unknown> = Promise.resolve();
+let hasUnsavedDrafts = true;
+let isUpdateExclusive = false;
+let syncStateDirectory: string | undefined;
+let upgradeDelayReported = false;
+
+/** Receive Main's trusted userData directory without exposing it through IPC or importing Electron. */
+export function setWorkspaceSyncDirectory(directory?: string): void
+{
+    syncStateDirectory = directory === undefined ? undefined : resolve(directory);
+    upgradeDelayReported = false;
+}
+
+/** Only the latest Main-owned deployment preview may be applied. */
+let setupReview: { id: string; root: string; revision: string; selection: LayerSelection[] | undefined } | undefined;
+
+/** Track the trusted renderer's draft state without accepting workspace paths or update URLs. */
+export function setUpdateDraftState(hasUnsaved: boolean): void
+{
+    hasUnsavedDrafts = hasUnsaved;
+}
+
+/** Refuse installation if the renderer has reported any new draft during the download. */
+export function assertUpdateDraftsSaved(): void
+{
+    if (hasUnsavedDrafts) throw new HalignError("application update: save all workspace changes before downloading or installing");
+}
+
+/** Drain existing work and reserve the workspace until the updater fails or starts installation. */
+export async function withWorkspaceForUpdate<T>(work: () => Promise<T>, isInstalling: () => boolean = () => false): Promise<T>
+{
+    if (isUpdateExclusive) throw new HalignError("application update: another download is already running");
+    assertUpdateDraftsSaved();
+    isUpdateExclusive = true;
+    try
+    {
+        await workspaceQueue;
+        assertUpdateDraftsSaved();
+        return await work();
+    }
+    finally
+    {
+        if (!isInstalling()) isUpdateExclusive = false;
+    }
+}
 
 /** Serialize workspace operations and release the queue even when an operation fails. */
-export function withWorkspace<T>(work: (root: string) => Promise<T>): Promise<T>
+export function withWorkspace<T>(work: (root: string) => Promise<T>, operation = "Workspace"): Promise<T>
 {
+    if (isUpdateExclusive) return Promise.reject(new HalignError("workspace: application update is downloading or installing; retry after it finishes"));
     // ponytail: one workspace queue; split remote downloads only if UI latency becomes a measured problem.
-    const operation = workspaceQueue.then(async () => work(await ensureUserWorkspace()));
-    workspaceQueue = operation.catch(() => undefined);
-    return operation;
+    const queuedAt = performance.now();
+    const pending = workspaceQueue.then(async () =>
+    {
+        const startedAt = performance.now();
+        let initializedAt: number | undefined;
+        let outcome = "failed";
+        try
+        {
+            const root = await ensureUserWorkspace();
+            if ((await loadConfigSource(root)).upgradedText !== undefined)
+            {
+                let upgradeDelay = "";
+                if (syncStateDirectory)
+                {
+                    try
+                    {
+                        if ((await getSyncStatus(syncStateDirectory)).hasPendingUpload) upgradeDelay = "Recover the pending GitHub upload before automatically upgrading configuration format 1 to 3.";
+                    }
+                    catch (error)
+                    {
+                        upgradeDelay = "Automatic upgrade deferred: GitHub recovery state could not be read. Preserve it and repair it before retrying.\n"
+                            + (error instanceof Error ? error.message : String(error));
+                    }
+                }
+                if (upgradeDelay)
+                {
+                    if (!upgradeDelayReported) appendLog({ level: "info", title: "Configuration upgrade deferred", details: upgradeDelay });
+                    upgradeDelayReported = true;
+                }
+                else
+                {
+                    const backup = await upgradeWorkspaceConfig(root);
+                    if (backup) appendLog({
+                        level: "success", title: "Configuration upgraded: 1 -> 3",
+                        details: `The configuration was validated and upgraded. Original configuration: ${basename(backup)}\nGenerate and Setup remain manual.`,
+                    });
+                    upgradeDelayReported = false;
+                }
+            }
+            else upgradeDelayReported = false;
+            initializedAt = performance.now();
+            const result = await work(root);
+            outcome = "completed";
+            return result;
+        }
+        finally
+        {
+            const finishedAt = performance.now();
+            appendLog({ level: "info", title: `${operation} timing`, details: `Queue: ${(startedAt - queuedAt).toFixed(1)} ms\nInitialize: ${((initializedAt ?? finishedAt) - startedAt).toFixed(1)} ms\n${operation}: ${(initializedAt === undefined ? 0 : finishedAt - initializedAt).toFixed(1)} ms\nOutcome: ${outcome}` });
+        }
+    });
+    workspaceQueue = pending.catch(() => undefined);
+    return pending;
 }
 
 /** Resolve an existing source, generated file, or installed SKILL.md to its safe containing folder. */
@@ -82,26 +182,33 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     load: () => withWorkspace(async (root) =>
     {
         const [workspace, generatedFiles] = await Promise.all([loadWorkspace(root), readGeneratedFiles(root)]);
+        const deploymentStatus = await previewSetup(root).then((preview) => ({
+            state: preview.changes.some((change) => change.status !== "unchanged" && change.status !== "skipped") ? "pending" as const : "current" as const,
+            changes: preview.changes,
+        })).catch((error: unknown) => ({ state: "error" as const, changes: [], error: error instanceof Error ? error.message : String(error) }));
         return {
             ...workspace,
+            deploymentStatus,
+            generationStatus: await inspectGenerated(root, generatedFiles),
+            harnessRoots: await inspectHarnessRoots(root),
             generatedFiles: [...generatedFiles].map(([path, content]) => ({ path, content: content.toString("utf8") })),
         };
-    }),
+    }, "Load"),
 
     /** Validate and write `config.json`. */
-    saveConfig: (config) => withWorkspace((root) => saveConfig(root, config)),
+    saveConfig: (config, guard) => withWorkspace((root) => saveConfig(root, config, guard), "Save Config"),
 
     /** Validate and write a root rule. */
-    saveRule: (input) => withWorkspace((root) => saveRule(root, input)),
+    saveRule: (input, guard) => withWorkspace((root) => saveRule(root, input, guard), "Save Rule"),
 
     /** Validate and write a layer option. */
-    saveLayerOption: (input) => withWorkspace((root) => saveLayerOption(root, input)),
+    saveLayerOption: (input, guard) => withWorkspace((root) => saveLayerOption(root, input, guard), "Save Layer option"),
 
     /** Validate and write a shared-rule markdown file. */
-    saveSharedRule: (path, body) => withWorkspace((root) => saveSharedRule(root, path, body)),
+    saveSharedRule: (path, body, guard) => withWorkspace((root) => saveSharedRule(root, path, body, guard), "Save Shared Rule"),
 
     /** Validate and write a subagent source file. */
-    saveAgent: (agent) => withWorkspace((root) => saveAgent(root, agent)),
+    saveAgent: (agent, guard) => withWorkspace((root) => saveAgent(root, agent, guard), "Save Agent"),
 
     /** Delete a `.harness-align` source file after containment checks. */
     deleteSource: (path) => withWorkspace((root) => deleteSource(root, path)),
@@ -134,7 +241,7 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     removeHarness: (name) => withWorkspace((root) => removeHarness(root, name)),
 
     /** Update a harness and cascade its name when necessary. */
-    updateHarness: (from, harness) => withWorkspace((root) => updateHarness(root, from, harness)),
+    updateHarness: (from, harness) => withWorkspace((root) => updateHarness(root, from, harness), "Update Harness"),
 
     /** Register a GitHub skill source URL. */
     addSkillSource: (input) => withWorkspace((root) => addSkillSource(root, input)),
@@ -143,41 +250,58 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     removeSkillSource: (owner, name) => withWorkspace((root) => removeSkillSource(root, owner, name)),
 
     /** Discover remote skills from configured GitHub sources. */
-    discoverSkills: () => withWorkspace((root) => skillRemote.discoverSkills(root)),
+    discoverSkills: () => withWorkspace((root) => skillRemote.discoverSkills(root), "Discover Skills"),
 
     /** Read one remote SKILL.md from the current discovery cache. */
     readDiscoveredSkillContent: (previewId) => withWorkspace((root) => skillRemote.readDiscoveredSkillContent(root, previewId)),
 
     /** Install the exact skill selected from the current discovery cache. */
-    installDiscoveredSkill: (previewId) => withWorkspace((root) => skillRemote.installDiscoveredSkill(root, previewId)),
+    installDiscoveredSkill: (previewId) => withWorkspace((root) => skillRemote.installDiscoveredSkill(root, previewId), "Install Skill"),
 
     /** Install selected discovered skills into the project. */
-    installSkills: (ids) => withWorkspace((root) => skillRemote.installSkills(root, ids)),
+    installSkills: (ids) => withWorkspace((root) => skillRemote.installSkills(root, ids), "Install Skills"),
 
     /** Compare installed GitHub skills with remote content hashes. */
-    checkSkillUpdates: () => withWorkspace((root) => skillRemote.checkSkillUpdates(root)),
+    checkSkillUpdates: () => withWorkspace((root) => skillRemote.checkSkillUpdates(root), "Check Skill updates"),
+
+    /** Inspect only the fixed remote version retained by the current update review. */
+    readSkillUpdatePreview: (previewId) => withWorkspace((root) => skillRemote.readSkillUpdatePreview(root, previewId)),
 
     /** Apply remote updates for selected installed skills. */
-    applySkillUpdates: (ids) => withWorkspace((root) => skillRemote.applySkillUpdates(root, ids)),
+    applySkillUpdates: (previewIds) => withWorkspace((root) => skillRemote.applySkillUpdates(root, previewIds), "Apply Skill updates"),
 
     /** Read one installed skill's main Markdown file. */
     readSkillContent: (id) => withWorkspace((root) => readSkillContent(root, id)),
 
     /** Save one local skill's main Markdown file. */
-    saveSkillContent: (id, content, expectedContent) => withWorkspace((root) => saveSkillContent(root, id, content, expectedContent)),
+    saveSkillContent: (id, content, expectedContent) => withWorkspace((root) => saveSkillContent(root, id, content, expectedContent), "Save Skill"),
 
     /** List skills under the current user profile. */
     listUserSkills: () => withWorkspace((root) => listImportableUserSkills(root)),
 
     /** Import selected user-profile skills into the project. */
-    importUserSkills: (ids, overwrite) => withWorkspace((root) => importUserSkills(root, ids, overwrite)),
+    importUserSkills: (ids, overwrite) => withWorkspace((root) => importUserSkills(root, ids, overwrite), "Import Skills"),
 
     /** Remove one installed project skill. */
     removeSkill: (id) => withWorkspace((root) => removeSkill(root, id)),
 
     /** Generate outputs and return the report string. */
-    generate: (selection) => withWorkspace(async (root) => reportGenerate(await generate(root, selection))),
+    generate: (selection) => withWorkspace(async (root) => reportGenerate(await generate(root, selection)), "Generate"),
 
-    /** Generate then deploy into existing user harness roots. */
-    setup: (selection) => withWorkspace(async (root) => reportSetup(await setup(root, selection))),
+    /** Review source and target contents without generating or deploying. */
+    previewSetup: (selection) => withWorkspace(async (root) =>
+    {
+        const preview = await previewSetup(root, selection);
+        setupReview = { id: randomUUID(), root, revision: preview.revision, selection };
+        return { id: setupReview.id, changes: preview.changes };
+    }, "Preview Setup"),
+
+    /** Apply only the latest reviewed plan after checking its content revision. */
+    setup: (previewId, overwriteExternal) => withWorkspace(async (root) =>
+    {
+        const review = setupReview;
+        if (!review || review.id !== previewId || review.root !== root) throw new HalignError("Setup preview is missing or expired; preview again before deploying");
+        setupReview = undefined;
+        return reportSetup(await setup(root, review.selection, undefined, review.revision, overwriteExternal));
+    }, "Setup"),
 };

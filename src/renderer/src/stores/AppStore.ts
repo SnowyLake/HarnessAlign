@@ -4,7 +4,8 @@
 
 import { create } from "zustand";
 import type { ThemeMode } from "../../../shared/models/AppSettings.js";
-import type { LayerSelection, Workspace } from "../../../shared/models/Workspace.js";
+import type { AppUpdateStatus } from "../../../shared/models/AppUpdate.js";
+import type { LayerSelection, SkillUpdate, Workspace } from "../../../shared/models/Workspace.js";
 import type { SyncPreview, SyncStatus } from "../../../shared/models/Sync.js";
 import type { LogChange, LogEntry, LogSnapshot } from "../../../shared/models/Console.js";
 import { defaultLayerOption, hasLayerChanges } from "../lib/Utils.js";
@@ -41,6 +42,7 @@ export interface EditorDraft
     selection: Selection;
     baseline: FormSnapshot;
     current: FormSnapshot;
+    sourceRevisions?: Record<string, string>;
 }
 
 /** Commands that can be requested from a workspace tree item. */
@@ -189,6 +191,18 @@ function reconcileLayerSelection(current: readonly LayerSelection[], workspace: 
     return next;
 }
 
+/** Retain checked versions only while their sources and installed provenance still match. */
+function reconcileSkillUpdates(updates: SkillUpdate[], previous: Workspace | undefined, workspace: Workspace | undefined): SkillUpdate[]
+{
+    if (!previous || !workspace || JSON.stringify(previous.config.skillSources) !== JSON.stringify(workspace.config.skillSources)) return [];
+    return updates.filter((update) =>
+    {
+        const origin = workspace.skills.find((skill) => skill.id === update.id)?.origin;
+        return origin?.kind === "github" && origin.contentHash === update.currentHash
+            && JSON.stringify(origin) === JSON.stringify(previous.skills.find((skill) => skill.id === update.id)?.origin);
+    });
+}
+
 /** Zustand state and setters for the desktop shell. */
 interface AppState
 {
@@ -197,6 +211,10 @@ interface AppState
     workspaceRevision: number;
     syncPreview: SyncPreview | undefined;
     syncStatus: SyncStatus | undefined;
+    appUpdateStatus: AppUpdateStatus | null;
+    skillUpdates: SkillUpdate[];
+    isCheckingSkillUpdates: boolean;
+    hasStartedSkillUpdateCheck: boolean;
     syncDialog: "review" | "connection" | undefined;
     selection: Selection;
     layerSelection: LayerSelection[];
@@ -212,6 +230,9 @@ interface AppState
     resetWorkspace: (workspace: Workspace) => void;
     setSyncPreview: (preview: SyncPreview | undefined) => void;
     setSyncStatus: (status: SyncStatus) => void;
+    setAppUpdateStatus: (status: AppUpdateStatus) => void;
+    setSkillUpdates: (updates: SkillUpdate[], checkedWorkspace?: Workspace) => void;
+    setIsCheckingSkillUpdates: (isChecking: boolean) => void;
     setSyncDialog: (dialog: "review" | "connection" | undefined) => void;
     setSelection: (selection: Selection) => void;
     setLayerSelection: (selection: LayerSelection[]) => void;
@@ -239,6 +260,10 @@ export const useAppStore = create<AppState>((set) => ({
     workspaceRevision: 0,
     syncPreview: undefined,
     syncStatus: undefined,
+    appUpdateStatus: null,
+    skillUpdates: [],
+    isCheckingSkillUpdates: false,
+    hasStartedSkillUpdateCheck: false,
     syncDialog: undefined,
     selection: { kind: "config" },
     layerSelection: [],
@@ -260,6 +285,9 @@ export const useAppStore = create<AppState>((set) => ({
         const shouldReset = !state.workspace || !workspace;
         return {
             workspace,
+            skillUpdates: reconcileSkillUpdates(state.skillUpdates, state.workspace, workspace),
+            syncStatus: state.syncStatus ? { ...state.syncStatus, localState: "unknown" as const } : undefined,
+            syncPreview: undefined,
             selection: state.view === "settings" || state.view === "console"
                 ? state.selection
                 : selectionForView(state.view, state.selection, workspace),
@@ -275,6 +303,8 @@ export const useAppStore = create<AppState>((set) => ({
     setSelection: (selection) => set({ selection }),
     resetWorkspace: (workspace) => set((state) => ({
         workspace,
+        skillUpdates: reconcileSkillUpdates(state.skillUpdates, state.workspace, workspace),
+        syncStatus: state.syncStatus ? { ...state.syncStatus, localState: "unknown" as const } : undefined,
         workspaceRevision: state.workspaceRevision + 1,
         selection: state.view === "settings" || state.view === "console"
             ? state.selection
@@ -295,6 +325,14 @@ export const useAppStore = create<AppState>((set) => ({
     setTheme: (theme) => set({ theme }),
     setSyncPreview: (syncPreview) => set({ syncPreview }),
     setSyncStatus: (syncStatus) => set({ syncStatus }),
+    setAppUpdateStatus: (appUpdateStatus) => set({ appUpdateStatus }),
+    setSkillUpdates: (skillUpdates, checkedWorkspace) => set((state) => ({
+        skillUpdates: checkedWorkspace ? reconcileSkillUpdates(skillUpdates, checkedWorkspace, state.workspace) : skillUpdates,
+    })),
+    setIsCheckingSkillUpdates: (isCheckingSkillUpdates) => set((state) => ({
+        isCheckingSkillUpdates,
+        hasStartedSkillUpdateCheck: state.hasStartedSkillUpdateCheck || isCheckingSkillUpdates,
+    })),
     setSyncDialog: (syncDialog) => set({ syncDialog }),
     setEditorDraft: (key, draft) => set((state) =>
     {
@@ -317,8 +355,16 @@ export const useAppStore = create<AppState>((set) => ({
         const draft = state.editorDrafts[previousKey];
         if (!draft || previousKey === nextKey) return state;
         const editorDrafts = { ...state.editorDrafts };
+        const sourceRevisions = draft.sourceRevisions ? { ...draft.sourceRevisions } : undefined;
+        if (sourceRevisions && "path" in from && "path" in to && from.path !== to.path && Object.hasOwn(sourceRevisions, from.path))
+        {
+            sourceRevisions[to.path] = sourceRevisions[from.path]!;
+            delete sourceRevisions[from.path];
+        }
         editorDrafts[nextKey] = {
+            ...draft,
             selection: to,
+            ...(sourceRevisions ? { sourceRevisions } : {}),
             baseline: name === undefined ? draft.baseline : { ...draft.baseline, name: [name] },
             current: name === undefined ? draft.current : { ...draft.current, name: [name] },
         };

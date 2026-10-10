@@ -5,6 +5,7 @@
 
 /** Channel names for the typed Main / Preload IPC contract. */
 export const IPC_CHANNELS = {
+    consoleCopyRedacted: "console:copy-redacted",
     consoleRead: "console:read",
     consoleAppend: "console:append",
     consoleClear: "console:clear",
@@ -19,6 +20,7 @@ export const IPC_CHANNELS = {
     appGetVersion: "app:get-version",
     appOpenExternal: "app:open-external",
     appUpdateStatus: "app:update-status",
+    appUpdateDraftState: "app:update-draft-state",
     appUpdateCheck: "app:update-check",
     appUpdateDownload: "app:update-download",
     appUpdateChanged: "app:update-changed",
@@ -51,6 +53,7 @@ export const IPC_CHANNELS = {
     workspaceInstallDiscoveredSkill: "workspace:install-discovered-skill",
     workspaceInstallSkills: "workspace:install-skills",
     workspaceCheckSkillUpdates: "workspace:check-skill-updates",
+    workspaceSkillUpdatePreview: "workspace:skill-update-preview",
     workspaceApplySkillUpdates: "workspace:apply-skill-updates",
     workspaceReadSkillContent: "workspace:read-skill-content",
     workspaceSaveSkillContent: "workspace:save-skill-content",
@@ -58,5 +61,6 @@ export const IPC_CHANNELS = {
     workspaceImportUserSkills: "workspace:import-user-skills",
     workspaceRemoveSkill: "workspace:remove-skill",
     workspaceGenerate: "workspace:generate",
+    workspaceSetupPreview: "workspace:setup-preview",
     workspaceSetup: "workspace:setup",
 } as const;

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
 import { loadConfig } from "../../engine/Load.js";
+import { ensureRegularSource } from "../../engine/FsSafe.js";
 import { codePointCompare, errorText, HalignError, isRecord, type SkillOrigin, valueText } from "../../engine/Model.js";
 import { parseSyncSnapshot, syncSkillHash, syncSkillIndex, type SyncSnapshot } from "../../engine/Sync.js";
 import {
@@ -17,10 +18,13 @@ import {
     assertSkillReplacement,
     installSkillFromDirectory,
     loadSkills,
+    listSkillFiles,
+    readSkillContent,
     readSkillFrontmatter,
 } from "../../engine/Skills.js";
-import type { RemoteSkill, SkillUpdate } from "../../shared/models/Workspace.js";
-import { fetchRemote, readResponseBytes } from "./RemoteFetch.js";
+import type { RemoteSkill, SkillUpdate, SkillUpdatePreview } from "../../shared/models/Workspace.js";
+import { fetchRemote, githubRateLimitHint, readResponseBytes } from "./RemoteFetch.js";
+import { appendLog } from "./ConsoleService.js";
 
 /** Compressed zip size limit (128 MiB). */
 const MAX_COMPRESSED_BYTES = 128 * 1024 * 1024;
@@ -37,9 +41,9 @@ const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 class ArchiveHttpError extends HalignError
 {
     /** Retain the response status without parsing user-facing error text. */
-    constructor(readonly status: number, location: string)
+    constructor(readonly status: number, location: string, hint?: string)
     {
-        super(`failed to download ${location}: HTTP ${status}`);
+        super(`failed to download ${location}: HTTP ${status}${hint ? `; ${hint}` : ""}`);
     }
 }
 
@@ -62,6 +66,13 @@ interface DiscoverCache
 /** Last discover cache used to avoid re-downloading before install. */
 let discoverCache: DiscoverCache | undefined;
 
+/** Bounded session cache keyed only by repository and immutable commit. */
+const archiveCache = new Map<string, Map<string, Uint8Array>>();
+let archiveCacheBytes = 0;
+
+/** Latest reviewed updates bind immutable remote files to installed provenance. */
+let updateReview: { root: string; sources: string; items: Array<{ skill: CachedSkill; currentHash: string; currentOrigin: string }> } | undefined;
+
 /** Build the GitHub archive URL for one immutable commit. */
 function archiveUrl(owner: string, name: string, commit: string): string
 {
@@ -69,7 +80,7 @@ function archiveUrl(owner: string, name: string, commit: string): string
 }
 
 /** Download a GitHub branch zip with size and timeout limits. */
-async function fetchZip(owner: string, name: string, branch: string, pinnedCommit?: string): Promise<{ bytes: Uint8Array; commit: string }>
+async function fetchZip(owner: string, name: string, branch: string, pinnedCommit?: string): Promise<{ files: Map<string, Uint8Array>; commit: string }>
 {
     const location = `${owner}/${name}@${pinnedCommit ?? branch}`;
     const controller = new AbortController();
@@ -85,13 +96,23 @@ async function fetchZip(owner: string, name: string, branch: string, pinnedCommi
             if (!response.ok)
             {
                 await response.body?.cancel();
-                throw new ArchiveHttpError(response.status, location);
+                throw new ArchiveHttpError(response.status, location, githubRateLimitHint(response));
             }
             const value: unknown = JSON.parse((await readResponseBytes(response, 1024 * 1024, `skill commit ${location}`)).toString("utf8"));
             if (!isRecord(value) || typeof value.sha !== "string" || !/^[a-f0-9]{40}$/u.test(value.sha)) throw new HalignError(`skill commit ${location}: expected a 40-character SHA`);
             commit = value.sha;
         }
+        const cacheKey = `${owner.toLowerCase()}/${name.toLowerCase()}@${commit}`;
+        const cached = archiveCache.get(cacheKey);
+        if (cached)
+        {
+            archiveCache.delete(cacheKey);
+            archiveCache.set(cacheKey, cached);
+            appendLog({ level: "info", title: "Skills archive cache hit", details: `${cacheKey}: reused verified download and extraction` });
+            return { files: cached, commit };
+        }
         const url = archiveUrl(owner, name, commit);
+        const downloadedAt = performance.now();
         const response = await fetchRemote(url, {
             signal: controller.signal,
             headers: { "User-Agent": "HarnessAlign/1.0", Accept: "application/zip" },
@@ -100,9 +121,23 @@ async function fetchZip(owner: string, name: string, branch: string, pinnedCommi
         if (!response.ok)
         {
             await response.body?.cancel();
-            throw new ArchiveHttpError(response.status, location);
+            throw new ArchiveHttpError(response.status, location, githubRateLimitHint(response));
         }
-        return { bytes: await readResponseBytes(response, MAX_COMPRESSED_BYTES, `skill archive ${location}`), commit };
+        const bytes = await readResponseBytes(response, MAX_COMPRESSED_BYTES, `skill archive ${location}`);
+        appendLog({ level: "info", title: "Skills download timing", details: `${cacheKey}: ${bytes.byteLength} compressed bytes in ${(performance.now() - downloadedAt).toFixed(1)} ms` });
+        const extractedAt = performance.now();
+        const files = unzipSkillArchive(bytes);
+        appendLog({ level: "info", title: "Skills extraction timing", details: `${cacheKey}: ${files.size} files in ${(performance.now() - extractedAt).toFixed(1)} ms` });
+        const size = [...files.values()].reduce((total, data) => total + data.byteLength, 0);
+        while ((archiveCacheBytes + size > MAX_UNCOMPRESSED_BYTES || archiveCache.size >= 8) && archiveCache.size > 0)
+        {
+            const oldest = archiveCache.keys().next().value!;
+            archiveCacheBytes -= [...archiveCache.get(oldest)!.values()].reduce((total, data) => total + data.byteLength, 0);
+            archiveCache.delete(oldest);
+        }
+        archiveCache.set(cacheKey, files);
+        archiveCacheBytes += size;
+        return { files, commit };
     }
     catch (error)
     {
@@ -265,12 +300,13 @@ async function cachedSkills(root: string): Promise<CachedSkill[]>
 /** Discover remote skills for every configured skill source. */
 export async function discoverSkills(root: string): Promise<RemoteSkill[]>
 {
+    updateReview = undefined;
     const config = await loadConfig(root);
     const discovered: Array<Omit<CachedSkill, "conflict">> = [];
     for (const source of config.skillSources)
     {
         let branch = source.branch;
-        let archive: { bytes: Uint8Array; commit: string };
+        let archive: { files: Map<string, Uint8Array>; commit: string };
         try
         {
             archive = await fetchZip(source.owner, source.name, branch);
@@ -283,7 +319,7 @@ export async function discoverSkills(root: string): Promise<RemoteSkill[]>
             archive = await fetchZip(source.owner, source.name, fallback);
             branch = fallback;
         }
-        discovered.push(...discoverInArchive(unzipSkillArchive(archive.bytes), source.owner, source.name, branch, archive.commit));
+        discovered.push(...discoverInArchive(archive.files, source.owner, source.name, branch, archive.commit));
     }
     const skills = withConflicts(discovered);
     discoverCache = { root, sources: JSON.stringify(config.skillSources), skills };
@@ -405,7 +441,7 @@ export async function hydrateSyncSkills(snapshot: SyncSnapshot, local: SyncSnaps
             if (!skills)
             {
                 const archive = await fetchZip(origin.owner, origin.name, origin.branch, origin.commit);
-                skills = discoverInArchive(unzipSkillArchive(archive.bytes), origin.owner, origin.name, origin.branch, archive.commit);
+                skills = discoverInArchive(archive.files, origin.owner, origin.name, origin.branch, archive.commit);
                 archives.set(key, skills);
             }
             const skill = skills.find((item) => item.sourcePath === origin.sourcePath);
@@ -430,6 +466,7 @@ export async function checkSkillUpdates(root: string): Promise<SkillUpdate[]>
     await discoverSkills(root);
     const remoteById = new Map((discoverCache?.skills ?? []).filter((skill) => !skill.conflict).map((skill) => [skill.id, skill]));
     const updates: SkillUpdate[] = [];
+    const reviewed: NonNullable<typeof updateReview>["items"] = [];
     for (const skill of installed)
     {
         if (skill.origin.kind !== "github") continue;
@@ -451,22 +488,65 @@ export async function checkSkillUpdates(root: string): Promise<SkillUpdate[]>
             id: skill.id,
             currentHash: skill.origin.contentHash,
             remoteHash: remoteSkill.contentHash,
+            previewId: remoteSkill.previewId,
         });
+        reviewed.push({ skill: remoteSkill, currentHash: skill.origin.contentHash, currentOrigin: JSON.stringify(skill.origin) });
     }
+    updateReview = { root, sources: JSON.stringify((await loadConfig(root)).skillSources), items: reviewed };
     return updates;
 }
 
-/** Reinstall selected skills that have remote updates. */
-export async function applySkillUpdates(root: string, ids: readonly string[]): Promise<string>
+/** Inspect actual local files against the immutable version retained by an update check. */
+export async function readSkillUpdatePreview(root: string, previewId: string): Promise<SkillUpdatePreview>
 {
-    if (ids.length === 0) throw new HalignError("update requires at least one skill id");
-    const updates = await checkSkillUpdates(root);
-    const wanted = new Set(ids);
-    const outdated = updates.filter((update) => wanted.has(update.id) && !update.error && update.currentHash !== update.remoteHash);
-    const missing = ids.filter((id) => !updates.some((update) => update.id === id));
-    if (missing.length > 0) throw new HalignError(`unknown installed skill id ${valueText(missing[0])}`);
-    const errored = updates.find((update) => wanted.has(update.id) && update.error);
-    if (errored) throw new HalignError(errored.error!);
-    if (outdated.length === 0) return "No skill updates to apply.\n";
-    return installSkills(root, outdated.map((update) => update.id));
+    if (!updateReview || updateReview.root !== root || updateReview.sources !== JSON.stringify((await loadConfig(root)).skillSources)) throw new HalignError("skill update preview expired; check updates again");
+    const item = updateReview.items.find((entry) => entry.skill.previewId === previewId);
+    if (!item) throw new HalignError(`skill update preview ${valueText(previewId)} expired; check updates again`);
+    const current = (await loadSkills(root)).find((skill) => skill.id === item.skill.id);
+    if (!current || current.origin.kind !== "github" || JSON.stringify(current.origin) !== item.currentOrigin) throw new HalignError(`skills/${item.skill.id}: installed provenance changed since review`);
+    const directory = join(root, ".harness-align", "skills", current.id);
+    await ensureRegularSource(root, directory);
+    const local = new Map<string, string>();
+    const paths = await listSkillFiles(directory);
+    if (paths.length > MAX_ZIP_ENTRIES) throw new HalignError(`${directory}: preview exceeds ${MAX_ZIP_ENTRIES} files`);
+    for (const path of paths)
+    {
+        const absolute = join(directory, ...path.split("/"));
+        await ensureRegularSource(root, absolute);
+        if ((await fs.stat(absolute)).size > MAX_UNCOMPRESSED_BYTES) throw new HalignError(`${absolute}: preview file exceeds 512 MiB`);
+        local.set(path, createHash("sha256").update(await fs.readFile(absolute)).digest("hex"));
+    }
+    const remote = new Map([...item.skill.files].map(([path, bytes]) => [path, createHash("sha256").update(bytes).digest("hex")]));
+    const files: SkillUpdatePreview["files"] = [...new Set([...local.keys(), ...remote.keys()])].sort(codePointCompare).map((path) => ({ path,
+        status: !local.has(path) ? "added" : !remote.has(path) ? "deleted" : local.get(path) === remote.get(path) ? "unchanged" : "modified" }));
+    const oldText = await readSkillContent(root, current.id);
+    const bytes = item.skill.files.get("SKILL.md")!;
+    let newText: string;
+    try { newText = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+    catch (error) { throw new HalignError(`skills/${current.id}/SKILL.md: invalid remote UTF-8: ${errorText(error)}`); }
+    return { previewId, id: current.id, oldCommit: current.origin.commit ?? null, newCommit: item.skill.commit, files,
+        oldText: oldText.slice(0, 16_000), newText: newText.slice(0, 16_000), truncated: oldText.length > 16_000 || newText.length > 16_000 };
+}
+
+/** Reinstall selected skills that have remote updates. */
+export async function applySkillUpdates(root: string, previewIds: readonly string[]): Promise<string>
+{
+    if (previewIds.length === 0 || new Set(previewIds).size !== previewIds.length) throw new HalignError("update requires unique reviewed preview ids");
+    if (!updateReview || updateReview.root !== root || updateReview.sources !== JSON.stringify((await loadConfig(root)).skillSources)) throw new HalignError("skill update preview expired; check updates again before applying");
+    const installed = await loadSkills(root);
+    const selected: CachedSkill[] = [];
+    for (const previewId of previewIds)
+    {
+        const item = updateReview.items.find((entry) => entry.skill.previewId === previewId);
+        if (!item) throw new HalignError(`skill update preview ${valueText(previewId)} expired; check updates again`);
+        const current = installed.find((skill) => skill.id === item.skill.id);
+        if (!current || current.origin.kind !== "github" || JSON.stringify(current.origin) !== item.currentOrigin
+            || current.origin.owner.toLowerCase() !== item.skill.owner.toLowerCase() || current.origin.name.toLowerCase() !== item.skill.name.toLowerCase() || current.origin.sourcePath !== item.skill.sourcePath) throw new HalignError(`skills/${item.skill.id}: installed provenance changed since review; check updates again`);
+        if (item.currentHash !== item.skill.contentHash) selected.push(item.skill);
+    }
+    if (selected.length === 0) return "No skill updates to apply.\n";
+    const report = await installCachedSkills(root, selected.map((skill) => skill.id), selected);
+    updateReview.items = updateReview.items.filter((item) => !previewIds.includes(item.skill.previewId));
+    if (updateReview.items.length === 0) updateReview = undefined;
+    return report;
 }

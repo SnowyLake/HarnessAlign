@@ -13,6 +13,7 @@ import {
     type Agent,
     assertWindowsSafeName,
     type Config,
+    CONFIG_VERSION,
     FRONTMATTER,
     type Harness,
     type HarnessConfig,
@@ -224,16 +225,22 @@ export function validateConfig(value: unknown): Config
 {
     const path = ".harness-align/config.json";
     if (!isRecord(value)) throw new HalignError(`${path}: expected a mapping`);
+    if (!Object.hasOwn(value, "version")) throw new HalignError(`${path}: version is required`);
+    if (value.version !== CONFIG_VERSION)
+    {
+        if (value.version === 2) throw new HalignError(`${path}: legacy Profile format version 2 is unsupported; convert it to the Layer format before upgrading to ${CONFIG_VERSION}`);
+        if (typeof value.version === "number" && Number.isInteger(value.version) && value.version > CONFIG_VERSION)
+        {
+            throw new HalignError(`${path}: version ${value.version} is newer than supported version ${CONFIG_VERSION}; update Harness Align before opening this configuration`);
+        }
+        throw new HalignError(`${path}: version must be integer ${CONFIG_VERSION}, got ${valueText(value.version)}; source reading also supports Layer format version 1`);
+    }
     const knownFields = new Set(["version", "name", "layers", "harnesses", "skill_sources"]);
     const unknownFields = Object.keys(value).filter((field) => !knownFields.has(field));
     if (unknownFields.length > 0) throw new HalignError(`${path}: unknown field ${valueText(firstSorted(unknownFields))}`);
-    for (const field of ["version", "layers", "harnesses"])
+    for (const field of ["layers", "harnesses"])
     {
         if (!Object.hasOwn(value, field)) throw new HalignError(`${path}: ${field} is required`);
-    }
-    if (value.version !== 1)
-    {
-        throw new HalignError(`${path}: version must be integer 1, got ${valueText(value.version)}`);
     }
     const name = Object.hasOwn(value, "name") ? value.name : "AGENTS";
     if (typeof name !== "string" || !name.trim() || /[\r\n]/u.test(name))
@@ -311,6 +318,10 @@ export function validateConfig(value: unknown): Config
         {
             throw new HalignError(`${path}: harness config_path must not use the managed skills target, got ${valueText(harness.configPath)}`);
         }
+        if (foldedPath === ".agents/.harness-align.lock.json" || foldedPath.startsWith(".agents/.harness-align.lock.json/"))
+        {
+            throw new HalignError(`${path}: harness config_path must not use the deployment ownership lock, got ${valueText(harness.configPath)}`);
+        }
         if (foldedPath === ".harness-align" || foldedPath.startsWith(".harness-align/"))
         {
             throw new HalignError(`${path}: harness config_path must not use the managed config directory, got ${valueText(harness.configPath)}`);
@@ -341,29 +352,43 @@ export function validateConfig(value: unknown): Config
         }
         skillRepos.set(key, `${source.owner}/${source.name}`);
     }
-    return { version: 1, name, layers, harnesses, skillSources };
+    return { version: CONFIG_VERSION, name, layers, harnesses, skillSources };
 }
 
-/** Read and validate `.harness-align/config.json`. */
-export async function loadConfig(root: string): Promise<Config>
+/** Parse supported source formats without writing, preserving omitted fields during the v1 upgrade. */
+export function parseConfigSource(content: string | Uint8Array): { config: Config; upgradedText?: string }
 {
-    const path = join(root, ".harness-align", "config.json");
-    await ensureRegularSource(root, path);
-    if (!(await lstatIfExists(path)))
-    {
-        throw new HalignError(".harness-align/config.json: file is required");
-    }
     let parsed: unknown;
     try
     {
-        parsed = JSON.parse(await readUtf8(root, path, ".harness-align/config.json")) as unknown;
+        parsed = JSON.parse(typeof content === "string" ? content : new TextDecoder("utf-8", { fatal: true }).decode(content)) as unknown;
     }
     catch (error)
     {
         if (error instanceof HalignError) throw error;
-        throw new HalignError(`.harness-align/config.json: invalid JSON: ${errorText(error)}`);
+        throw new HalignError(`.harness-align/config.json: invalid JSON or UTF-8: ${errorText(error)}`);
     }
-    return validateConfig(parsed);
+    if (isRecord(parsed) && parsed.version === 1)
+    {
+        const document = { ...parsed, version: CONFIG_VERSION };
+        return { config: validateConfig(document), upgradedText: `${JSON.stringify(document, null, 2)}\n` };
+    }
+    return { config: validateConfig(parsed) };
+}
+
+/** Read and validate configuration source while identifying whether persistence needs an upgrade. */
+export async function loadConfigSource(root: string): Promise<{ config: Config; upgradedText?: string }>
+{
+    const path = join(root, ".harness-align", "config.json");
+    await ensureRegularSource(root, path);
+    if (!(await lstatIfExists(path))) throw new HalignError(".harness-align/config.json: file is required");
+    return parseConfigSource(await readUtf8(root, path, ".harness-align/config.json"));
+}
+
+/** Read supported configuration formats into the current model without changing source bytes. */
+export async function loadConfig(root: string): Promise<Config>
+{
+    return (await loadConfigSource(root)).config;
 }
 
 /** Load root rules, filtered later by harness targets. */

@@ -27,6 +27,20 @@ export function readLogs(): LogSnapshot
     return { revision, entries: [...entries] };
 }
 
+/** Format a shareable copy with user-home paths and common credentials replaced. */
+export function redactedLogText(userProfile = process.env.USERPROFILE): string
+{
+    let text = entries.map((entry) => `${entry.timestamp} [${entry.level}] ${entry.title}\n${entry.details ?? ""}`).join("\n\n");
+    if (userProfile)
+    {
+        for (const home of [userProfile, userProfile.replaceAll("\\", "/")]) text = text.replace(new RegExp(home.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "giu"), "%USERPROFILE%");
+    }
+    return text.replace(/\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]+/gu, "[REDACTED]")
+        .replace(/\bBearer\s+[^\s"'<>]+/giu, "Bearer [REDACTED]")
+        .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/giu, "$1[REDACTED]@")
+        .replace(/((?:"?(?:token|password|authorization|api[_-]?key|client[_-]?secret)"?)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu, "$1[REDACTED]");
+}
+
 /** Clear retained entries without reusing ids from this application run. */
 export function clearLogs(): void
 {

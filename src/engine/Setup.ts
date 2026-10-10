@@ -4,13 +4,16 @@
  */
 
 import { promises as fs } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { lstatIfExists, resolveUserHome } from "./FsSafe.js";
-import { generate } from "./Generate.js";
+import { createHash, randomUUID } from "node:crypto";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { atomicWrite, ensureRegularSource, isTreeSubset, lstatIfExists, pathKey, resolveUserHome } from "./FsSafe.js";
+import { buildOutputs, generate } from "./Generate.js";
 import { loadConfig } from "./Load.js";
-import { type Harness, type LayerSelection, type OutputMap, codePointCompare, errorText, HalignError, valueText } from "./Model.js";
-import { copySkillTree, loadSkills } from "./Skills.js";
+import { type Harness, type LayerSelection, type OutputMap, assertWindowsSafeName, codePointCompare, errorText, HalignError, isRecord, valueText } from "./Model.js";
+import { assertSkillName, copySkillTree, loadSkills } from "./Skills.js";
+
+const AGENTS_LOCK = ".agents/.harness-align.lock.json";
+const MAX_DEPLOYMENT_RECORD_BYTES = 32 * 1024 * 1024;
 
 /** Resolve `path` and throw if it escapes `root`. */
 function assertContainedWithin(root: string, path: string, label: string): string
@@ -92,66 +95,117 @@ async function removeDeploymentPath(userProfile: string, path: string): Promise<
     await fs.rm(target, { recursive: true, force: true });
 }
 
-/** Stage all replacements before swapping targets, restoring backups if a swap fails. */
-async function deployReplacements(userProfile: string, replacements: Array<{ target: string; populate: (path: string) => Promise<void> }>): Promise<void>
+/** One persisted replacement guarded by exact contents across interrupted renames. */
+interface DeploymentEntry
 {
-    const staged: Array<{ target: string; temporary: string; backup: string; hasBackup: boolean; installed: boolean }> = [];
+    target: string;
+    temporary: string;
+    backup: string;
+    before: Record<string, string>;
+    after: Record<string, string>;
+    progress: "pending" | "prepared" | "backed-up" | "installed" | "restored";
+    cleanup?: Partial<Record<"target" | "backup" | "temporary", "before" | "after">>;
+}
+
+/** Durable progress whose paths never select a user profile during recovery. */
+interface DeploymentJournal
+{
+    version: 1;
+    userProfile: string;
+    phase: "staging" | "applying" | "committed";
+    entries: DeploymentEntry[];
+    baselineBefore: string | null;
+    baselineAfter: string;
+    agentsLockBefore?: string | null;
+}
+
+/** Compare exact tree contents independently of object insertion order. */
+function sameTree(left: Record<string, string>, right: Record<string, string>): boolean
+{
+    return JSON.stringify(Object.entries(left).sort()) === JSON.stringify(Object.entries(right).sort());
+}
+
+/** Persist only our previous recovery record, refusing a concurrent replacement. */
+async function persistDeploymentJournal(root: string, journal: DeploymentJournal, expected: Buffer | null): Promise<Buffer>
+{
+    const path = join(root, ".harness-align", ".deployment-recovery.json");
+    await ensureRegularSource(root, path);
+    await assertRegularFileIfPresent(path, "deployment recovery");
+    const actual = await lstatIfExists(path) ? await fs.readFile(path) : null;
+    if ((actual === null) !== (expected === null) || (actual && expected && !actual.equals(expected))) throw new HalignError(`${path}: recovery record changed; preserve it and retry recovery`);
+    if (expected === null)
+    {
+        const maximum = { ...journal, phase: "committed", entries: journal.entries.map((entry) => ({ ...entry, progress: "backed-up",
+            cleanup: { target: "before", backup: "before", temporary: "after" } })) };
+        if (Buffer.byteLength(JSON.stringify(maximum, null, 2)) + 1 > MAX_DEPLOYMENT_RECORD_BYTES)
+        {
+            throw new HalignError(`${path}: deployment recovery record including cleanup progress must not exceed 32 MiB; reduce deployment size`);
+        }
+    }
+    const content = Buffer.from(`${JSON.stringify(journal, null, 2)}\n`);
+    if (content.length > MAX_DEPLOYMENT_RECORD_BYTES) throw new HalignError(`${path}: deployment recovery record must not exceed 32 MiB; preserve pending recovery`);
+    await atomicWrite(path, content);
+    return content;
+}
+
+/** Stage and record replacements before swapping, retaining backups until finalization. */
+async function deployReplacements(root: string, userProfile: string, replacements: Array<{ target: string; populate: (path: string) => Promise<void> }>, desired: Record<string, string>[], nextBaseline: DeploymentBaseline, agentsLockBefore: string | null, recheck: () => Promise<void>): Promise<void>
+{
+    const baselinePath = join(root, ".harness-align", ".deployment.json");
+    await ensureRegularSource(root, baselinePath);
+    const before = await lstatIfExists(baselinePath) ? await fs.readFile(baselinePath) : null;
+    const journal: DeploymentJournal = { version: 1, userProfile, phase: "staging", entries: [], baselineBefore: before?.toString("base64") ?? null,
+        baselineAfter: Buffer.from(`${JSON.stringify(nextBaseline, null, 2)}\n`).toString("base64"), agentsLockBefore };
+    for (const [index, replacement] of replacements.entries())
+    {
+        const target = await assertNoReparseComponents(userProfile, replacement.target, "deployment target");
+        const parent = dirname(target);
+        journal.entries.push({ target: relative(userProfile, target).split(sep).join("/"),
+            temporary: relative(userProfile, join(parent, `.harness-align-stage-${randomUUID()}`)).split(sep).join("/"),
+            backup: relative(userProfile, join(parent, `.harness-align-backup-${randomUUID()}`)).split(sep).join("/"),
+            before: await snapshotTree(userProfile, target), after: desired[index]!, progress: "pending" });
+    }
+    let record = await persistDeploymentJournal(root, journal, null);
     try
     {
-        for (const replacement of replacements)
+        for (const [index, entry] of journal.entries.entries())
         {
-            const target = await assertNoReparseComponents(userProfile, replacement.target, "deployment target");
-            const parent = dirname(target);
-            await fs.mkdir(parent, { recursive: true });
-            const entry = { target, temporary: join(parent, `.harness-align-stage-${randomUUID()}`),
-                backup: join(parent, `.harness-align-backup-${randomUUID()}`), hasBackup: false, installed: false };
-            staged.push(entry);
-            await replacement.populate(entry.temporary);
-            await assertNoReparseTree(entry.temporary, "staged deployment");
+            const temporary = join(userProfile, ...entry.temporary.split("/"));
+            await assertNoReparseComponents(userProfile, temporary, "deployment stage");
+            await fs.mkdir(dirname(temporary), { recursive: true });
+            await assertNoReparseComponents(userProfile, temporary, "deployment stage");
+            await replacements[index]!.populate(temporary);
+            if (!sameTree(await snapshotTree(userProfile, temporary), entry.after)) throw new HalignError(`${entry.target}: staged content differs from the reviewed source; preview again before deploying`);
+            entry.progress = "prepared";
+            record = await persistDeploymentJournal(root, journal, record);
         }
-        for (const entry of staged)
+        await recheck();
+        journal.phase = "applying";
+        record = await persistDeploymentJournal(root, journal, record);
+        for (const entry of journal.entries)
         {
-            await assertNoReparseComponents(userProfile, entry.target, "deployment target");
-            if (await lstatIfExists(entry.target))
-            {
-                await assertNoReparseTree(entry.target, "deployment target");
-                await fs.rename(entry.target, entry.backup);
-                entry.hasBackup = true;
-            }
-            await fs.rename(entry.temporary, entry.target);
-            entry.installed = true;
+            const target = join(userProfile, ...entry.target.split("/"));
+            const backup = join(userProfile, ...entry.backup.split("/"));
+            const temporary = join(userProfile, ...entry.temporary.split("/"));
+            if (!sameTree(await snapshotTree(userProfile, target), entry.before)) throw new HalignError(`${target}: target changed before replacement; preserve deployment recovery`);
+            await assertNoReparseComponents(userProfile, backup, "deployment backup");
+            if (await lstatIfExists(backup)) throw new HalignError(`${backup}: backup destination already exists; preserve deployment recovery`);
+            if (await lstatIfExists(target)) await fs.rename(target, backup);
+            entry.progress = "backed-up";
+            record = await persistDeploymentJournal(root, journal, record);
+            if (Object.keys(entry.after).length > 0) await fs.rename(temporary, target);
+            entry.progress = "installed";
+            record = await persistDeploymentJournal(root, journal, record);
         }
+        journal.phase = "committed";
+        await persistDeploymentJournal(root, journal, record);
+        await recoverDeployment(root, userProfile);
     }
     catch (error)
     {
-        const failures: string[] = [];
-        for (const entry of [...staged].reverse())
-        {
-            try
-            {
-                if (entry.installed) await removeDeploymentPath(userProfile, entry.target);
-                if (entry.hasBackup)
-                {
-                    await assertNoReparseComponents(userProfile, entry.backup, "deployment backup");
-                    await assertNoReparseTree(entry.backup, "deployment backup");
-                    await fs.rename(entry.backup, entry.target);
-                }
-            }
-            catch (rollbackError)
-            {
-                failures.push(`${entry.target} (backup: ${entry.backup}): ${errorText(rollbackError)}`);
-            }
-        }
-        if (failures.length > 0) throw new HalignError(`Setup failed: ${errorText(error)}; rollback failed: ${failures.join("; ")}`);
+        try { if (await recoverDeployment(root, userProfile) === "completed") return; }
+        catch (recoveryError) { throw new HalignError(`Setup failed: ${errorText(error)}; recovery preserved at ${join(root, ".harness-align", ".deployment-recovery.json")}: ${errorText(recoveryError)}`); }
         throw error;
-    }
-    finally
-    {
-        for (const entry of staged) await removeDeploymentPath(userProfile, entry.temporary);
-    }
-    for (const entry of staged)
-    {
-        if (entry.hasBackup) await removeDeploymentPath(userProfile, entry.backup);
     }
 }
 
@@ -179,6 +233,7 @@ export interface SetupSkillsReport
     target: string;
     skipped: boolean;
     ids: string[];
+    removedIds: string[];
 }
 
 /** Outcome of generating and deploying into existing harness roots. */
@@ -189,6 +244,333 @@ export interface SetupResult
     targets: SetupTargetReport[];
     sharedRules: { target: string; files: string[] };
     skills: SetupSkillsReport;
+}
+
+/** One file or directory whose deployment outcome can be reviewed before writing. */
+export interface SetupChange
+{
+    path: string;
+    status: "added" | "modified" | "deleted" | "unchanged" | "skipped";
+    external?: string;
+}
+
+/** Exact snapshots from successful deployments, separate from generated output and sync archives. */
+interface DeploymentBaseline
+{
+    version: 1;
+    scopes: Record<string, Record<string, string>>;
+}
+
+/** Decode ownership only for shared rules and individual skill directories. */
+function parseAgentsLock(content: Buffer, label: string): DeploymentBaseline
+{
+    let value: unknown;
+    try { value = JSON.parse(content.toString("utf8")); }
+    catch (error) { throw new HalignError(`${label}: expected ownership lock JSON, got ${errorText(error)}`); }
+    if (!isRecord(value) || value.version !== 1 || !isRecord(value.scopes)) throw new HalignError(`${label}: expected version 1 and scopes mapping`);
+    const scopes: Array<[string, Record<string, string>]> = [];
+    const identities = new Set<string>();
+    for (const [scope, valueTree] of Object.entries(value.scopes))
+    {
+        deploymentRelative(scope, label);
+        if (scope !== ".agents/shared-rules")
+        {
+            if (!scope.startsWith(".agents/skills/")) throw new HalignError(`${label}: invalid ownership scope ${valueText(scope)}`);
+            assertSkillName(scope.slice(".agents/skills/".length), label);
+        }
+        if (identities.has(scope.toLowerCase())) throw new HalignError(`${label}: duplicate ownership scope ${valueText(scope)}`);
+        identities.add(scope.toLowerCase());
+        const tree = deploymentTree(valueTree, `${label} ${scope}`);
+        if (tree["."] !== "directory") throw new HalignError(`${label}: ${scope} must describe a directory`);
+        scopes.push([scope, tree]);
+    }
+    return { version: 1, scopes: Object.fromEntries(scopes) };
+}
+
+/** Read the fixed ownership lock without following links or adopting untracked directories. */
+async function readAgentsLock(home: string): Promise<{ content: Buffer | null; baseline: DeploymentBaseline }>
+{
+    const path = await assertNoReparseComponents(home, join(home, AGENTS_LOCK), "deployment ownership lock");
+    await assertRegularFileIfPresent(path, "deployment ownership lock");
+    const stats = await lstatIfExists(path);
+    if (!stats) return { content: null, baseline: { version: 1, scopes: {} } };
+    if (stats.size > 8 * 1024 * 1024) throw new HalignError(`${path}: ownership lock must not exceed 8 MiB`);
+    const content = await fs.readFile(path);
+    return { content, baseline: parseAgentsLock(content, path) };
+}
+
+/** Decode only canonical base64 bytes from a recovery record. */
+function recoveryBytes(value: unknown, label: string): Buffer
+{
+    if (typeof value !== "string" || Buffer.from(value, "base64").toString("base64") !== value) throw new HalignError(`${label}: expected canonical base64 content`);
+    return Buffer.from(value, "base64");
+}
+
+/** Parse hash snapshots without treating arbitrary record fields as filesystem paths. */
+function deploymentTree(value: unknown, label: string): Record<string, string>
+{
+    if (!isRecord(value)) throw new HalignError(`${label}: expected a content hash mapping`);
+    const entries: Array<[string, string]> = [];
+    for (const [name, hash] of Object.entries(value))
+    {
+        if (typeof hash !== "string" || (hash !== "directory" && !/^[a-f0-9]{64}$/u.test(hash)) || (name !== "." && (name.includes("\\") || name.split("/").some((part) => !part || part === "." || part === "..")))) throw new HalignError(`${label}: invalid path ${valueText(name)} or hash ${valueText(hash)}`);
+        entries.push([name, hash]);
+    }
+    if (entries.length > 0 && !Object.hasOwn(value, ".")) throw new HalignError(`${label}: nonempty snapshot must contain its root`);
+    return Object.fromEntries(entries);
+}
+
+/** Require a canonical relative user path before checking its authorized replacement scope. */
+function deploymentRelative(value: unknown, label: string): string
+{
+    if (typeof value !== "string" || !value || value.includes("\\") || value.split("/").some((part) => !part || part === "." || part === "..")) throw new HalignError(`${label}: expected a relative deployment path, got ${valueText(value)}`);
+    for (const part of value.split("/")) assertWindowsSafeName(part, label);
+    return value;
+}
+
+/** Parse recovery data only within currently declared harness and installed skill scopes. */
+async function deploymentJournal(root: string, home: string, value: unknown, label: string): Promise<DeploymentJournal>
+{
+    if (!isRecord(value) || value.version !== 1 || typeof value.userProfile !== "string" || pathKey(value.userProfile) !== pathKey(home)
+        || !["staging", "applying", "committed"].includes(String(value.phase)) || !Array.isArray(value.entries) || value.entries.length === 0 || value.entries.length > 5000) throw new HalignError(`${label}: expected version 1, current USERPROFILE ${home}, valid phase and bounded entries`);
+    const config = await loadConfig(root);
+    const agentsLockBefore = value.agentsLockBefore === undefined ? undefined : value.agentsLockBefore === null ? null : recoveryBytes(value.agentsLockBefore, label).toString("base64");
+    const owned = agentsLockBefore ? parseAgentsLock(Buffer.from(agentsLockBefore, "base64"), `${label} ownership lock`).scopes : {};
+    const allowed = new Set([...config.harnesses.flatMap((harness) => [`${harness.configPath}/agents`, `${harness.configPath}/AGENTS.md`]), ".agents/shared-rules",
+        ...(await loadSkills(root)).map((skill) => `.agents/skills/${skill.id}`), ...Object.keys(owned), ...(agentsLockBefore !== undefined ? [AGENTS_LOCK] : [])]);
+    const identities = new Set<string>();
+    const entries: DeploymentEntry[] = [];
+    for (const item of value.entries)
+    {
+        if (!isRecord(item)) throw new HalignError(`${label}: expected a replacement record`);
+        const target = deploymentRelative(item.target, label);
+        const temporary = deploymentRelative(item.temporary, label);
+        const backup = deploymentRelative(item.backup, label);
+        if (!allowed.has(target) || dirname(target) !== dirname(temporary) || dirname(target) !== dirname(backup)
+            || !/^\.harness-align-stage-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u.test(basename(temporary))
+            || !/^\.harness-align-backup-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u.test(basename(backup))) throw new HalignError(`${label}: target ${target} or stage/backup paths are outside the declared deployment scopes`);
+        for (const name of [target, temporary, backup])
+        {
+            const path = assertContainedWithin(home, join(home, ...name.split("/")), label);
+            if (identities.has(pathKey(path))) throw new HalignError(`${label}: duplicate deployment path ${path}`);
+            identities.add(pathKey(path));
+        }
+        const progress = item.progress;
+        if (progress !== "pending" && progress !== "prepared" && progress !== "backed-up" && progress !== "installed" && progress !== "restored") throw new HalignError(`${label}: invalid progress ${valueText(progress)}`);
+        const before = deploymentTree(item.before, `${label} ${target} before`);
+        const after = deploymentTree(item.after, `${label} ${target} after`);
+        const isFile = target.endsWith("/AGENTS.md") || target === AGENTS_LOCK;
+        for (const [name, tree] of [["before", before], ["after", after]] as const)
+        {
+            if (Object.keys(tree).length === 0 && (name === "before" || (target.startsWith(".agents/skills/") && Object.hasOwn(owned, target)))) continue;
+            if (isFile ? Object.keys(tree).length !== 1 || !/^[a-f0-9]{64}$/u.test(tree["."] ?? "") : tree["."] !== "directory") throw new HalignError(`${label}: ${target} ${name} must describe a ${isFile ? "regular file" : "directory"}`);
+        }
+        const cleanup: NonNullable<DeploymentEntry["cleanup"]> = {};
+        if (item.cleanup !== undefined)
+        {
+            if (!isRecord(item.cleanup)) throw new HalignError(`${label}: expected cleanup intents`);
+            for (const [name, tree] of Object.entries(item.cleanup))
+            {
+                if (name === "backup" && tree === "before" && value.phase === "committed") cleanup.backup = tree;
+                else if (name === "temporary" && tree === "after") cleanup.temporary = tree;
+                else if (name === "target" && (tree === "before" || tree === "after") && value.phase === "applying") cleanup.target = tree;
+                else throw new HalignError(`${label}: invalid ${name} cleanup intent ${valueText(tree)} for phase ${String(value.phase)}`);
+            }
+        }
+        entries.push({ target, temporary, backup, before, after, progress, ...(item.cleanup !== undefined ? { cleanup } : {}) });
+    }
+    const baselineBefore = value.baselineBefore === null ? null : recoveryBytes(value.baselineBefore, label).toString("base64");
+    const baselineAfter = recoveryBytes(value.baselineAfter, label).toString("base64");
+    let baseline: unknown;
+    try { baseline = JSON.parse(Buffer.from(baselineAfter, "base64").toString("utf8")); }
+    catch (error) { throw new HalignError(`${label}: invalid deployment baseline: ${errorText(error)}`); }
+    if (!isRecord(baseline) || baseline.version !== 1 || !isRecord(baseline.scopes)) throw new HalignError(`${label}: expected a version 1 deployment baseline`);
+    for (const [scope, tree] of Object.entries(baseline.scopes))
+    {
+        deploymentRelative(scope, label);
+        deploymentTree(tree, label);
+    }
+    const phase = value.phase;
+    if (phase !== "staging" && phase !== "applying" && phase !== "committed") throw new HalignError(`${label}: invalid recovery phase`);
+    if (agentsLockBefore !== undefined)
+    {
+        const lock = entries.find((entry) => entry.target === AGENTS_LOCK);
+        const expected = agentsLockBefore === null ? {} : { ".": createHash("sha256").update(Buffer.from(agentsLockBefore, "base64")).digest("hex") };
+        if (!lock || !sameTree(lock.before, expected)) throw new HalignError(`${label}: ownership lock does not match its recovery snapshot`);
+    }
+    return { version: 1, userProfile: home, entries, phase, baselineBefore, baselineAfter, ...(agentsLockBefore !== undefined ? { agentsLockBefore } : {}) };
+}
+
+/** Recover a pending deployment only when every target, stage, backup, and baseline still belongs to it. */
+export async function recoverDeployment(rootPath: string, userProfile = process.env.USERPROFILE): Promise<"none" | "restored" | "completed">
+{
+    const root = resolve(rootPath);
+    const recordPath = join(root, ".harness-align", ".deployment-recovery.json");
+    await ensureRegularSource(root, recordPath);
+    const stats = await lstatIfExists(recordPath);
+    if (!stats) return "none";
+    if (!stats.isFile() || stats.size > MAX_DEPLOYMENT_RECORD_BYTES) throw new HalignError(`${recordPath}: expected a regular recovery record no larger than 32 MiB`);
+    let record: Buffer = await fs.readFile(recordPath);
+    let value: unknown;
+    try { value = JSON.parse(record.toString("utf8")); }
+    catch (error) { throw new HalignError(`${recordPath}: invalid recovery JSON: ${errorText(error)}`); }
+    const home = resolveUserHome(userProfile);
+    const journal = await deploymentJournal(root, home, value, recordPath);
+    const baselinePath = join(root, ".harness-align", ".deployment.json");
+    await ensureRegularSource(root, baselinePath);
+    await assertRegularFileIfPresent(baselinePath, "deployment baseline recovery");
+    const baseline = await lstatIfExists(baselinePath) ? (await fs.readFile(baselinePath)).toString("base64") : null;
+    if (baseline !== journal.baselineBefore && baseline !== journal.baselineAfter) throw new HalignError(`${baselinePath}: changed outside the pending deployment; preserve ${recordPath}`);
+    /** Check one complete replacement before any cleanup or restoration. */
+    const inspect = async (entry: DeploymentEntry) =>
+    {
+        const target = await snapshotTree(home, join(home, ...entry.target.split("/")));
+        const backup = await snapshotTree(home, join(home, ...entry.backup.split("/")));
+        const temporary = await snapshotTree(home, join(home, ...entry.temporary.split("/")));
+        const hasBackup = Object.keys(backup).length > 0;
+        const hasTarget = Object.keys(target).length > 0;
+        const stageValid = journal.phase === "staging" || entry.cleanup?.temporary ? isTreeSubset(temporary, entry.after) : Object.keys(temporary).length === 0 || sameTree(temporary, entry.after);
+        const targetCleanup = entry.cleanup?.target;
+        const targetValid = journal.phase === "committed" ? sameTree(target, entry.after)
+            : sameTree(target, entry.before) || (journal.phase === "applying"
+                && (sameTree(target, entry.after) || (!hasTarget && hasBackup) || (targetCleanup && isTreeSubset(target, entry[targetCleanup]))));
+        const backupValid = !hasBackup || (entry.cleanup?.backup ? isTreeSubset(backup, entry.before) : sameTree(backup, entry.before));
+        const missingBackup = journal.phase === "applying" && !hasBackup && Object.keys(entry.before).length > 0 && !sameTree(target, entry.before);
+        if (!stageValid || !targetValid || !backupValid || missingBackup || (journal.phase === "staging" && hasBackup))
+        {
+            throw new HalignError(`${join(home, entry.target)} (backup: ${join(home, entry.backup)}, stage: ${join(home, entry.temporary)}): ` +
+                                 `changed outside the pending deployment; preserve ${recordPath}`);
+        }
+        return { target, backup, temporary, hasBackup, hasTarget };
+    };
+    await Promise.all(journal.entries.map(inspect));
+    if (journal.phase === "committed" && baseline !== journal.baselineAfter)
+    {
+        await atomicWrite(baselinePath, Buffer.from(journal.baselineAfter, "base64"));
+    }
+    if (journal.phase !== "committed" && baseline !== journal.baselineBefore)
+    {
+        if (journal.baselineBefore === null) await fs.unlink(baselinePath);
+        else await atomicWrite(baselinePath, Buffer.from(journal.baselineBefore, "base64"));
+    }
+    /** Persist the exact authorized deletion before allowing a partially removed tree on retry. */
+    const cleanup = async (entry: DeploymentEntry, kind: "target" | "backup" | "temporary", tree: Record<string, string>): Promise<void> =>
+    {
+        if (!entry.cleanup?.[kind])
+        {
+            entry.cleanup ??= {};
+            entry.cleanup[kind] = kind === "backup" || (kind === "target" && sameTree(tree, entry.before)) ? "before" : "after";
+            record = await persistDeploymentJournal(root, journal, record);
+        }
+        await inspect(entry);
+        await removeDeploymentPath(home, join(home, ...entry[kind].split("/")));
+    };
+    for (const entry of [...journal.entries].reverse())
+    {
+        const state = await inspect(entry);
+        const target = join(home, ...entry.target.split("/"));
+        const backup = join(home, ...entry.backup.split("/"));
+        if (journal.phase !== "committed")
+        {
+            if (state.hasBackup)
+            {
+                if (state.hasTarget) await cleanup(entry, "target", state.target);
+                await fs.rename(backup, target);
+            }
+            else if (state.hasTarget && !sameTree(state.target, entry.before)) await cleanup(entry, "target", state.target);
+            entry.progress = "restored";
+            record = await persistDeploymentJournal(root, journal, record);
+        }
+        else if (state.hasBackup) await cleanup(entry, "backup", state.backup);
+        if (Object.keys(state.temporary).length > 0) await cleanup(entry, "temporary", state.temporary);
+    }
+    await ensureRegularSource(root, recordPath);
+    if (!(await fs.readFile(recordPath)).equals(record)) throw new HalignError(`${recordPath}: recovery record changed before finalization; preserve it`);
+    await fs.unlink(recordPath);
+    return journal.phase === "committed" ? "completed" : "restored";
+}
+
+/** Read only the fixed deployment baseline and reject malformed metadata before target writes. */
+async function readDeploymentBaseline(root: string): Promise<DeploymentBaseline>
+{
+    const path = join(root, ".harness-align", ".deployment.json");
+    await ensureRegularSource(root, path);
+    if (!(await lstatIfExists(path))) return { version: 1, scopes: {} };
+    await assertRegularFileIfPresent(path, "deployment baseline");
+    let value: unknown;
+    try { value = JSON.parse(await fs.readFile(path, "utf8")); }
+    catch (error) { throw new HalignError(`${path}: expected deployment JSON, got ${errorText(error)}`); }
+    if (!isRecord(value) || value.version !== 1 || !isRecord(value.scopes)) throw new HalignError(`${path}: expected version 1 and scopes mapping`);
+    const scopes: Array<[string, Record<string, string>]> = [];
+    for (const [scope, tree] of Object.entries(value.scopes))
+    {
+        if (!scope || scope.includes("\\") || scope.split("/").some((part) => !part || part === "." || part === "..") || !isRecord(tree)) throw new HalignError(`${path}: invalid deployment scope ${valueText(scope)}`);
+        const entries: Array<[string, string]> = [];
+        for (const [name, hash] of Object.entries(tree))
+        {
+            if (typeof hash !== "string" || (hash !== "directory" && !/^[a-f0-9]{64}$/u.test(hash)) || (name !== "." && (name.includes("\\") || name.split("/").some((part) => !part || part === "." || part === "..")))) throw new HalignError(`${path}: invalid scope ${scope} entry ${valueText(name)} with hash ${valueText(hash)}`);
+            entries.push([name, hash]);
+        }
+        scopes.push([scope, Object.fromEntries(entries)]);
+    }
+    return { version: 1, scopes: Object.fromEntries(scopes) };
+}
+
+/** Read-only deployment preview bound to source bytes, selection, and target contents. */
+export interface SetupPreview
+{
+    revision: string;
+    changes: SetupChange[];
+}
+
+/** Capture exact file contents and empty directories without following links. */
+async function snapshotTree(root: string, path: string, skipHidden = false): Promise<Record<string, string>>
+{
+    await assertNoReparseComponents(root, path, "deployment snapshot");
+    const tree: Record<string, string> = Object.create(null);
+    /** Recursively capture a regular path relative to the deployment scope. */
+    const visit = async (current: string, name: string): Promise<void> =>
+    {
+        const stats = await lstatIfExists(current);
+        if (!stats) return;
+        if (stats.isSymbolicLink()) throw deploymentReparseError("deployment snapshot", current);
+        if (stats.isDirectory())
+        {
+            tree[name] = "directory";
+            for (const child of (await fs.readdir(current)).sort(codePointCompare))
+            {
+                if (!skipHidden || !child.startsWith(".")) await visit(join(current, child), name === "." ? child : `${name}/${child}`);
+            }
+        }
+        else if (stats.isFile()) tree[name] = createHash("sha256").update(await fs.readFile(current)).digest("hex");
+        else throw new HalignError(`${current}: expected a regular file or directory`);
+    };
+    await visit(path, ".");
+    return tree;
+}
+
+/** Compare scopes deterministically, keeping deletions and skipped directories visible. */
+function scopeChanges(path: string, before: Record<string, string>, after: Record<string, string>, previous?: Record<string, string>): SetupChange[]
+{
+    return [...new Set([...Object.keys(before), ...Object.keys(after), ...Object.keys(previous ?? {})])].sort(codePointCompare).map((name) =>
+    {
+        const status: SetupChange["status"] = !Object.hasOwn(before, name) ? Object.hasOwn(after, name) ? "added" : "unchanged" : !Object.hasOwn(after, name) ? "deleted" : before[name] === after[name] ? "unchanged" : "modified";
+        const external = previous && Object.hasOwn(previous, name) && previous[name] !== before[name] ? "Changed since last deployment"
+            : status === "deleted" && (!previous || !Object.hasOwn(previous, name)) ? "Extra path will be deleted"
+                : status === "modified" && (!previous || !Object.hasOwn(previous, name)) ? "Existing content has no deployment baseline" : undefined;
+        return { path: name === "." ? path : `${path}/${name}`, status, ...(external ? { external } : {}) };
+    });
+}
+
+/** Build a desired directory snapshot from generated relative file paths. */
+function outputTree(files: Array<[string, Buffer]>): Record<string, string>
+{
+    const tree: Record<string, string> = { ".": "directory" };
+    for (const [path, content] of files)
+    {
+        tree[path] = createHash("sha256").update(content).digest("hex");
+    }
+    return tree;
 }
 
 /** List files under a directory as `/`-separated relative paths. */
@@ -232,6 +614,30 @@ export async function resolveExistingHarnessRoot(rootPath: string, name: string,
     return targetRoot;
 }
 
+/** Safe directory availability without exposing a user-profile path to the renderer. */
+export interface HarnessRootStatus
+{
+    name: string;
+    state: "ready" | "missing" | "unsafe";
+}
+
+/** Inspect saved deployment roots without creating directories or following reparse points. */
+export async function inspectHarnessRoots(rootPath: string, userProfile = process.env.USERPROFILE): Promise<HarnessRootStatus[]>
+{
+    const config = await loadConfig(rootPath);
+    const home = resolveUserHome(userProfile);
+    return Promise.all(config.harnesses.map(async (harness): Promise<HarnessRootStatus> =>
+    {
+        try
+        {
+            const path = await assertNoReparseComponents(home, join(home, ...harness.configPath.split("/")), "Harness directory status");
+            const stats = await lstatIfExists(path);
+            return { name: harness.name, state: !stats ? "missing" : stats.isDirectory() ? "ready" : "unsafe" };
+        }
+        catch { return { name: harness.name, state: "unsafe" }; }
+    }));
+}
+
 /** Format the setup success report for the desktop log. */
 export function reportSetup(result: SetupResult): string
 {
@@ -261,19 +667,22 @@ export function reportSetup(result: SetupResult): string
     {
         lines.push(`Updated skills at ${result.skills.target}`);
         for (const id of result.skills.ids) lines.push(`  ${id}`);
+        for (const id of result.skills.removedIds) lines.push(`  Removed ${id}`);
     }
     return `${lines.join("\n")}\n`;
 }
 
-/** Generate then deploy into existing USERPROFILE harness roots, shared-rules, and skills. */
-export async function setup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE): Promise<SetupResult>
+/** Validate sources and deployment targets without changing generated files or user directories. */
+async function prepareSetup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE)
 {
     const root = resolve(rootPath);
+    const baseline = await readDeploymentBaseline(root);
     const config = await loadConfig(root);
-    const outputs = await generate(root, selection);
+    const outputs = await buildOutputs(root, selection);
     const generatedRoot = join(root, ".harness-align", "generated");
     const deploymentRoot = resolveUserHome(userProfile);
     await assertRegularDirectory(deploymentRoot, "USERPROFILE");
+    const agentsLock = await readAgentsLock(deploymentRoot);
     await assertNoReparseComponents(root, generatedRoot, "generated root");
 
     const targets: Array<{ harness: Harness; root: string }> = config.harnesses.map((harness) => ({
@@ -339,10 +748,17 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
         }
         skillInstallations.push({ id: skill.id, source, target });
     }
-    const skillsSkipped = skillInstallations.length === 0;
+    const skillPaths = new Set(skillInstallations.map((skill) => pathKey(skill.target)));
+    const staleSkills = Object.keys(agentsLock.baseline.scopes).filter((scope) => scope.startsWith(".agents/skills/") && !skillPaths.has(pathKey(join(deploymentRoot, scope)))).sort(codePointCompare);
+    for (const scope of staleSkills)
+    {
+        const target = await assertNoReparseComponents(deploymentRoot, join(deploymentRoot, scope), "removed skill target");
+        if (await lstatIfExists(target)) await assertRegularDirectory(target, "removed skill target");
+    }
+    const skillsSkipped = skillInstallations.length === 0 && staleSkills.length === 0;
 
     const sharedFiles = await listRelativeFiles(sourceSharedRules);
-    await deployReplacements(deploymentRoot, [
+    const replacements = [
         ...installations.flatMap((installation) => [
             { target: installation.targetAgents, populate: async (path: string): Promise<void> =>
             {
@@ -353,9 +769,39 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
         ]),
         { target: targetSharedRules, populate: (path: string) => fs.cp(sourceSharedRules, path, { recursive: true, force: false, errorOnExist: true }) },
         ...skillInstallations.map((skill) => ({ target: skill.target, populate: (path: string) => copySkillTree(skill.source, path) })),
-    ]);
+        ...staleSkills.map((scope) => ({ target: join(deploymentRoot, scope), populate: async (): Promise<void> => {} })),
+    ];
 
-    return {
+    const desired = [
+        ...installations.flatMap((installation) => [outputTree(installation.agents), { ".": createHash("sha256").update(installation.rules).digest("hex") }]),
+        await snapshotTree(root, sourceSharedRules),
+        ...await Promise.all(skillInstallations.map((skill) => snapshotTree(root, skill.source, true))),
+        ...staleSkills.map(() => ({})),
+    ];
+    const lockScopes = replacements.flatMap((replacement, index) =>
+    {
+        const scope = relative(deploymentRoot, replacement.target).split(sep).join("/");
+        return (scope === ".agents/shared-rules" || scope.startsWith(".agents/skills/")) && Object.keys(desired[index]!).length > 0 ? [[scope, desired[index]!] as const] : [];
+    }).sort(([left], [right]) => codePointCompare(left, right));
+    const lockContent = Buffer.from(`${JSON.stringify({ version: 1, scopes: Object.fromEntries(lockScopes) }, null, 2)}\n`);
+    if (lockContent.length > 8 * 1024 * 1024) throw new HalignError(`${join(deploymentRoot, AGENTS_LOCK)}: ownership lock must not exceed 8 MiB`);
+    replacements.push({ target: join(deploymentRoot, AGENTS_LOCK), populate: (path: string) => fs.writeFile(path, lockContent, { flag: "wx" }) });
+    desired.push({ ".": createHash("sha256").update(lockContent).digest("hex") });
+    const actual = await Promise.all(replacements.map((replacement) => snapshotTree(deploymentRoot, replacement.target)));
+    const sources = await Promise.all(["config.json", "rules", "layers", "agents", "skills"].map((scope) => snapshotTree(root, join(root, ".harness-align", scope))));
+    const scopeNames = replacements.map((replacement) => relative(deploymentRoot, replacement.target).split(sep).join("/"));
+    const changes = replacements.flatMap((replacement, index) =>
+    {
+        const scope = scopeNames[index]!;
+        const previous = scope === AGENTS_LOCK ? actual[index]
+            : scope === ".agents/shared-rules" || scope.startsWith(".agents/skills/") ? agentsLock.baseline.scopes[scope] : baseline.scopes[scope];
+        return scopeChanges(`~/${scope}`, actual[index]!, desired[index]!, previous);
+    });
+    for (const target of reports.filter((item) => item.skipped)) changes.push({ path: `~/${relative(deploymentRoot, target.root).split(sep).join("/")}`, status: "skipped" });
+    if (skillsSkipped) changes.push({ path: "~/.agents/skills", status: "skipped" });
+    const revision = createHash("sha256").update(JSON.stringify({ sources, actual, desired, selection, reports, baseline })).digest("hex");
+
+    const result: SetupResult = {
         outputs,
         generatedRoot,
         targets: reports,
@@ -364,6 +810,32 @@ export async function setup(rootPath: string, selection?: readonly LayerSelectio
             target: targetSkillsRoot,
             skipped: skillsSkipped,
             ids: skillInstallations.map((skill) => skill.id),
+            removedIds: staleSkills.map((scope) => scope.slice(".agents/skills/".length)),
         },
     };
+    const nextBaseline: DeploymentBaseline = { version: 1, scopes: Object.fromEntries(Object.entries({ ...baseline.scopes, ...Object.fromEntries(scopeNames.map((name, index) => [name, desired[index]!])) }).sort(([left], [right]) => codePointCompare(left, right))) };
+    return { result, replacements, revision, changes, desired, nextBaseline, agentsLockBefore: agentsLock.content?.toString("base64") ?? null };
+}
+
+/** Preview exact replacement scope and skipped targets using the same production setup plan. */
+export async function previewSetup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE): Promise<SetupPreview>
+{
+    const { revision, changes } = await prepareSetup(rootPath, selection, userProfile);
+    return { revision, changes };
+}
+
+/** Generate and deploy only after validating the reviewed source and target revision. */
+export async function setup(rootPath: string, selection?: readonly LayerSelection[], userProfile = process.env.USERPROFILE, expectedRevision?: string, overwriteExternal = false): Promise<SetupResult>
+{
+    await recoverDeployment(rootPath, userProfile);
+    const plan = await prepareSetup(rootPath, selection, userProfile);
+    if (expectedRevision !== undefined && plan.revision !== expectedRevision) throw new HalignError("Setup preview expired: sources or deployment targets changed; preview again before deploying");
+    if (!overwriteExternal && plan.changes.some((change) => change.external && change.status !== "unchanged")) throw new HalignError("Setup requires explicit overwrite approval for externally modified targets or extra paths; review the preview before deploying");
+    await generate(rootPath, selection);
+    await deployReplacements(resolve(rootPath), resolveUserHome(userProfile), plan.replacements, plan.desired, plan.nextBaseline, plan.agentsLockBefore, async () =>
+    {
+        const current = await prepareSetup(rootPath, selection, userProfile);
+        if (current.revision !== plan.revision) throw new HalignError("Setup preview expired: sources or deployment targets changed while staging; preview again before deploying");
+    });
+    return plan.result;
 }

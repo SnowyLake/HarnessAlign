@@ -2,14 +2,16 @@
  * Ant Design workspace editors that preserve native FormData drafts and Main-process path validation.
  */
 
-import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined, SaveOutlined, UndoOutlined } from "@ant-design/icons";
+import {
+    ArrowRightOutlined, CheckCircleFilled, DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined, SaveOutlined, UndoOutlined, WarningOutlined,
+} from "@ant-design/icons";
 import type { HarnessConfig, Workspace } from "@shared/models/Workspace";
-import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Typography } from "antd";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
 import { showError, showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
 import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { fileName, ruleDisplayName } from "@/lib/Utils";
+import { fileName, harnessEffects, ruleDisplayName, type HarnessEffect } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
 /** Form bindings that preserve drafts and respond to tree commands. */
@@ -106,6 +108,7 @@ function useEditorForm(workspace: Workspace, selection: Selection, onDelete?: ()
     const setEditorDraft = useAppStore((state) => state.setEditorDraft);
     const formRef = useRef<HTMLFormElement>(null);
     const baselineRef = useRef<FormSnapshot | undefined>(draft?.baseline);
+    const sourceRevisionsRef = useRef(draft?.sourceRevisions ?? workspace.sourceRevisions);
     const [formError, setFormError] = useState<string>();
 
     useLayoutEffect(() =>
@@ -119,7 +122,7 @@ function useEditorForm(workspace: Workspace, selection: Selection, onDelete?: ()
     {
         const current = formSnapshot(event.currentTarget);
         const baseline = baselineRef.current ?? current;
-        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current });
+        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current, sourceRevisions: sourceRevisionsRef.current });
     };
 
     /** Store a controlled Ant Design field that does not emit a native form change. */
@@ -129,7 +132,7 @@ function useEditorForm(workspace: Workspace, selection: Selection, onDelete?: ()
         const current = formSnapshot(formRef.current);
         current[name] = [value];
         const baseline = baselineRef.current ?? current;
-        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current });
+        setEditorDraft(editorKey, snapshotsEqual(baseline, current) ? undefined : { selection, baseline, current, sourceRevisions: sourceRevisionsRef.current });
     };
 
     /** Run an editor mutation while sharing the busy guard and inline failure summary. */
@@ -702,7 +705,7 @@ function MissingEditorEmpty({ title, description }: { title: string; description
     return <Empty description={<Space orientation="vertical" size={2}><Typography.Text strong>{title}</Typography.Text><Typography.Text type="secondary">{description}</Typography.Text></Space>} />;
 }
 
-/** Render the Harnesses page without unrelated project configuration. */
+/** Render Home with configured harnesses and their included sources. */
 export function HarnessesPanel()
 {
     const workspace = useAppStore((state) => state.workspace);
@@ -711,6 +714,8 @@ export function HarnessesPanel()
     const isBusy = useAppStore((state) => state.isBusy);
     const drafts = useAppStore((state) => state.editorDrafts);
     const [isEditorOpen, setIsEditorOpen] = useState(false);
+    const [explainHarness, setExplainHarness] = useState<string>();
+    const layerSelection = useAppStore((state) => state.layerSelection);
 
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
     const selectedHarness = selection.kind === "harness" ? workspace.config.harnesses.find((harness) => harness.name === selection.name) : undefined;
@@ -724,39 +729,59 @@ export function HarnessesPanel()
 
     return (
         <div className="project-page">
-            <Flex align="center" justify="space-between" gap={16} wrap>
-                <Typography.Title level={3} className="page-title">Harnesses</Typography.Title>
+            <div className="harnesses-header">
+                <Typography.Title level={2} className="page-title">Harness Align</Typography.Title>
                 <Button type="primary" icon={<PlusOutlined />} disabled={isBusy} onClick={() => openEditor({ kind: "harness-new" })}>
                     {drafts["harness-new"] ? "Continue new harness" : "Add harness"}
                 </Button>
-            </Flex>
+            </div>
+            {workspace.config.harnesses.length === 0 ? <Alert type="info" showIcon title="No Harness configured yet"
+                description="Initialize your assistant's configuration folder, then add a harness." /> : null}
             <div className="harnesses-grid">
-                {workspace.config.harnesses.map((harness) => (
-                    <Card key={harness.name} className="harness-card" classNames={{ body: "harness-card-body" }}>
-                        <div className="harness-card-header">
-                            <span className="harness-card-mark" aria-hidden="true">{harness.name.slice(0, 2).toUpperCase()}</span>
-                            <div className="harness-card-heading">
-                                <Typography.Title level={4} className="harness-card-name">{harness.name}</Typography.Title>
-                                <Button
-                                    type="link"
-                                    size="small"
-                                    className="harness-card-path"
-                                    icon={<FolderOutlined aria-hidden="true" />}
-                                    disabled={isBusy}
-                                    autoInsertSpace={false}
-                                    aria-label={`Open ${harness.name} folder`}
-                                    onClick={() => void window.appApi.workspace.openHarnessRoot(harness.name).catch((error: unknown) => showError(error, "Open folder failed"))}
-                                >
-                                    <code>~/{harness.configPath}</code>
-                                </Button>
-                                {drafts[selectionKey({ kind: "harness", name: harness.name })] ? <Tag color="gold">Unsaved</Tag> : null}
+                {workspace.config.harnesses.map((harness) =>
+                {
+                    const rootState = workspace.harnessRoots.find((item) => item.name === harness.name)?.state;
+                    const activeEffects = harnessEffects(workspace, harness.name, layerSelection).filter((effect) => effect.active);
+                    return (
+                        <Card key={harness.name} className="harness-card" classNames={{ body: "harness-card-body" }}>
+                            <div className="harness-card-header">
+                                <span className="harness-card-mark" aria-hidden="true">{harness.name.slice(0, 2).toUpperCase()}</span>
+                                <div className="harness-card-heading">
+                                    <Typography.Title level={3} className="harness-card-name">{harness.name}</Typography.Title>
+                                </div>
+                                <Tag className="harness-card-status" color={rootState === "ready" ? "success" : "warning"}
+                                     icon={rootState === "ready" ? <CheckCircleFilled /> : <WarningOutlined />}>
+                                    {rootState === "ready" ? "Ready" : rootState === "missing" ? "Missing folder" : "Unsafe / unavailable"}
+                                </Tag>
                             </div>
-                            <Button icon={<EditOutlined />} disabled={isBusy} aria-label={`Edit ${harness.name}`} onClick={() => openEditor({ kind: "harness", name: harness.name })}>
-                                Edit
+                            <Button
+                                type="text"
+                                className="harness-card-path"
+                                icon={<FolderOutlined aria-hidden="true" />}
+                                disabled={isBusy}
+                                autoInsertSpace={false}
+                                aria-label={`Open ${harness.name} folder`}
+                                title={`Open ~/${harness.configPath}`}
+                                onClick={() => void window.appApi.workspace.openHarnessRoot(harness.name).catch((error: unknown) => showError(error, "Open folder failed"))}
+                            >
+                                <code>~/{harness.configPath}</code><ArrowRightOutlined aria-hidden="true" />
                             </Button>
-                        </div>
-                    </Card>
-                ))}
+                            <dl className="harness-card-stats" aria-label="Included sources" title="Saved sources and current Layer choices">
+                                <div><dt>Rules</dt><dd>{activeEffects.filter((effect) => effect.kind === "Rule").length}</dd></div>
+                                <div><dt>Layers</dt><dd>{activeEffects.filter((effect) => effect.kind === "Layer option").length}</dd></div>
+                                <div><dt>Agents</dt><dd>{activeEffects.filter((effect) => effect.kind === "Agent").length}</dd></div>
+                            </dl>
+                            <div className="harness-card-footer">
+                                <Button type="link" className="harness-card-explain" disabled={isBusy} onClick={() => setExplainHarness(harness.name)}
+                                        aria-label={`Explain effects for ${harness.name}`} icon={<ArrowRightOutlined />} iconPlacement="end">Explain effects</Button>
+                                <div className="harness-card-edit">
+                                    {drafts[selectionKey({ kind: "harness", name: harness.name })] ? <Tag color="gold">Unsaved</Tag> : null}
+                                    <Button icon={<EditOutlined />} disabled={isBusy} aria-label={`Edit ${harness.name}`} onClick={() => openEditor({ kind: "harness", name: harness.name })}>Edit</Button>
+                                </div>
+                            </div>
+                        </Card>
+                    );
+                })}
             </div>
             <Drawer
                 title={selectedHarness ? `Edit ${selectedHarness.name}` : "New harness"}
@@ -769,6 +794,20 @@ export function HarnessesPanel()
                 onClose={() => setIsEditorOpen(false)}
             >
                 <HarnessForm key={`${selectionKey(selection)}:${JSON.stringify(selectedHarness)}`} workspace={workspace} harness={selectedHarness} onDone={() => setIsEditorOpen(false)} />
+            </Drawer>
+            <Drawer title={`Effects for ${explainHarness ?? "Harness"}`} open={Boolean(explainHarness)} size={900} destroyOnHidden onClose={() => setExplainHarness(undefined)}>
+                <Table<HarnessEffect> size="small" rowKey="path" pagination={false} dataSource={explainHarness ? harnessEffects(workspace, explainHarness, layerSelection) : []}
+                    columns={[
+                        { title: "Type", dataIndex: "kind" },
+                        { title: "Source", dataIndex: "path", render: (path: string, effect) => <Button type="link" onClick={() =>
+                        {
+                            const store = useAppStore.getState();
+                            store.setView(effect.kind === "Rule" ? "rules" : effect.kind === "Agent" ? "agents" : "layers");
+                            store.setSelection(effect.kind === "Rule" ? { kind: "rule", path } : effect.kind === "Agent" ? { kind: "agent", path } : { kind: "layer-option", path });
+                        }}>{path}</Button> },
+                        { title: "Result", dataIndex: "active", render: (active: boolean) => <Tag color={active ? "green" : "default"}>{active ? "Included" : "Excluded"}</Tag> },
+                        { title: "Reason", dataIndex: "reason" },
+                    ]} />
             </Drawer>
         </div>
     );
@@ -849,7 +888,9 @@ export function WorkspaceEditor()
                 </Space> : selection.kind !== "layer" ? <Typography.Text type="secondary">Read only</Typography.Text> : null}
             </Flex>
             <div className="workspace-scroll" ref={scrollRef}>
-                <div key={revision} className="workspace-editor-page">{editor}</div>
+                <div key={revision} className="workspace-editor-page">
+                    {editor}
+                </div>
             </div>
         </div>
     );

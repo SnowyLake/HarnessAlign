@@ -152,7 +152,7 @@ async function readSkillMeta(skillDirectory: string, id: string): Promise<{ titl
 }
 
 /** Collect non-hidden regular files under a skill directory as `/`-separated relative paths. */
-async function listSkillFiles(skillDirectory: string): Promise<string[]>
+export async function listSkillFiles(skillDirectory: string): Promise<string[]>
 {
     const files: string[] = [];
     const visit = async (current: string, prefix: string): Promise<void> =>

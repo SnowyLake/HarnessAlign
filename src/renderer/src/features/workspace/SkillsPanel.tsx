@@ -17,14 +17,16 @@ import {
     UndoOutlined,
     WarningOutlined,
 } from "@ant-design/icons";
-import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdate, UserSkill, Workspace } from "@shared/models/Workspace";
-import { Alert, Avatar, Button, Card, Checkbox, Drawer, Dropdown, Empty, Flex, Form, Input, Listy, Modal, Segmented, Select, Space, Splitter, Tooltip, Typography, type MenuProps } from "antd";
+import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdatePreview, UserSkill, Workspace } from "@shared/models/Workspace";
+import { Alert, Avatar, Button, Card, Checkbox, Col, Drawer, Dropdown, Empty, Flex, Form, Input, Listy, Modal, Row, Segmented, Select, Space, Splitter, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
+import { showError, showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
-import { persistEditorSnapshot, refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { DiffText } from "@/components/common/DiffText";
+import { diffLines } from "@/lib/TextDiff";
+import { checkWorkspaceSkillUpdates, persistEditorSnapshot, refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { TreeButton } from "@/features/workspace/WorkspaceTree";
-import { selectableRemoteSkillIds } from "@/lib/Utils";
+import { isSkillUpdateAvailable, selectableRemoteSkillIds } from "@/lib/Utils";
 import { selectionKey, useAppStore } from "@/stores/AppStore";
 
 /** Which list the panel currently shows. */
@@ -96,12 +98,6 @@ function originBuckets(skillSources: readonly { owner: string; name: string }[],
     return buckets;
 }
 
-/** Return whether an update result describes an available replacement. */
-function isOutdated(update: SkillUpdate): boolean
-{
-    return !update.error && update.currentHash !== update.remoteHash;
-}
-
 /** Render one selectable skill row for discover and import pickers. */
 function SelectableSkillRow({ id, title, description, detail, checked, disabled, onToggle }: {
     id: string;
@@ -130,7 +126,7 @@ function NewSkillSourceForm({ onAdded, onCancel, onError }: {
     onError: (message: string | undefined) => void;
 })
 {
-    const isBusy = useAppStore((state) => state.isBusy);
+    const isBusy = useAppStore((state) => state.isBusy || state.isCheckingSkillUpdates);
     const [url, setUrl] = useState("");
     const [branch, setBranch] = useState("");
 
@@ -175,7 +171,7 @@ function NewSkillSourceForm({ onAdded, onCancel, onError }: {
 /** Render registered GitHub sources alongside the skill library they feed. */
 function SkillSourcesSection({ workspace }: { workspace: Workspace })
 {
-    const isBusy = useAppStore((state) => state.isBusy);
+    const isBusy = useAppStore((state) => state.isBusy || state.isCheckingSkillUpdates);
     const [isAdding, setIsAdding] = useState(false);
     const [formError, setFormError] = useState<string>();
     const [removeSource, setRemoveSource] = useState<Workspace["config"]["skillSources"][number]>();
@@ -415,14 +411,17 @@ function DiscoveredSkillPane({ skill, isInstalled, canInstall, isBusy, onInstall
 export function SkillsPanel()
 {
     const workspace = useAppStore((state) => state.workspace);
-    const isBusy = useAppStore((state) => state.isBusy);
+    const isBusy = useAppStore((state) => state.isBusy || state.isCheckingSkillUpdates);
     const selection = useAppStore((state) => state.selection);
     const setSelection = useAppStore((state) => state.setSelection);
     const [listView, setListView] = useState<SkillsListView>("installed");
     const [originFilter, setOriginFilter] = useState<OriginFilter>("all");
     const [discovered, setDiscovered] = useState<RemoteSkill[]>([]);
     const [hasDiscovered, setHasDiscovered] = useState(false);
-    const [updates, setUpdates] = useState<SkillUpdate[]>([]);
+    const updates = useAppStore((state) => state.skillUpdates);
+    const setUpdates = useAppStore((state) => state.setSkillUpdates);
+    const isCheckingSkillUpdates = useAppStore((state) => state.isCheckingSkillUpdates);
+    const [updateDetails, setUpdateDetails] = useState<SkillUpdatePreview[]>([]);
     const [userSkills, setUserSkills] = useState<UserSkill[]>([]);
     const [selectedRemoteIdentity, setSelectedRemoteIdentity] = useState<string>();
     const [selectedImport, setSelectedImport] = useState<string[]>([]);
@@ -438,7 +437,13 @@ export function SkillsPanel()
         setDiscovered([]);
         setHasDiscovered(false);
         setSelectedRemoteIdentity(undefined);
+        setUpdateDetails([]);
     }, [sourceKey]);
+
+    useEffect(() =>
+    {
+        setUpdateDetails((current) => current.filter((detail) => updates.some((update) => update.previewId === detail.previewId)));
+    }, [updates]);
 
     if (!workspace) return <Empty description="The user workspace is not loaded yet" />;
 
@@ -449,7 +454,7 @@ export function SkillsPanel()
     const selectedSkill = selection.kind === "skill" ? installed.find((skill) => skill.id === selection.id) : installed[0];
     const buckets = originBuckets(workspace.config.skillSources, installed);
     const updateById = new Map(updates.map((item) => [item.id, item]));
-    const outdated = updates.filter((update) => isOutdated(update) && installed.some((skill) => skill.id === update.id));
+    const outdated = updates.filter(isSkillUpdateAvailable);
     const filteredInstalled = installed.filter((skill) => (originFilter === "all" || originFilterKey(skill.origin) === originFilter)
         && matchesQuery(installedHaystacks(skill), filter));
     const filteredDiscovered = discovered.filter((skill) => matchesQuery(remoteHaystacks(skill), filter));
@@ -469,6 +474,8 @@ export function SkillsPanel()
     {
         void runCommand(async () =>
         {
+            setUpdates([]);
+            setUpdateDetails([]);
             const skills = await window.appApi.workspace.discoverSkills();
             setDiscovered(skills);
             setHasDiscovered(true);
@@ -476,7 +483,7 @@ export function SkillsPanel()
             setFilter("");
             setOriginFilter("all");
             setListView("discover");
-            showSuccess("Discover completed", `Discovered ${skills.length} skill(s).\n${JSON.stringify(skills, null, 2)}`);
+            showSuccess("Discover completed", `Discovered ${skills.length} skill(s).`);
         }, "Discover");
     };
 
@@ -495,32 +502,41 @@ export function SkillsPanel()
     /** Compare installed GitHub skills with remote content hashes. */
     const handleCheckUpdates = (): void =>
     {
-        void runCommand(async () =>
-        {
-            const next = await window.appApi.workspace.checkSkillUpdates();
-            setUpdates(next);
-            setDiscovered([]);
-            setHasDiscovered(false);
-            setSelectedRemoteIdentity(undefined);
-            setListView("installed");
-            const report = `Checked ${next.length} GitHub skill(s).\n${JSON.stringify(next, null, 2)}`;
-            if (next.some((update) => update.error)) showError(report, "Update check completed with errors");
-            else showSuccess("Update check completed", report);
-        }, "Update check");
+        setUpdateDetails([]);
+        setDiscovered([]);
+        setHasDiscovered(false);
+        setSelectedRemoteIdentity(undefined);
+        setListView("installed");
+        void checkWorkspaceSkillUpdates();
     };
 
-    /** Apply selected updates and refresh the workspace. */
+    /** Review the exact selected versions before applying any Skill replacement. */
     const handleApplyUpdates = (ids: string[]): void =>
     {
         if (ids.length === 0) return;
         void runCommand(async () =>
         {
-            const report = await window.appApi.workspace.applySkillUpdates(ids);
+            const previewIds = ids.map((id) => updates.find((update) => update.id === id)?.previewId);
+            if (previewIds.some((id) => !id)) throw new Error("Skill update preview expired; check updates again.");
+            const details: SkillUpdatePreview[] = [];
+            for (const previewId of previewIds) details.push(await window.appApi.workspace.readSkillUpdatePreview(previewId!));
+            setUpdateDetails(details);
+        }, "Review updates");
+    };
+
+    /** Apply only the fixed versions displayed in the review dialog. */
+    const handleConfirmUpdates = (): void =>
+    {
+        void runCommand(async () =>
+        {
+            const ids = updateDetails.map((detail) => detail.id);
+            const report = await window.appApi.workspace.applySkillUpdates(updateDetails.map((detail) => detail.previewId));
             showSuccess("Updates applied", report);
-            setUpdates((current) => current.filter((item) => !ids.includes(item.id)));
+            setUpdates(useAppStore.getState().skillUpdates.filter((item) => !ids.includes(item.id)));
             setDiscovered([]);
             setHasDiscovered(false);
             setSelectedRemoteIdentity(undefined);
+            setUpdateDetails([]);
             await refreshWorkspace();
         }, "Apply updates");
     };
@@ -532,7 +548,6 @@ export function SkillsPanel()
         {
             const skills = await window.appApi.workspace.listUserSkills();
             setUserSkills(skills);
-            writeLog("info", "User skills listed", JSON.stringify(skills, null, 2));
             setSelectedImport([]);
             setIsImportOpen(true);
         }, "List user skills");
@@ -580,9 +595,9 @@ export function SkillsPanel()
                 const actions: NonNullable<MenuProps["items"]> = [];
                 if (skill.origin.kind === "github") actions.push({ key: "open", icon: <ExportOutlined />, label: "Open repository", disabled: isBusy });
                 if (update?.error) actions.push({ key: "error", icon: <WarningOutlined />, label: "Update check failed. See Console for details.", disabled: true });
-                else if (update && isOutdated(update)) actions.push({ key: "update", icon: <CloudDownloadOutlined />, label: "Apply update", disabled: isBusy });
+                else if (update && isSkillUpdateAvailable(update)) actions.push({ key: "update", icon: <CloudDownloadOutlined />, label: "Apply update", disabled: isBusy });
                 actions.push({ type: "divider" }, { key: "remove", icon: <DeleteOutlined />, label: "Remove", danger: true, disabled: isBusy });
-                return <TreeButton key={skill.id} label={skill.id} active={selectedSkill?.id === skill.id} disabled={isBusy}
+                return <TreeButton key={skill.id} label={skill.id} active={selectedSkill?.id === skill.id} disabled={isBusy} hasUpdate={Boolean(update && isSkillUpdateAvailable(update))}
                     selection={{ kind: "skill", id: skill.id }} onClick={() => setSelection({ kind: "skill", id: skill.id })}
                     actions={actions} onAction={({ key }) =>
                     {
@@ -629,24 +644,23 @@ export function SkillsPanel()
                                     }} disabled={isBusy} />
                             </Flex>
                             <Dropdown trigger={["click"]} menu={{ items: topActions, onClick: handleTopAction }}>
-                                <Button type="text" size="small" icon={<EllipsisOutlined />} disabled={isBusy}>More</Button>
+                                <Button type="text" size="small" icon={<EllipsisOutlined />} loading={isCheckingSkillUpdates} disabled={isBusy}>More</Button>
                             </Dropdown>
                         </Flex>
                         <div className="workspace-tree-content">
-                            <Flex vertical gap={6} className="skills-toolbar">
+                            <Flex align="center" gap={8} className="workspace-list-toolbar">
                                 <Input
-                                    className="skills-filter-input"
+                                    className="workspace-list-search"
                                     size="small"
                                     aria-label="Search skills"
                                     allowClear
                                     prefix={<SearchOutlined />}
                                     value={filter}
                                     onChange={(event) => setFilter(event.target.value)}
-                                    placeholder="Search skills..."
                                     disabled={isBusy}
                                 />
                                 {listView === "installed" && buckets.length > 0
-                                    ? <Select size="small" aria-label="Filter by origin" value={originFilter} options={originItems} onChange={setOriginFilter} className="skills-origin-select" />
+                                    ? <Select size="small" aria-label="Filter by origin" value={originFilter} options={originItems} onChange={setOriginFilter} className="workspace-list-filter" />
                                     : null}
                             </Flex>
                             {listView === "installed" ? installedContent : discoverContent}
@@ -659,6 +673,25 @@ export function SkillsPanel()
                             canInstall={Boolean(selectedRemoteSkill && selectableRemoteIds.has(selectedRemoteSkill.id))} isBusy={isBusy} onInstall={handleDownload} />}
                 </Splitter.Panel>
             </Splitter>
+
+            <Modal open={updateDetails.length > 0} title="Review Skill updates" width={1000} okText="Apply reviewed versions" confirmLoading={isBusy}
+                onOk={handleConfirmUpdates} onCancel={() => setUpdateDetails([])} destroyOnHidden>
+                <Space orientation="vertical" style={{ width: "100%" }}>
+                    {updateDetails.map((detail) =>
+                    {
+                        const diff = diffLines(detail.oldText, detail.newText);
+                        return <Card key={detail.previewId} title={detail.id} size="small" style={{ width: "100%" }}>
+                            <Typography.Paragraph>Commit: <Typography.Text code>{detail.oldCommit ?? "Legacy source (no pinned commit)"}</Typography.Text> → <Typography.Text code>{detail.newCommit}</Typography.Text></Typography.Paragraph>
+                            <Table size="small" rowKey="path" dataSource={detail.files} pagination={{ pageSize: 8, showSizeChanger: false }} columns={[{ title: "File", dataIndex: "path" }, { title: "Change", dataIndex: "status" }]} />
+                            <Row gutter={[12, 12]}>
+                                <Col xs={24} md={12}><Typography.Text strong>Installed SKILL.md</Typography.Text><DiffText lines={diff.local} label="Installed SKILL.md differences" /></Col>
+                                <Col xs={24} md={12}><Typography.Text strong>Reviewed SKILL.md</Typography.Text><DiffText lines={diff.remote} label="Reviewed SKILL.md differences" /></Col>
+                            </Row>
+                            {detail.truncated || diff.limited ? <Alert type="info" title="Text preview is bounded; file changes and the selected commit apply to the entire Skill." /> : null}
+                        </Card>;
+                    })}
+                </Space>
+            </Modal>
 
             <Modal
                 open={isRegistrationOpen}

@@ -5,7 +5,7 @@
 import { DesktopOutlined, FileTextOutlined, GithubOutlined } from "@ant-design/icons";
 import type { ThemeMode } from "@shared/models/AppSettings";
 import { Button, Card, Flex, Segmented, Space, Typography } from "antd";
-import { showError, writeLog } from "@/components/common/Feedback";
+import { showError } from "@/components/common/Feedback";
 import { AppUpdateCard } from "@/features/settings/AppUpdateCard";
 import { AgentDocumentTitleForm } from "@/features/workspace/WorkspaceEditor";
 import { useAppStore } from "@/stores/AppStore";
@@ -51,7 +51,6 @@ export function SettingsPage()
                                 {
                                     setTheme(settings.theme);
                                     applyTheme(settings.theme);
-                                    writeLog("success", "Theme updated", `Theme: ${settings.theme}`);
                                 }).catch((error: unknown) => showError(error, "Theme update failed"));
                             }}
                         />

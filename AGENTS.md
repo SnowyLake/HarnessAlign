@@ -85,7 +85,7 @@
   - `Edit.ts` — 校验后写回 `.harness-align` 源文件; 负责固定用户目录的初始化和迁移, 写回 API 供桌面应用与测试使用
   - `Sync.ts` — 有界配置源快照, 路径与内容校验, 三方合并; 不联网, 不部署, 同一个 Skill 的内容与来源记录整体合并
 - `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, `SettingsService.ts` 模块函数, `WorkspaceService`, `SkillRemoteService`.
-- `src/main/services/WorkspaceService.ts` 通过 `withWorkspace` 串行执行工作区读写, 失败后释放队列. 该模块不直接导入 Electron; 打开文件夹的 `shell.openPath` 调用留在 `WorkspaceHandlers.ts`.
+- `src/main/services/WorkspaceService.ts` 通过 `withWorkspace` 串行执行工作区读写, 失败后释放队列. Console 记录排队, 初始化和操作耗时, Skills 下载与解压分别记录耗时; 指标不包含源正文, 本机路径或凭据. 该模块不直接导入 Electron; 打开文件夹的 `shell.openPath` 调用留在 `WorkspaceHandlers.ts`.
 - `src/main/services/RemoteFetch.ts` 共享 Skills 与 GitHub 同步的网络请求和有界响应读取. Electron 中未设置环境变量代理时使用 `net.fetch`, 否则使用 Node `fetch`; Main 入口在运行时支持时启用环境变量代理. 响应超过大小限制时取消读取并释放 reader.
 - `src/main/services/GitHubSyncService.ts` 负责私有仓库快照读写, 同步预览, 共同基线与上传恢复记录. `SyncHandlers.ts` 负责 sender 和 payload 校验以及 `safeStorage` 凭据加解密. Token 不回传 Renderer, 不写入同步快照或日志.
 - `src/main/services/AppUpdateService.ts` 负责安装版的 GitHub Release 更新. 更新源只来自打包写入的 `app-update.yml`. 开发窗口不访问更新源. 检查和下载 IPC 不接收 Renderer 参数, 只有本次会话已下载完成且安装程序已启动时才关闭窗口. 安装程序启动后不再弹出未保存修改确认, 因为取消退出不能停止已经启动的安装包. `HTTP(S)_PROXY` 里的账号密码只通过更新器的 `login` 回调提供, 不写入代理规则, 状态或日志.
@@ -112,7 +112,10 @@
 
 ## 生成与写回
 
-- `.harness-align/config.json` 使用版本 `1`, 定义输出标题, 有序 Layer 选择, Harness 对象列表和可选 `skill_sources`. Harness 列表允许为空. 新建配置时仅保留默认候选中配置目录已存在且路径各级均为非链接目录的 Harness; 不重新筛选已有或迁移配置. 每个 Harness 声明 `name`, `config_path`, `agent_format`, `agent_extension`; TOML Harness 还必须声明 `instructions_field`. `config_path` 不能占用 `.agents/shared-rules`, `.agents/skills` 或 `.harness-align`.
+- `.harness-align/config.json` 当前格式为 `3`, 与应用版本独立; 格式覆盖配置源的结构和解释规则, 不兼容变化只递增, 不重置或复用历史编号. 引擎和 Shared 各自维护 `CONFIG_VERSION`, 必须保持一致; 其他持久化格式分别管理版本. 配置定义输出标题, 有序 Layer 选择, Harness 对象列表和可选 `skill_sources`. Harness 列表允许为空. 新建配置时仅保留默认候选中配置目录已存在且路径各级均为非链接目录的 Harness; 不重新筛选已有或迁移配置. 每个 Harness 声明 `name`, `config_path`, `agent_format`, `agent_extension`; TOML Harness 还必须声明 `instructions_field`. `config_path` 不能占用 `.agents/shared-rules`, `.agents/skills` 或 `.harness-align`.
+- 读取兼容当前 Layer v1, 纯内存转换为当前模型; 新建及写回只接受 v3. 历史 Profile v2 和未知格式拒绝自动转换, 不推测开发期缺失 `targets` 的旧语义. 不通过强制写入当前版本掩盖非法 payload.
+- `upgradeWorkspaceConfig` 在完整工作区校验后只升级原始配置对象的版本, 保留其他字段及省略状态; 写回前保留精确字节备份 `.config-backup-v1-<sha256>.json`, 并复用 `.edit-recovery.json` 和 revision 守卫. 备份不进入生成, 部署或同步. v3 保持原始字节, 升级不自动 Generate / Setup.
+- Main 将可信 `userData` 同步状态目录提供给 `WorkspaceService`, 不接受 Renderer 目录. 自动升级在恢复操作后执行; 有待确认上传或无法安全读取同步状态时延迟自动写回. `previewSync` 先按 raw snapshot 处理 pending, 再持久升级本机配置. 同步只转换候选副本, 保留 commit 对应的 raw remote, base, pending 和恢复记录; 合并排除版本转换单独产生的冲突, 预览仍显示并计数远端格式升级上传.
 - `skill_sources` 省略或 `[]` 表示无远端源; 校验后内存中的 `skillSources` 始终是数组; `configDocument` 仅在长度大于 `0` 时写出该键.
 - `.harness-align/rules/` 中的根 Rule 按 `(priority, repository_relative_path)` 排序, 再按 Harness `targets` 严格白名单过滤; `targets` 省略或为 `[]` 时不对任何 Harness 生效.
 - `.harness-align/layers/<layer>/<option>.md` 提供可选 Layer 内容; Layer Option 的 `targets` 使用相同的严格白名单语义. Layer 目录可以为空, 但加入 `config.json` 前必须至少存在一个选项. 生成时使用 `config.json` 中保存的选择, 或 GUI 中当前的 Layer 顺序与选项. Layer 允许空文件作为显式 no-op.
@@ -126,6 +129,7 @@
 - 只删除旧 manifest 记录且本次不再生成的文件. 不删除 manifest 未管理的文件.
 - 所有新文件写入与 stale 删除成功后, 才写入新的 manifest. 若 stale 删除失败, 保留旧 manifest.
 - 写回 `.harness-align` 源文件必须经 `src/engine/Edit.ts` 先校验再原子写入. 多文件更新不是单一磁盘事务.
+- Harness 级联更新, 本地 Skill 正文与 provenance, Layer 改名与删除先持久写入 `.edit-recovery.json`, 记录受影响的原始字节与移动路径. 初始化前恢复未提交操作, 后续外部修改必须保留现场并失败; 恢复记录不参与同步.
 - `ensureUserWorkspace` 自动补齐配置根目录的 `AGENTS.md` 编辑指引, 仅刷新带生成标记的既有文件, 保留无标记文件. 指引写入复用路径安全检查和原子写入, 不进入 Harness 输出, manifest, 部署或同步快照.
 - 同步替换源文件前写入 `.sync-backup.json` 和 `.sync-recovery.json`, 后者在工作区初始化之前恢复. 恢复只能处理属于中断操作的内容, 检测到外部后续编辑时保留恢复记录并失败. 同步快照只包含配置源白名单, 不包含生成文件, 本机恢复记录或同步凭据.
 - 上传快照保留本地和来源不明的 Skill 文件; GitHub Skill 只上传来源记录. 本地预览守卫和恢复备份仍使用完整快照. 新下载记录固定 commit, 旧记录按分支恢复时必须匹配原内容哈希. 下载内容先在内存补齐并完整校验, 再经 `Edit.ts` 应用, 失败时保留工作区和待恢复同步. GitHub Skill 文件视为可重建缓存, 不做本地修改保护, 上传始终省略其内容; 本机内容哈希不匹配时按来源重新下载并替换.
@@ -139,11 +143,14 @@
 - `setup` 只更新配置中声明且根目录已经存在的 Harness. 不因部署而创建缺失的 Harness 根目录. 桌面壳的 Setup 按钮遵守同一规则.
 - 对已启用 Harness, `setup` 替换其 `agents` 目录并更新根 `AGENTS.md`. 没有生成 Subagent 时仍把目标 `agents/` 替换为空目录.
 - `setup` 用完整目录替换更新 `%USERPROFILE%\.agents\shared-rules`.
-- `setup` 按 skill id 覆盖部署 `%USERPROFILE%\.agents\skills\<id>\`, 不删除无关兄弟目录, 也不复制 `index.json`.
-- 缺失, 空, 或仅有 `index.json` 的 `.harness-align/skills/` 时, skills 部署跳过并成功; `shared-rules` 仍为必需.
+- `setup` 按 skill id 覆盖部署 `%USERPROFILE%\.agents\skills\<id>\`, 删除归属 lock 记录但源中已移除的 Skill, 不删除未记录的无关兄弟目录, 也不复制 `index.json`.
+- `%USERPROFILE%\.agents\.harness-align.lock.json` 使用版本 `1` 和 `scopes` 内容哈希映射, 只接受 `.agents/shared-rules` 与合法 `.agents/skills/<id>` 范围. lock 缺失时不从旧基线或现有目录推断归属. lock 更新与受管理 Skill 删除进入同一部署预览和恢复流程, 不进入生成结果或同步快照; Harness `config_path` 不得占用此 lock 路径及其子路径.
+- 缺失, 空, 或仅有 `index.json` 的 `.harness-align/skills/` 仍清理 lock 中的过期 Skill; 没有待清理项时 skills 部署跳过并成功; `shared-rules` 仍为必需.
 - 部署前必须验证解析后的目标位于 `USERPROFILE` 或项目生成目录内, 并拒绝既有 symlink 或 junction.
 - `setup` 相关验证只使用测试构造的临时 `USERPROFILE`, 不触碰开发机上的真实用户目录.
 - 不递归删除含有 reparse point 的部署目标.
+- 桌面 Setup 先审阅 Main 持有的源内容和目标内容预览, 执行只提交预览 id 与外部修改覆盖选择. `.harness-align/.deployment.json` 记录成功部署的内容哈希, 不进入生成结果或同步快照; 目标手改和额外路径删除需要明确选择.
+- `.harness-align/.deployment-recovery.json` 在替换前持久记录目标, 暂存, 备份和逐项进度. 初始化工作区前恢复未完成部署; 已完整替换的部署补齐基线与清理, 未完整替换的部署逆序还原. 目标, 备份或暂存出现不属于本次操作的内容时保留现场并失败, 不删除恢复记录.
 - 部署替换先准备全部暂存内容, 再逐项备份并替换目标. 替换失败时逆序恢复, 回滚失败必须保留备份并报告目标与备份路径; 不把多目标部署描述为单一磁盘事务.
 - 打开 Harness 文件夹同样要求目标位于 `USERPROFILE` 内, 名称精确匹配已配置的 Harness, 目标为已存在目录, 且路径各级不含 symlink 或 junction. 相关测试只验证临时用户目录的解析与拒绝行为, 不调用系统文件管理器.
 - 桌面壳把 theme 和窗口位置记在 Electron `userData`, 不写进本仓库.

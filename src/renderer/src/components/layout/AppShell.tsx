@@ -5,7 +5,7 @@
 import {
     BuildOutlined,
     CodeOutlined,
-    DeploymentUnitOutlined,
+    HomeOutlined,
     FileDoneOutlined,
     FileTextOutlined,
     RobotOutlined,
@@ -16,11 +16,15 @@ import {
     SyncOutlined,
     ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Badge, Button, Flex, Layout, Menu, Modal, Space, Spin, Tooltip, Typography, type MenuProps } from "antd";
+import { Badge, Button, Checkbox, Flex, Layout, Menu, Modal, Popover, Segmented, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useState, type ReactNode } from "react";
 import appIcon from "../../../../../build/icon.png";
 import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
+import { WorkflowStatus } from "./WorkflowStatus";
 import { SyncPanel } from "@/features/settings/SyncPanel";
+import { showError } from "@/components/common/Feedback";
+import type { SetupPreview } from "@shared/models/Workspace";
+import { filterSetupChanges, isSkillUpdateAvailable, setupExternalLabel } from "@/lib/Utils";
 
 const { Header, Sider, Content } = Layout;
 
@@ -33,7 +37,7 @@ interface NavItem
 
 /** Primary workspace modules shown in the desktop sidebar. */
 const WORKSPACE_NAV_ITEMS: Readonly<Record<Exclude<WorkspaceView, "shared-rules">, NavItem>> = {
-    project: { label: "Harnesses", icon: <DeploymentUnitOutlined /> },
+    project: { label: "Home", icon: <HomeOutlined /> },
     rules: { label: "Rules", icon: <FileTextOutlined /> },
     layers: { label: "Layers", icon: <BuildOutlined /> },
     agents: { label: "Agents", icon: <RobotOutlined /> },
@@ -48,7 +52,7 @@ export interface AppShellProps
     onSave: () => void;
     onReload: () => void;
     onGenerate: () => void;
-    onSetup: () => void;
+    onSetup: (previewId: string, overwriteExternal: boolean) => void;
 }
 
 /** Render the Ant Design application shell and top-level commands. */
@@ -58,10 +62,16 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
     const setView = useAppStore((state) => state.setView);
     const workspace = useAppStore((state) => state.workspace);
     const isBusy = useAppStore((state) => state.isBusy);
+    const hasAppUpdate = useAppStore((state) => state.appUpdateStatus?.availableVersion != null);
+    const hasSkillUpdate = useAppStore((state) => state.skillUpdates.some(isSkillUpdateAvailable));
     const hasSourceDrafts = useAppStore((state) => Object.keys(state.editorDrafts).length > 0);
     const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const dirtyCount = useAppStore(workspaceChangeCount);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
+    const [setupPreview, setSetupPreview] = useState<SetupPreview>();
+    const [setupView, setSetupView] = useState<"changed" | "all">("changed");
+    const [overwriteExternal, setOverwriteExternal] = useState(false);
+    const hasExternalChanges = setupPreview?.changes.some((change) => change.external && change.status !== "unchanged") ?? false;
     const [isReloadOpen, setIsReloadOpen] = useState(false);
     const navigationView = view === "shared-rules" ? "rules" : view;
     const currentNav = navigationView === "settings" || navigationView === "console" ? undefined : WORKSPACE_NAV_ITEMS[navigationView];
@@ -71,12 +81,14 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
         { key: "rules", icon: WORKSPACE_NAV_ITEMS.rules.icon, label: WORKSPACE_NAV_ITEMS.rules.label },
         { key: "layers", icon: WORKSPACE_NAV_ITEMS.layers.icon, label: WORKSPACE_NAV_ITEMS.layers.label },
         { key: "agents", icon: WORKSPACE_NAV_ITEMS.agents.icon, label: WORKSPACE_NAV_ITEMS.agents.label },
-        { key: "skills", icon: WORKSPACE_NAV_ITEMS.skills.icon, label: WORKSPACE_NAV_ITEMS.skills.label },
+        { key: "skills", icon: <Badge dot={hasSkillUpdate} title="Skill updates available" styles={{ root: { lineHeight: 1 } }}><ThunderboltOutlined style={{ lineHeight: 1 }} /></Badge>,
+          label: <span aria-label={hasSkillUpdate ? "Skills, updates available" : "Skills"}>Skills</span> },
     ];
     const utilityItems: MenuProps["items"] = [
         { key: "generated", icon: WORKSPACE_NAV_ITEMS.generated.icon, label: WORKSPACE_NAV_ITEMS.generated.label },
         { key: "console", icon: <CodeOutlined />, label: "Console" },
-        { key: "settings", icon: <SettingOutlined />, label: "Settings" },
+        { key: "settings", icon: <Badge dot={hasAppUpdate} title="Application update available" styles={{ root: { lineHeight: 1 } }}><SettingOutlined style={{ lineHeight: 1 }} /></Badge>,
+          label: <span aria-label={hasAppUpdate ? "Settings, update available" : "Settings"}>Settings</span> },
     ];
 
     /** Select one known application view from an Ant Design menu. */
@@ -94,6 +106,22 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
         else onReload();
     };
 
+    /** Ask Main for an exact deployment preview before offering the execution button. */
+    const handleSetupPreview = (): void =>
+    {
+        const state = useAppStore.getState();
+        if (!state.workspace || state.isBusy || Object.keys(state.editorDrafts).length > 0) return;
+        state.setIsBusy(true);
+        setSetupPreview(undefined);
+        setSetupView("changed");
+        setOverwriteExternal(false);
+        void window.appApi.workspace.previewSetup(state.layerSelection).then((preview) =>
+        {
+            setSetupPreview(preview);
+            setIsSetupOpen(true);
+        }).catch((error: unknown) => showError(error, "Setup preview failed")).finally(() => useAppStore.getState().setIsBusy(false));
+    };
+
     return (
         <Layout className="app-shell">
             <Header className="app-topbar">
@@ -103,10 +131,11 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
                         <span className="app-brand-name">Harness Align</span>
                     </button>
                 </Flex>
-                <Flex align="center" gap={12} wrap={false}>
+                <WorkflowStatus />
+                <Flex align="center" gap={12} wrap={false} className="app-topbar-actions">
                     <span className="app-command-status" role="status">
                         {isBusy ? <Space size={8}><Spin size="small" /><Typography.Text type="secondary">Working...</Typography.Text></Space>
-                            : dirtyCount > 0 ? <Badge status="warning" text={`${dirtyCount} unsaved`} /> : null}
+                            : null}
                     </span>
                     <Tooltip title="Save all changes (Ctrl+S)">
                         <Button icon={<SaveOutlined />} disabled={!workspace || isBusy || dirtyCount === 0}
@@ -126,7 +155,7 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
                         </Tooltip>
                         <Tooltip title={hasSourceDrafts ? "Save source changes before deploying" : "Deploy to existing harnesses"}>
                             <Button type="primary" icon={<RocketOutlined />} disabled={!workspace || isBusy || hasSourceDrafts}
-                                    aria-label="Setup" onClick={() => setIsSetupOpen(true)}>Setup</Button>
+                                    aria-label="Setup" onClick={handleSetupPreview}>Setup</Button>
                         </Tooltip>
                     </Space.Compact>
                 </Flex>
@@ -173,19 +202,42 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
             </Modal>
             <Modal
                 open={isSetupOpen}
-                title="Deploy configuration?"
+                title="Review deployment"
+                width={800}
                 okText="Setup"
+                okButtonProps={{ disabled: !setupPreview || hasSourceDrafts || (hasExternalChanges && !overwriteExternal) }}
                 confirmLoading={isBusy}
                 onCancel={() => setIsSetupOpen(false)}
                 onOk={() =>
                 {
+                    if (!setupPreview || useAppStore.getState().isBusy || Object.keys(useAppStore.getState().editorDrafts).length > 0) return;
                     setIsSetupOpen(false);
-                    onSetup();
+                    if (hasExternalChanges && !overwriteExternal) return;
+                    onSetup(setupPreview.id, overwriteExternal);
                 }}
             >
                 <Typography.Paragraph>
-                    Setup regenerates output and replaces rules, agents, shared rules, and same-name skills in existing assistant directories. Missing directories are skipped.
+                    Review added, modified, deleted, unchanged, and skipped paths. Setup checks sources and targets again before replacing them; a changed preview must be refreshed.
                 </Typography.Paragraph>
+                <Flex className="workspace-list-toolbar" justify="flex-end">
+                    <Segmented<"changed" | "all"> size="small" aria-label="Deployment preview filter" value={setupView} onChange={setSetupView}
+                        options={[{ label: "Changed", value: "changed" }, { label: "All", value: "all" }]} />
+                </Flex>
+                <Table key={`${setupPreview?.id}-${setupView}`} rowKey="path" size="small" dataSource={filterSetupChanges(setupPreview?.changes ?? [], setupView)}
+                       pagination={false} scroll={{ y: "min(400px, 45vh)" }}
+                       locale={{ emptyText: setupView === "changed" ? "No changes" : "No deployment paths" }}
+                       columns={[
+                           { title: "Change", dataIndex: "status", width: 100 },
+                           { title: "Path", dataIndex: "path" },
+                           { title: "External changes", dataIndex: "external", width: 130, render: (reason: string | undefined) => reason ? (
+                               <Popover trigger="click" title={setupExternalLabel(reason)} content={reason}>
+                                   <Button type="link" size="small" styles={{ root: { paddingInline: 0 } }} aria-label={`External change details: ${reason}`}>
+                                       {setupExternalLabel(reason)}
+                                   </Button>
+                               </Popover>
+                           ) : null },
+                       ]} />
+                {hasExternalChanges ? <Checkbox checked={overwriteExternal} onChange={(event) => setOverwriteExternal(event.target.checked)}>Overwrite modified targets and delete extra paths shown above</Checkbox> : null}
             </Modal>
         </Layout>
     );

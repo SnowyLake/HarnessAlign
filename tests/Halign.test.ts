@@ -9,45 +9,56 @@ import { promises as fs } from "node:fs";
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { registerHooks } from "node:module";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { resolveWorkspaceItemFolder, workspaceService } from "../src/main/services/WorkspaceService.js";
-import { defaultLayerOption, moveLayerSelection, selectableRemoteSkillIds, uniqueAgentPath, uniqueRulePath } from "../src/renderer/src/lib/Utils.js";
-import type { ProjectSkill, RemoteSkill, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
-import { useAppStore, workspaceChangeCount } from "../src/renderer/src/stores/AppStore.js";
+import {
+    assertUpdateDraftsSaved, resolveWorkspaceItemFolder, setUpdateDraftState, setWorkspaceSyncDirectory, withWorkspace, withWorkspaceForUpdate, workspaceService,
+} from "../src/main/services/WorkspaceService.js";
+import {
+    defaultLayerOption, filterSetupChanges, harnessEffects, isSkillUpdateAvailable, matchesWorkspaceSource, moveLayerSelection,
+    selectableRemoteSkillIds, setupExternalLabel, uniqueAgentPath, uniqueRulePath,
+} from "../src/renderer/src/lib/Utils.js";
+import type { ProjectSkill, RemoteSkill, SetupChange, SkillUpdate, Workspace, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
+import { CONFIG_VERSION as SHARED_CONFIG_VERSION } from "../src/shared/models/Workspace.js";
+import { useAppStore, workspaceChangeCount, type FormSnapshot, type Selection } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
-import { appendLog, clearLogs, logMainError, readLogs, subscribeLogs } from "../src/main/services/ConsoleService.js";
+import { DiffText } from "../src/renderer/src/components/common/DiffText.js";
+import { diffLines } from "../src/renderer/src/lib/TextDiff.js";
+import { workflowStages } from "../src/renderer/src/lib/WorkflowStatus.js";
+import { appendLog, clearLogs, logMainError, readLogs, redactedLogText, subscribeLogs } from "../src/main/services/ConsoleService.js";
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
-import { checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent } from "../src/main/services/SkillRemoteService.js";
+import type { AppUpdateStatus } from "../src/shared/models/AppUpdate.js";
+import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent, readSkillUpdatePreview } from "../src/main/services/SkillRemoteService.js";
 import { applySync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
 import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
-import { buildOutputs, generate, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
-import { readResponseBytes } from "../src/main/services/RemoteFetch.js";
+import { buildOutputs, generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
+import { githubRateLimitHint, readResponseBytes } from "../src/main/services/RemoteFetch.js";
 import {
     assertAppUpdateInstallable, assertReleaseVersion, beginAppUpdateCheck, beginAppUpdateDownload, environmentProxy, environmentProxyBypass,
     failAppUpdate, initialAppUpdateStatus, markAppUpdateAvailable, markAppUpdateCurrent, markAppUpdateDownloaded, unavailableAppUpdateStatus, updateAppUpdateProgress,
 } from "../src/main/services/AppUpdateState.js";
-import { loadConfig, validateConfig } from "../src/engine/Load.js";
-import { HalignError } from "../src/engine/Model.js";
+import { loadConfig, parseConfigSource, validateConfig } from "../src/engine/Load.js";
+import { CONFIG_VERSION, HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
-import { reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
+import { inspectHarnessRoots, previewSetup, recoverDeployment, reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
 import { assertSafeZipEntry, importUserSkills, listImportableUserSkills, listUserSkills, readSkillContent, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
     loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkillSource,
     renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, saveSkillContent, updateHarness,
-    applySyncSources, recoverSyncSources, validateSyncSources,
+    applySyncSources, recoverSourceEdits, recoverSyncSources, upgradeSyncConfig, upgradeWorkspaceConfig, validateSyncSources,
 } from "../src/engine/Edit.js";
 
 const config = {
-    version: 1,
+    version: CONFIG_VERSION,
     name: "AGENTS",
     layers: [{ name: "soul", selected: "arona" }],
     harnesses: [
@@ -59,6 +70,1231 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("configuration formats share the current contract and read Layer v1 without changing bytes or meaning", async () =>
+{
+    assert.equal(CONFIG_VERSION, 3);
+    assert.equal(SHARED_CONFIG_VERSION, CONFIG_VERSION);
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const legacy = { version: 1, layers: config.layers, harnesses: config.harnesses };
+        const original = Buffer.from(`${JSON.stringify(legacy)}\r\n`);
+        await writeFile(path, original);
+        await writeFile(join(root, ".harness-align/rules/base.md"), "---\npriority: 100\n---\n\n# Untargeted rule\n");
+        await writeFile(join(root, ".harness-align/layers/soul/arona.md"), "# Untargeted layer\n");
+        const loaded = await loadWorkspace(root);
+        assert.equal(loaded.config.version, 3);
+        assert.equal(loaded.config.name, "AGENTS");
+        assert.deepEqual(loaded.config.skillSources, []);
+        assert.deepEqual(loaded.rootRules[0]!.targets, []);
+        assert.deepEqual(loaded.layerOptions.soul![0]!.targets, []);
+        assert.equal(CONFIG_SCHEMA.safeParse(loaded.config).success, true);
+        assert.equal(CONFIG_SCHEMA.safeParse({ ...loaded.config, version: 1 }).success, false);
+        const outputs = await buildOutputs(root);
+        assert.doesNotMatch(outputs.get("codex/AGENTS.md")!.toString(), /Untargeted/u);
+        assert.equal(JSON.parse(outputs.get(".manifest.json")!.toString()).version, 1);
+        assert.deepEqual(await readFile(path), original);
+        const upgraded = JSON.parse(parseConfigSource(original).upgradedText!);
+        assert.deepEqual(upgraded, { ...legacy, version: 3 });
+    });
+});
+
+test("configuration upgrade preserves exact backups and unrelated sources, and current files stay byte-identical", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(`\uFEFF${JSON.stringify({ ...config, version: 1 })}\r\n`);
+        await writeFile(path, original);
+        await generate(root);
+        const before = await snapshot(join(root, ".harness-align"));
+        const backup = await upgradeWorkspaceConfig(root);
+        assert.ok(backup);
+        assert.deepEqual(await readFile(backup), original);
+        assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { ...config, version: 3 });
+        const after = await snapshot(join(root, ".harness-align"));
+        for (const [name, bytes] of before) if (name !== "config.json") assert.deepEqual(after.get(name), bytes);
+        assert.equal(after.has(".edit-recovery.json"), false);
+        const upgraded = await readFile(path);
+        assert.equal(await upgradeWorkspaceConfig(root), undefined);
+        assert.deepEqual(await readFile(path), upgraded);
+        assert.deepEqual(await readFile(backup), original);
+        assert.equal((await readSyncSnapshot(root)).files[backup.split(/[\\/]/u).at(-1)!], undefined);
+        const current = Buffer.from(`${JSON.stringify(config)}\r\n`);
+        await writeFile(path, current);
+        assert.equal(await upgradeWorkspaceConfig(root), undefined);
+        assert.deepEqual(await readFile(path), current);
+    });
+});
+
+test("configuration upgrade rejects invalid versions and incomplete sources before writing backups", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        for (const version of [0, -1, 1.5, "1", null, 2, 4, 99])
+        {
+            await writeFile(path, JSON.stringify({ ...config, version }));
+            const before = await snapshot(join(root, ".harness-align"));
+            await assert.rejects(upgradeWorkspaceConfig(root), version === 2 ? /legacy Profile format version 2/u
+                : typeof version === "number" && version > 3 ? /newer than supported version 3/u : /version must be integer 3/u);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+        }
+        const { version: omitted, ...missing } = config;
+        assert.equal(omitted, 3);
+        assert.throws(() => parseConfigSource(JSON.stringify(missing)), /version is required/u);
+        assert.throws(() => parseConfigSource(Buffer.from([0xff])), /invalid JSON or UTF-8/u);
+        assert.throws(() => parseConfigSource(JSON.stringify({ version: 2, profiles: [] })), /legacy Profile format/u);
+        assert.throws(() => parseConfigSource(JSON.stringify({ ...config, version: 1, profiles: [] })), /unknown field "profiles"/u);
+        await writeFile(path, JSON.stringify({ ...config, version: 1 }));
+        await writeFile(join(root, ".harness-align/rules/base.md"), "---\npriority: -1\n---\n\n# Invalid\n");
+        const before = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(upgradeWorkspaceConfig(root), /priority/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+    });
+});
+
+test("configuration upgrade rolls back a failed commit and preserves external edits before its guarded write", async (t) =>
+{
+    for (const external of [false, true]) await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(JSON.stringify({ ...config, version: 1 }));
+        const changed = Buffer.from(JSON.stringify({ ...config, version: 1, name: "External edit" }));
+        await writeFile(path, original);
+        const replace = fs.rename;
+        let journalWrites = 0;
+        const mocked = t.mock.method(fs, "rename", async (from: Parameters<typeof fs.rename>[0], to: Parameters<typeof fs.rename>[1]) =>
+        {
+            if (external && String(to).includes(".config-backup-v1-")) await writeFile(path, changed);
+            if (!external && String(to).endsWith(".edit-recovery.json") && ++journalWrites === 2) throw new Error("injected commit failure");
+            return replace(from, to);
+        });
+        try
+        {
+            await assert.rejects(upgradeWorkspaceConfig(root), external ? /changed before configuration upgrade/u : /injected commit failure/u);
+            assert.deepEqual(await readFile(path), external ? changed : original);
+            const backups = (await readdir(join(root, ".harness-align"))).filter((name) => name.startsWith(".config-backup-v1-"));
+            assert.equal(backups.length, 1);
+            assert.deepEqual(await readFile(join(root, ".harness-align", backups[0]!)), original);
+            await assert.rejects(readFile(join(root, ".harness-align/.edit-recovery.json")), /ENOENT/u);
+        }
+        finally { mocked.mock.restore(); }
+    });
+});
+
+test("configuration upgrade restores interrupted raw edits first and rejects linked backup paths", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const before = Buffer.from(JSON.stringify({ ...config, version: 1 }));
+        const after = Buffer.from(parseConfigSource(before).upgradedText!);
+        await writeFile(path, after);
+        await writeFile(join(root, ".harness-align/.edit-recovery.json"), JSON.stringify({ version: 1, phase: "applying", writes: [
+            { path: ".harness-align/config.json", before: before.toString("base64"), after: after.toString("base64") },
+        ] }));
+        const backup = await upgradeWorkspaceConfig(root);
+        assert.ok(backup);
+        assert.deepEqual(await readFile(backup), before);
+        assert.deepEqual(await readFile(path), after);
+        await unlink(backup);
+        await writeFile(path, before);
+        await writeFile(backup, "Unexpected backup contents");
+        await assert.rejects(upgradeWorkspaceConfig(root), /expected the original configuration backup/u);
+        assert.deepEqual(await readFile(path), before);
+        assert.equal(await readFile(backup, "utf8"), "Unexpected backup contents");
+        await unlink(backup);
+        const outside = join(root, "outside");
+        await mkdir(outside);
+        await symlink(outside, backup, "junction");
+        await assert.rejects(upgradeWorkspaceConfig(root), /symbolic link/u);
+        assert.deepEqual(await readFile(path), before);
+        assert.deepEqual(await readdir(outside), []);
+        await unlink(backup);
+    });
+});
+
+test("explicit config saves and cascaded updates retain the original legacy configuration", async () =>
+{
+    for (const cascade of [false, true]) await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(JSON.stringify({ ...config, version: 1 }));
+        await writeFile(path, original);
+        if (cascade) await updateHarness(root, "codex", { ...(await loadConfig(root)).harnesses[0]!, name: "Renamed" });
+        else await saveConfig(root, { ...await loadConfig(root), name: "Saved title" });
+        assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+        const backup = (await readdir(join(root, ".harness-align"))).find((name) => name.startsWith(".config-backup-v1-"));
+        assert.ok(backup);
+        assert.deepEqual(await readFile(join(root, ".harness-align", backup)), original);
+        await assert.rejects(readFile(join(root, ".harness-align/.edit-recovery.json")), /ENOENT/u);
+    });
+});
+
+test("workspace queue automatically upgrades supported sources and defers only persistence for unreadable sync state", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(JSON.stringify({ ...config, version: 1 }));
+        await writeFile(path, original);
+        const previousHome = process.env.USERPROFILE;
+        const state = join(root, "app-state");
+        try
+        {
+            process.env.USERPROFILE = root;
+            setWorkspaceSyncDirectory(state);
+            clearLogs();
+            await withWorkspace((home) => loadWorkspace(home));
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+            const notice = readLogs().entries.find((entry) => entry.title === "Configuration upgraded: 1 -> 3")!;
+            assert.ok(notice.details.includes(".config-backup-v1-"));
+            assert.equal(notice.details.includes(root), false);
+            const before = await snapshot(join(root, ".harness-align"));
+            const invalid = Object.assign({}, await loadConfig(root), { version: 99 });
+            await assert.rejects(saveConfig(root, invalid), /newer than supported version 3/u);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+            await mkdir(state);
+            await writeFile(join(state, "github-sync.json"), "invalid sync state");
+            clearLogs();
+            await withWorkspace((home) => loadWorkspace(home));
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+            assert.equal(readLogs().entries.some((entry) => entry.title === "Configuration upgrade deferred"), false);
+            const legacy = Buffer.from(JSON.stringify({ ...config, version: 1, name: "Another v1" }));
+            await writeFile(path, legacy);
+            clearLogs();
+            assert.equal((await withWorkspace((home) => loadWorkspace(home))).config.name, "Another v1");
+            assert.deepEqual(await readFile(path), legacy);
+            assert.ok(readLogs().entries.some((entry) => entry.title === "Configuration upgrade deferred" && entry.details.includes("could not be read")));
+            await writeFile(join(state, "github-sync.json"), JSON.stringify({ version: 1, connection: null, base: null, pending: null }));
+            await withWorkspace((home) => loadWorkspace(home));
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+        }
+        finally
+        {
+            setWorkspaceSyncDirectory();
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+            clearLogs();
+        }
+    });
+});
+
+test("deployment warning labels cover known reasons and preserve access to unknown details", () =>
+{
+    assert.equal(setupExternalLabel("Changed since last deployment"), "Modified");
+    assert.equal(setupExternalLabel("Extra path will be deleted"), "Extra");
+    assert.equal(setupExternalLabel("Existing content has no deployment baseline"), "Untracked");
+    assert.equal(setupExternalLabel("Another warning"), "Details");
+});
+
+test("deployment preview filters changed rows while preserving full preview and external warnings", () =>
+{
+    const changes: SetupChange[] = [
+        { path: "added", status: "added" },
+        { path: "modified", status: "modified", external: "Modified target" },
+        { path: "deleted", status: "deleted", external: "Extra path" },
+        { path: "unchanged", status: "unchanged" },
+        { path: "skipped", status: "skipped" },
+    ];
+    const original = structuredClone(changes);
+    assert.deepEqual(filterSetupChanges(changes, "changed"), original.slice(0, 3));
+    assert.deepEqual(filterSetupChanges(changes, "all"), original);
+    assert.deepEqual(filterSetupChanges(changes.slice(3), "changed"), []);
+    assert.deepEqual(filterSetupChanges([], "changed"), []);
+    assert.deepEqual(changes, original);
+});
+
+test("Harness root status reports missing, ready and unsafe paths without creation or following junctions", async () =>
+{
+    await withProject(async (root) =>
+    {
+        assert.ok((await inspectHarnessRoots(root, root)).every((item) => item.state === "missing"));
+        await mkdir(join(root, ".codex"));
+        await writeFile(join(root, ".cursor"), "Not a directory");
+        const external = join(root, "external-status");
+        await mkdir(external);
+        await mkdir(join(root, ".config"));
+        await symlink(external, join(root, ".config", "opencode"), "junction");
+        assert.deepEqual(await inspectHarnessRoots(root, root), [{ name: "codex", state: "ready" }, { name: "cursor", state: "unsafe" }, { name: "opencode", state: "unsafe" }]);
+        assert.deepEqual(await readdir(external), []);
+    });
+});
+
+test("Console copies redact home paths and common credentials while keeping original diagnostics", () =>
+{
+    clearLogs();
+    const details = 'C:\\Users\\Example\\.codex and C:/Users/Example/file; ghp_fakeSecret; Bearer test-secret; {"token":"test-token","password":"pass-value"}; http://user:proxy-pass@proxy.example';
+    appendLog({ level: "error", title: "Example diagnostics", details });
+    const copy = redactedLogText("C:\\Users\\Example");
+    for (const secret of ["Example\\.codex", "Example/file", "ghp_fakeSecret", "test-secret", "test-token", "pass-value", "proxy-pass"]) assert.equal(copy.includes(secret), false);
+    assert.ok(copy.includes("%USERPROFILE%"));
+    assert.ok(copy.includes("Example diagnostics"));
+    assert.equal(readLogs().entries[0]!.details, details);
+    clearLogs();
+});
+
+test("GitHub rate-limit hints use validated retry headers and distinguish permission failures", () =>
+{
+    const now = Date.UTC(2026, 9, 1);
+    assert.match(githubRateLimitHint(new Response(null, { status: 429, headers: { "retry-after": "120" } }), now)!, /wait 120s.*2026-10-01T00:02:00/u);
+    assert.match(githubRateLimitHint(new Response(null, { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(now / 1000 + 300) } }), now)!, /wait 300s/u);
+    assert.equal(githubRateLimitHint(new Response(null, { status: 403 })), undefined);
+    const unsafe = githubRateLimitHint(new Response(null, { status: 429, headers: { "retry-after": "secret-value" } }), now)!;
+    assert.equal(unsafe.includes("secret-value"), false);
+    assert.match(unsafe, /wait 60s/u);
+});
+
+test("Skill update review shows old/new commits, all file changes and bounded Markdown without writing", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const { zipSync } = await import("fflate");
+        const old = zipSync({ "repo/demo/SKILL.md": Buffer.from("# Old\n"), "repo/demo/deleted.md": Buffer.from("Removed"), "repo/demo/same.md": Buffer.from("Same") });
+        const next = zipSync({ "repo/demo/SKILL.md": Buffer.from(`# New\n${"x".repeat(17_000)}`), "repo/demo/added.md": Buffer.from("Added"), "repo/demo/same.md": Buffer.from("Same") });
+        let branch = "d".repeat(40);
+        t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) => String(input).includes("/commits/") ? Response.json({ sha: branch }) : new Response(Buffer.from(String(input).includes("d".repeat(40)) ? old : next)));
+        await addSkillSource(root, { url: "https://github.com/update-preview/repo" });
+        await discoverSkills(root);
+        await installSkills(root, ["demo"]);
+        branch = "e".repeat(40);
+        const review = (await checkSkillUpdates(root))[0]!;
+        const before = await snapshot(join(root, ".harness-align"));
+        const detail = await readSkillUpdatePreview(root, review.previewId!);
+        assert.equal(detail.oldCommit, "d".repeat(40));
+        assert.equal(detail.newCommit, "e".repeat(40));
+        assert.deepEqual(detail.files.map(({ path, status }) => [path, status]), [["SKILL.md", "modified"], ["added.md", "added"], ["deleted.md", "deleted"], ["same.md", "unchanged"]]);
+        assert.equal(detail.oldText, "# Old\n");
+        assert.equal(detail.newText.length, 16_000);
+        assert.equal(detail.truncated, true);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+        await discoverSkills(root);
+        await assert.rejects(readSkillUpdatePreview(root, review.previewId!), /preview expired/u);
+    });
+});
+
+test("text comparisons mark additions and deletions, preserve common lines, bound work and escape remote markup", () =>
+{
+    const diff = diffLines("first\nremoved\nlast", "first\nadded\nlast");
+    assert.deepEqual(diff.local.map((line) => line.kind), ["same", "removed", "same"]);
+    assert.deepEqual(diff.remote.map((line) => line.kind), ["same", "added", "same"]);
+    assert.equal(diffLines(null, "new").remote[0]!.kind, "added");
+    assert.equal(diffLines("gone", null).local[0]!.kind, "removed");
+    const large = diffLines(Array(600).fill("before").join("\n"), Array(600).fill("after").join("\n"));
+    assert.equal(large.limited, true);
+    assert.equal(large.local.length, 600);
+    const markup = renderToStaticMarkup(createElement(DiffText, { label: "Remote differences", lines: diffLines(null, "<script>remote()</script>").remote }));
+    assert.ok(markup.includes('data-change="added"'));
+    assert.ok(markup.includes("&lt;script&gt;"));
+    assert.equal(markup.includes("<script>"), false);
+});
+
+test("source search combines name, path, body terms and strict Harness filters without treating empty targets as global", () =>
+{
+    const rule = { path: ".harness-align/rules/deep/review.md", body: "Inspect security boundaries", targets: ["codex"] };
+    assert.equal(matchesWorkspaceSource(rule, "REVIEW security", "codex"), true);
+    assert.equal(matchesWorkspaceSource(rule, "deep absent"), false);
+    assert.equal(matchesWorkspaceSource({ ...rule, targets: [] }, "security", "codex"), false);
+    const agent = { path: ".harness-align/agents/check.md", name: "Inspector", description: "Review helper", body: "Read all callers", harnesses: { codex: {} } };
+    assert.equal(matchesWorkspaceSource(agent, "inspector callers", "codex"), true);
+    assert.equal(matchesWorkspaceSource(agent, "", "cursor"), false);
+    assert.equal(matchesWorkspaceSource(agent, "", "toString"), false);
+});
+
+test("Harness explanations match strict targets, selected Layers, empty no-ops and own Agent blocks", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await saveRule(root, { path: ".harness-align/rules/inactive.md", priority: 4, targets: [], body: "Inactive unique content" });
+        await addLayer(root, "disabled");
+        await addLayerOption(root, "disabled", "empty");
+        await saveLayerOption(root, { path: ".harness-align/layers/soul/noop.md", targets: ["codex"], body: "" });
+        const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [] };
+        const choices = [{ name: "soul", option: "noop" }];
+        const effects = harnessEffects(workspace, "codex", choices);
+        assert.equal(effects.find((effect) => effect.path.endsWith("inactive.md"))?.reason, "No targets selected");
+        assert.equal(effects.find((effect) => effect.path.endsWith("disabled/empty.md"))?.reason, "Layer is disabled");
+        assert.equal(effects.find((effect) => effect.path.endsWith("soul/arona.md"))?.reason, "Another option is selected");
+        assert.equal(effects.find((effect) => effect.path.endsWith("soul/noop.md"))?.reason, "Included at Layer position 1 (empty no-op)");
+        assert.equal(harnessEffects(workspace, "cursor", choices).find((effect) => effect.path.endsWith("soul/noop.md"))?.active, false);
+        assert.equal(harnessEffects(workspace, "toString", choices).filter((effect) => effect.kind === "Agent").some((effect) => effect.active), false);
+        assert.equal((await buildOutputs(root, choices)).get("codex/AGENTS.md")!.toString().includes("Inactive unique content"), false);
+    });
+});
+
+test("skill archives reuse immutable commits and updates install only the reviewed version", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const { zipSync } = await import("fflate");
+        const archives = new Map(["A", "B", "C"].map((version) =>
+        {
+            const bytes = zipSync({ "repo-main/demo/SKILL.md": Buffer.from(`# Version ${version}\n`) });
+            return [createHash("sha1").update(bytes).digest("hex"), bytes] as const;
+        }));
+        const commits = [...archives.keys()];
+        let branch = commits[0]!;
+        let downloads = 0;
+        t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) =>
+        {
+            const url = String(input);
+            if (url.includes("/commits/")) return Response.json({ sha: branch });
+            downloads += 1;
+            const commit = url.split("/").at(-1)!.replace(".zip", "");
+            return new Response(Buffer.from(archives.get(commit)!));
+        });
+        await addSkillSource(root, { url: "https://github.com/cache-review/repo" });
+        await discoverSkills(root);
+        await installSkills(root, ["demo"]);
+        await checkSkillUpdates(root);
+        assert.equal(downloads, 1);
+        branch = commits[1]!;
+        const review = (await checkSkillUpdates(root))[0]!;
+        assert.ok(review.previewId);
+        assert.notEqual(review.currentHash, review.remoteHash);
+        branch = commits[2]!;
+        await applySkillUpdates(root, [review.previewId]);
+        assert.equal(downloads, 2);
+        assert.match(await readSkillContent(root, "demo"), /Version B/u);
+        const origin = (await loadSkills(root))[0]!.origin;
+        assert.equal(origin.kind, "github");
+        if (origin.kind === "github") assert.equal(origin.commit, commits[1]);
+        await assert.rejects(applySkillUpdates(root, [review.previewId]), /preview expired/u);
+        const next = (await checkSkillUpdates(root))[0]!;
+        await discoverSkills(root);
+        await assert.rejects(applySkillUpdates(root, [next.previewId!]), /preview expired/u);
+        assert.equal(downloads, 3);
+    });
+});
+
+test("generated status follows source and actual output bytes, missing files and interrupted generations", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        assert.equal((await inspectGenerated(root)).state, "missing");
+        await generate(root);
+        assert.deepEqual(await inspectGenerated(root), { state: "current", changes: [] });
+        await writeFile(join(root, ".harness-align", "generated", "unmanaged.md"), "Keep unmanaged");
+        assert.equal((await inspectGenerated(root)).state, "current");
+        await saveRule(root, { ...(await loadWorkspace(root)).rootRules[0]!, body: "Changed saved source" });
+        const stale = await inspectGenerated(root);
+        assert.equal(stale.state, "stale");
+        assert.ok(stale.changes.some((change) => change.path === "codex/AGENTS.md" && change.status === "modified"));
+        await unlink(join(root, ".harness-align", "generated", "codex", "AGENTS.md"));
+        assert.equal((await inspectGenerated(root)).state, "partial");
+        const originalRename = fs.rename;
+        const blocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            if (String(args[1]) === join(root, ".harness-align", "generated", "codex", "AGENTS.md")) throw new Error("Interrupted generation");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(generate(root), /Interrupted generation/u); }
+        finally { blocked.mock.restore(); }
+        assert.equal((await inspectGenerated(root)).state, "partial");
+        await generate(root);
+        assert.equal((await inspectGenerated(root)).state, "current");
+        await writeFile(join(root, ".harness-align", "generated", ".manifest.json"), "Invalid interrupted manifest");
+        assert.equal((await inspectGenerated(root)).state, "partial");
+    });
+});
+
+test("generated status follows platform path casing while preserving content, missing and obsolete checks", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await generate(root);
+        await updateHarness(root, "codex", { ...(await loadConfig(root)).harnesses[0]!, name: "Codex" });
+        await generate(root);
+        const directory = join(root, ".harness-align", "generated");
+        if (process.platform === "win32") assert.ok((await readdir(directory)).includes("codex"));
+        assert.deepEqual(await inspectGenerated(root), { state: "current", changes: [] });
+        const actual = await readGeneratedFiles(root);
+        const upperPaths = new Map([...actual].map(([path, content]) => [path.toUpperCase(), content]));
+        assert.equal((await inspectGenerated(root, upperPaths)).state, process.platform === "win32" ? "current" : "partial");
+
+        const agents = join(directory, "Codex", "AGENTS.md");
+        await writeFile(agents, "Changed generated content");
+        const stale = await inspectGenerated(root);
+        assert.equal(stale.state, "stale");
+        assert.deepEqual(stale.changes, [{ path: "Codex/AGENTS.md", status: "modified" }]);
+        await unlink(agents);
+        const partial = await inspectGenerated(root);
+        assert.equal(partial.state, "partial");
+        assert.deepEqual(partial.changes, [{ path: "Codex/AGENTS.md", status: "missing" }]);
+        await generate(root);
+
+        const manifestPath = join(directory, ".manifest.json");
+        const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { version: number; layers: unknown; files: string[] };
+        manifest.files = manifest.files.map((path) => path.toUpperCase());
+        await writeFile(manifestPath, JSON.stringify(manifest));
+        const manifestStatus = await inspectGenerated(root);
+        assert.equal(manifestStatus.state, "stale");
+        assert.ok(manifestStatus.changes.some((change) => change.path === ".manifest.json" && change.status === "modified"));
+        assert.equal(manifestStatus.changes.some((change) => change.status === "obsolete"), process.platform !== "win32");
+        manifest.files.push("Codex/agents/removed.toml");
+        await writeFile(manifestPath, JSON.stringify(manifest));
+        assert.ok((await inspectGenerated(root)).changes.some((change) => change.path === "Codex/agents/removed.toml" && change.status === "obsolete"));
+    });
+});
+
+test("generation errors keep desktop sources editable and clear after the metadata is repaired", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const userProfile = process.env.USERPROFILE;
+        try
+        {
+            process.env.USERPROFILE = root;
+            const original = (await loadWorkspace(root)).agents[0]!;
+            await saveAgent(root, { ...original, harnesses: { codex: { values: [null] } } });
+            const loaded = await workspaceService.load();
+            assert.equal(loaded.agents[0]!.harnesses.codex!.values instanceof Array, true);
+            assert.equal(loaded.generationStatus.state, "error");
+            assert.equal(loaded.deploymentStatus.state, "error");
+            assert.match(loaded.generationStatus.error ?? "", /explorer.md.*cannot be serialized as TOML/u);
+            await assert.rejects(workspaceService.generate(), /cannot be serialized as TOML/u);
+            await workspaceService.saveAgent(original, { path: original.path, revision: loaded.sourceRevisions[original.path]! });
+            await workspaceService.generate();
+            assert.equal((await workspaceService.load()).generationStatus.state, "current");
+        }
+        finally
+        {
+            if (userProfile === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = userProfile;
+        }
+    });
+});
+
+test("workflow status follows actual deployment drift, drafts and optional skipped skills", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const previous = process.env.USERPROFILE;
+        try
+        {
+            process.env.USERPROFILE = root;
+            await mkdir(join(root, ".codex"), { recursive: true });
+            await mkdir(join(root, ".harness-align/rules/shared"), { recursive: true });
+            let workspace = await workspaceService.load();
+            assert.equal(workspace.deploymentStatus.state, "pending", workspace.deploymentStatus.error);
+            await setup(root, undefined, root);
+            workspace = await workspaceService.load();
+            assert.equal(workspace.deploymentStatus.state, "current");
+            const sync = { connected: true, owner: "test", repository: "sync", branch: "main", lastSyncedAt: null, hasPendingUpload: false, localState: "current" as const };
+            assert.equal(workflowStages(workspace, 0, sync)[1]!.label, "Current");
+            assert.equal(workflowStages(workspace, 0, sync)[3]!.label, "Locally synced");
+            assert.ok(workflowStages(workspace, 1, sync).every((stage) => stage.status === "warning"));
+            assert.equal(workflowStages(workspace, 0, { ...sync, localState: "changed" })[3]!.label, "Sync needed");
+            assert.equal(workflowStages(workspace, 0, { ...sync, hasPendingUpload: true })[3]!.label, "Recovery needed");
+            assert.equal(workflowStages(workspace, 0, undefined)[3]!.label, "Unknown");
+            const complete = { ...workspace, deploymentStatus: { state: "current" as const, changes: [{ path: "~/.agents/skills", status: "skipped" as const }] } };
+            assert.equal(workflowStages(complete, 0, sync)[2]!.label, "Current");
+            await writeFile(join(root, ".codex/AGENTS.md"), "external edit");
+            workspace = await workspaceService.load();
+            assert.equal(workspace.generationStatus.state, "current");
+            assert.equal(workspace.deploymentStatus.state, "pending");
+            assert.equal(workflowStages(workspace, 0, sync)[2]!.label, "Review changes");
+        }
+        finally
+        {
+            if (previous === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previous;
+        }
+    });
+});
+
+test("sync status compares saved portable content with the baseline without network requests", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        await connectSync(state, input, "encrypted");
+        assert.equal((await getSyncStatus(state, root)).localState, "uninitialized");
+        const preview = await previewSync(root, state, input.token);
+        await applySync(root, state, input.token, { previewId: preview.id, mode: "initialize", choices: {} });
+        const requests = mocked.mock.callCount();
+        assert.equal((await getSyncStatus(state, root)).localState, "current");
+        const path = join(root, ".harness-align/rules/base.md");
+        const before = await readFile(path);
+        await writeFile(path, Buffer.concat([before, Buffer.from("\nChanged\n")]));
+        assert.equal((await getSyncStatus(state, root)).localState, "changed");
+        await writeFile(path, before);
+        assert.equal((await getSyncStatus(state, root)).localState, "current");
+        assert.equal(mocked.mock.callCount(), requests);
+        await writeFile(path, Buffer.alloc(8 * 1024 * 1024 + 1));
+        const unavailable = await getSyncStatus(state, root);
+        assert.equal(unavailable.connected, true);
+        assert.equal(unavailable.localState, "unknown");
+        assert.ok(unavailable.localError);
+    });
+});
+
+test("Skills from one update check can be reviewed and applied individually without changing the reviewed commit", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const { zipSync } = await import("fflate");
+        const oldCommit = "7".repeat(40);
+        const reviewedCommit = "8".repeat(40);
+        const old = zipSync({ "repo/a/SKILL.md": Buffer.from("# A old\n"), "repo/b/SKILL.md": Buffer.from("# B old\n") });
+        const next = zipSync({ "repo/a/SKILL.md": Buffer.from("# A reviewed\n"), "repo/b/SKILL.md": Buffer.from("# B reviewed\n") });
+        let branch = oldCommit;
+        let requests = 0;
+        t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) =>
+        {
+            requests += 1;
+            return String(input).includes("/commits/") ? Response.json({ sha: branch }) : new Response(Buffer.from(String(input).includes(oldCommit) ? old : next));
+        });
+        await addSkillSource(root, { url: "https://github.com/sequential-update/repo" });
+        await discoverSkills(root);
+        await installSkills(root, ["a", "b"]);
+        branch = reviewedCommit;
+        const updates = await checkSkillUpdates(root);
+        const a = updates.find((item) => item.id === "a")!.previewId!;
+        const b = updates.find((item) => item.id === "b")!.previewId!;
+        const checkedRequests = requests;
+        branch = "9".repeat(40);
+        await readSkillUpdatePreview(root, a);
+        await applySkillUpdates(root, [a]);
+        await assert.rejects(readSkillUpdatePreview(root, a), /expired/u);
+        assert.equal((await readSkillUpdatePreview(root, b)).newCommit, reviewedCommit);
+        await applySkillUpdates(root, [b]);
+        assert.equal(requests, checkedRequests);
+        assert.equal(await readSkillContent(root, "b"), "# B reviewed\n");
+        assert.equal((await loadSkills(root)).find((skill) => skill.id === "b")!.origin.kind, "github");
+        await assert.rejects(applySkillUpdates(root, [b]), /expired/u);
+    });
+});
+
+test("cascaded source edits persist rollback across interruptions and refuse subsequent external changes", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const before = await readSyncSnapshot(root);
+        const originalRename = fs.rename;
+        let interrupted = false;
+        const blocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            const target = String(args[1]);
+            if (target === join(root, ".harness-align", "agents", "explorer.md")) { interrupted = true; throw new Error("Interrupted agent write"); }
+            if (interrupted && target === join(root, ".harness-align", "config.json")) throw new Error("Unavailable config rollback");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(removeHarness(root, "codex"), /recovery preserved.*Unavailable config rollback/u); }
+        finally { blocked.mock.restore(); }
+        const recordPath = join(root, ".harness-align", ".edit-recovery.json");
+        assert.equal(Object.hasOwn((await readSyncSnapshot(root)).files, ".edit-recovery.json"), false);
+        const pendingConfig = await readFile(join(root, ".harness-align", "config.json"));
+        await writeFile(join(root, ".harness-align", "config.json"), "External later edit");
+        const refusal = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(recoverSourceEdits(root), /changed outside the interrupted source update/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), refusal);
+        await writeFile(join(root, ".harness-align", "config.json"), pendingConfig);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await readSyncSnapshot(root), before);
+        await assert.rejects(readFile(recordPath), /ENOENT/u);
+        await loadWorkspace(root);
+    });
+});
+
+test("layer move recovery restores config references and preserves edits made to the moved directory", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const before = await readSyncSnapshot(root);
+        const originalRename = fs.rename;
+        const blocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            const from = String(args[0]);
+            const to = String(args[1]);
+            if (to === join(root, ".harness-align", "config.json")) throw new Error("Interrupted config write");
+            if (from === join(root, ".harness-align", "layers", "moved") && to === join(root, ".harness-align", "layers", "soul")) throw new Error("Unavailable layer rollback");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(renameLayer(root, "soul", "moved"), /recovery preserved.*Unavailable layer rollback/u); }
+        finally { blocked.mock.restore(); }
+        const extra = join(root, ".harness-align", "layers", "moved", "later.md");
+        await writeFile(extra, "External later file");
+        await assert.rejects(ensureUserWorkspace(root), /changed outside the interrupted source update/u);
+        assert.equal(await readFile(extra, "utf8"), "External later file");
+        await unlink(extra);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await readSyncSnapshot(root), before);
+        assert.equal(await recoverSourceEdits(root), "none");
+    });
+});
+
+test("deployment recovery persists failed rollback, refuses external edits and escaped records, then restores on startup", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".codex", "agents"), { recursive: true });
+        await mkdir(join(root, ".agents", "shared-rules"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/new.md", "New shared");
+        await writeFile(join(root, ".codex", "AGENTS.md"), "Old rules");
+        await writeFile(join(root, ".codex", "agents", "old.toml"), "Old agent");
+        await writeFile(join(root, ".agents", "shared-rules", "old.md"), "Old shared");
+        const beforeHarness = await snapshot(join(root, ".codex"));
+        const beforeShared = await snapshot(join(root, ".agents", "shared-rules"));
+        const originalRename = fs.rename;
+        const blocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            const from = String(args[0]);
+            const to = String(args[1]);
+            if (from.includes(".harness-align-stage-") && to === join(root, ".agents", "shared-rules")) throw new Error("Injected interrupted swap");
+            if (from.includes(".harness-align-backup-") && to === join(root, ".codex", "AGENTS.md")) throw new Error("Injected unavailable restore");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, root, undefined, true), /recovery preserved.*Injected unavailable restore/u); }
+        finally { blocked.mock.restore(); }
+        const recordPath = join(root, ".harness-align", ".deployment-recovery.json");
+        const record = await readFile(recordPath);
+        assert.equal(Object.hasOwn((await readSyncSnapshot(root)).files, ".deployment-recovery.json"), false);
+        await writeFile(join(root, ".codex", "AGENTS.md"), "Later external edit");
+        const beforeRefusal = await snapshot(root);
+        await assert.rejects(recoverDeployment(root, root), /changed outside the pending deployment/u);
+        assert.deepEqual(await snapshot(root), beforeRefusal);
+        await unlink(join(root, ".codex", "AGENTS.md"));
+        const corrupt = JSON.parse(record.toString("utf8")) as { entries: Array<{ target: string }> };
+        corrupt.entries[0]!.target = ".harness-align/config.json";
+        await writeFile(recordPath, JSON.stringify(corrupt));
+        await assert.rejects(recoverDeployment(root, root), /outside the declared deployment scopes/u);
+        await writeFile(recordPath, record);
+        const pending = JSON.parse(record.toString("utf8")) as { entries: Array<{ backup: string }> };
+        const backupPath = join(root, pending.entries[0]!.backup);
+        const heldBackup = join(root, "held-deployment-backup");
+        const external = join(root, "external-recovery-directory");
+        await mkdir(external);
+        await writeFile(join(external, "keep.md"), "Keep external");
+        await rename(backupPath, heldBackup);
+        await symlink(external, backupPath, "junction");
+        await assert.rejects(recoverDeployment(root, root), /reparse points/u);
+        assert.equal(await readFile(join(external, "keep.md"), "utf8"), "Keep external");
+        await unlink(backupPath);
+        await rename(heldBackup, backupPath);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await snapshot(join(root, ".codex")), beforeHarness);
+        assert.deepEqual(await snapshot(join(root, ".agents", "shared-rules")), beforeShared);
+        await assert.rejects(readFile(recordPath), /ENOENT/u);
+        assert.equal(await recoverDeployment(root, root), "none");
+        for (const parent of [join(root, ".codex"), join(root, ".agents")]) assert.equal((await readdir(parent)).some((name) => name.startsWith(".harness-align-")), false);
+    });
+});
+
+test("committed deployment recovery completes its baseline and cleanup while preserving later edits", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".codex", "agents"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/new.md", "New shared");
+        await writeFile(join(root, ".codex", "AGENTS.md"), "Old rules");
+        await writeFile(join(root, ".codex", "agents", "old.md"), "Old agent");
+        const originalRemove = fs.rm;
+        const blocked = t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) =>
+        {
+            if (String(args[0]).includes(".harness-align-backup-")) throw new Error("Injected interrupted cleanup");
+            return originalRemove(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, root, undefined, true), /recovery preserved.*Injected interrupted cleanup/u); }
+        finally { blocked.mock.restore(); }
+        const target = join(root, ".codex", "AGENTS.md");
+        const deployed = await readFile(target);
+        const recordPath = join(root, ".harness-align", ".deployment-recovery.json");
+        const record = await readFile(recordPath);
+        await writeFile(target, "External after commit");
+        await assert.rejects(recoverDeployment(root, root), /changed outside the pending deployment/u);
+        assert.equal(await readFile(target, "utf8"), "External after commit");
+        assert.deepEqual(await readFile(recordPath), record);
+        await writeFile(target, deployed);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await readFile(target), deployed);
+        await assert.rejects(readFile(recordPath), /ENOENT/u);
+        assert.equal((await previewSetup(root, undefined, root)).changes.some((change) => change.external), false);
+    });
+});
+
+test("committed deployment cleanup resumes partial deletions and refuses changed or added backup files", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await mkdir(join(root, ".codex", "agents"), { recursive: true });
+        await writeFile(join(root, ".codex", "agents", "a.toml"), "Old A");
+        await writeFile(join(root, ".codex", "agents", "b.toml"), "Old B");
+        await saveSharedRule(root, ".harness-align/rules/shared/new.md", "New shared");
+        const originalRemove = fs.rm;
+        let backup: string | undefined;
+        const blocked = t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) =>
+        {
+            const path = String(args[0]);
+            if (path.includes(".harness-align-backup-"))
+            {
+                if (!backup)
+                {
+                    backup = path;
+                    await unlink(join(path, "a.toml"));
+                }
+                throw new Error("Interrupted partial backup cleanup");
+            }
+            return originalRemove(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, root, undefined, true), /recovery preserved.*Interrupted partial backup cleanup/u); }
+        finally { blocked.mock.restore(); }
+        assert.ok(backup);
+        const recordPath = join(root, ".harness-align", ".deployment-recovery.json");
+        const record = await readFile(recordPath);
+        await writeFile(join(backup, "b.toml"), "Later external edit");
+        await assert.rejects(recoverDeployment(root, root), /changed outside the pending deployment/u);
+        assert.deepEqual(await readFile(recordPath), record);
+        assert.equal(await readFile(join(backup, "b.toml"), "utf8"), "Later external edit");
+        await writeFile(join(backup, "b.toml"), "Old B");
+        await writeFile(join(backup, "extra.toml"), "New external file");
+        await assert.rejects(recoverDeployment(root, root), /changed outside the pending deployment/u);
+        await unlink(join(backup, "extra.toml"));
+        await ensureUserWorkspace(root);
+        await assert.rejects(readFile(recordPath), /ENOENT/u);
+        await assert.rejects(readdir(backup), /ENOENT/u);
+        assert.equal((await previewSetup(root, undefined, root)).changes.some((change) => change.external), false);
+    });
+});
+
+test("deployment rollback resumes a partially deleted new target and preserves externally changed survivors", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        await writeAgent(root, "worker");
+        await mkdir(join(root, ".codex", "agents"), { recursive: true });
+        await writeFile(join(root, ".codex", "agents", "original.toml"), "Original agent");
+        await saveSharedRule(root, ".harness-align/rules/shared/new.md", "New shared");
+        const before = await snapshot(join(root, ".codex"));
+        const target = join(root, ".codex", "agents");
+        const originalRename = fs.rename;
+        const originalRemove = fs.rm;
+        const failedSwap = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            if (String(args[0]).includes(".harness-align-stage-") && String(args[1]) === join(root, ".agents", "shared-rules")) throw new Error("Interrupted final swap");
+            return originalRename(...args);
+        });
+        let removed = false;
+        const failedCleanup = t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) =>
+        {
+            if (String(args[0]) === target)
+            {
+                if (!removed) { removed = true; await unlink(join(target, "explorer.toml")); }
+                throw new Error("Interrupted partial target cleanup");
+            }
+            return originalRemove(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, root, undefined, true), /recovery preserved.*Interrupted partial target cleanup/u); }
+        finally { failedSwap.mock.restore(); failedCleanup.mock.restore(); }
+        const survivor = join(target, "worker.toml");
+        const original = await readFile(survivor);
+        await writeFile(survivor, "External survivor edit");
+        await assert.rejects(recoverDeployment(root, root), /changed outside the pending deployment/u);
+        assert.equal(await readFile(survivor, "utf8"), "External survivor edit");
+        await writeFile(survivor, original);
+        await ensureUserWorkspace(root);
+        assert.deepEqual(await snapshot(join(root, ".codex")), before);
+        await assert.rejects(readFile(join(root, ".harness-align", ".deployment-recovery.json")), /ENOENT/u);
+    });
+});
+
+test("committed Layer removal resumes partial backup cleanup and preserves externally changed survivors", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const originalRemove = fs.rm;
+        let backup: string | undefined;
+        const blocked = t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) =>
+        {
+            const path = String(args[0]);
+            if (path.includes(".edit-backup-"))
+            {
+                if (!backup) { backup = path; await unlink(join(path, "arona.md")); }
+                throw new Error("Interrupted partial Layer cleanup");
+            }
+            return originalRemove(...args);
+        });
+        try { await assert.rejects(removeLayer(root, "soul"), /recovery preserved.*Interrupted partial Layer cleanup/u); }
+        finally { blocked.mock.restore(); }
+        assert.ok(backup);
+        const recordPath = join(root, ".harness-align", ".edit-recovery.json");
+        const record = await readFile(recordPath);
+        const survivor = join(backup, "kei.md");
+        const original = await readFile(survivor);
+        await writeFile(survivor, "External Layer edit");
+        await assert.rejects(recoverSourceEdits(root), /changed outside the interrupted source update/u);
+        assert.deepEqual(await readFile(recordPath), record);
+        assert.equal(await readFile(survivor, "utf8"), "External Layer edit");
+        await writeFile(survivor, original);
+        await writeFile(join(backup, "new.md"), "External new option");
+        await assert.rejects(recoverSourceEdits(root), /changed outside the interrupted source update/u);
+        await unlink(join(backup, "new.md"));
+        await ensureUserWorkspace(root);
+        assert.deepEqual((await loadConfig(root)).layers, []);
+        await assert.rejects(readFile(recordPath), /ENOENT/u);
+        await assert.rejects(readdir(backup), /ENOENT/u);
+        assert.equal(Object.hasOwn((await loadWorkspace(root)).layerOptions, "soul"), false);
+    });
+});
+
+test("new source paths colliding with manually created deployment files always require overwrite approval", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "collision-home");
+        await mkdir(join(home, ".codex"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared base");
+        const skillSource = join(root, "skill-source");
+        await mkdir(skillSource);
+        await writeFile(join(skillSource, "SKILL.md"), "# Demo\n");
+        await installSkillFromDirectory(root, "demo", skillSource, { kind: "local", contentHash: "" });
+        await setup(root, undefined, home);
+        const targets = [".codex/agents/worker.toml", ".agents/shared-rules/worker.md", ".agents/skills/demo/worker.md"];
+        for (const path of targets) await writeFile(join(home, path), "Hand-written target");
+        await saveAgent(root, { path: ".harness-align/agents/worker.md", name: "worker", description: "Worker", harnesses: { codex: {} }, body: "Generated worker" });
+        await saveSharedRule(root, ".harness-align/rules/shared/worker.md", "Generated shared");
+        await writeFile(join(root, ".harness-align", "skills", "demo", "worker.md"), "Generated Skill asset");
+        const preview = await previewSetup(root, undefined, home);
+        for (const path of targets)
+        {
+            const change = preview.changes.find((item) => item.path === `~/${path}`)!;
+            assert.equal(change.status, "modified");
+            assert.match(change.external ?? "", /no deployment baseline/u);
+        }
+        await assert.rejects(setup(root, undefined, home, preview.revision), /explicit overwrite approval/u);
+        for (const path of targets) assert.equal(await readFile(join(home, path), "utf8"), "Hand-written target");
+        await setup(root, undefined, home, preview.revision, true);
+        for (const path of targets) assert.notEqual(await readFile(join(home, path), "utf8"), "Hand-written target");
+    });
+});
+
+test("deployment baselines mark external edits and extra deletions and require explicit approval", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "deployment-home");
+        await mkdir(join(home, ".codex"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/guard.md", "Shared");
+        await setup(root, undefined, home);
+        const baselinePath = join(root, ".harness-align", ".deployment.json");
+        const baseline = await readFile(baselinePath);
+        const target = join(home, ".codex", "AGENTS.md");
+        await writeFile(target, "Manual instructions");
+        await writeFile(join(home, ".codex", "agents", "extra.md"), "Extra manual agent");
+        const preview = await previewSetup(root, undefined, home);
+        assert.match(preview.changes.find((change) => change.path === "~/.codex/AGENTS.md")?.external ?? "", /Changed since last deployment/u);
+        assert.match(preview.changes.find((change) => change.path.endsWith("/extra.md"))?.external ?? "", /Extra path/u);
+        await assert.rejects(setup(root, undefined, home, preview.revision), /explicit overwrite approval/u);
+        assert.equal(await readFile(target, "utf8"), "Manual instructions");
+        assert.deepEqual(await readFile(baselinePath), baseline);
+        await setup(root, undefined, home, preview.revision, true);
+        assert.equal((await previewSetup(root, undefined, home)).changes.some((change) => change.external), false);
+        assert.equal(Object.hasOwn((await readSyncSnapshot(root)).files, ".deployment.json"), false);
+        await unlink(join(root, ".harness-align", "agents", "explorer.md"));
+        const removal = await previewSetup(root, undefined, home);
+        assert.equal(removal.changes.find((change) => change.path.endsWith("/explorer.toml"))?.external, undefined);
+        await setup(root, undefined, home, removal.revision);
+        assert.deepEqual(await readdir(join(home, ".codex", "agents")), []);
+    });
+});
+
+test("deployment previews classify changes without writes and refuse changed sources, targets, and skipped roots", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const userProfile = await mkdtemp(join(tmpdir(), "halign-preview-user-"));
+        try
+        {
+            await saveSharedRule(root, ".harness-align/rules/shared/preview.md", "Shared preview");
+            const agents = join(userProfile, ".codex", "agents");
+            await mkdir(agents, { recursive: true });
+            const outputs = await buildOutputs(root);
+            await writeFile(join(agents, "explorer.toml"), outputs.get("codex/agents/explorer.toml")!);
+            await writeFile(join(agents, "extra.md"), "Manual extra");
+            await writeFile(join(userProfile, ".codex", "AGENTS.md"), "Previous instructions");
+            await writeFile(join(userProfile, ".codex", "unrelated.json"), "Keep");
+            const preview = await previewSetup(root, undefined, userProfile);
+            assert.deepEqual(new Set(preview.changes.map((change) => change.status)), new Set(["added", "modified", "deleted", "unchanged", "skipped"]));
+            assert.ok(preview.changes.some((change) => change.path === "~/.codex/agents/extra.md" && change.status === "deleted"));
+            await assert.rejects(readFile(join(root, ".harness-align", "generated", ".manifest.json")), /ENOENT/u);
+            const rulePath = join(root, ".harness-align", "rules", "base.md");
+            const original = await readFile(rulePath);
+            await writeFile(rulePath, Buffer.concat([original, Buffer.from("\n")]));
+            await assert.rejects(setup(root, undefined, userProfile, preview.revision), /preview expired/u);
+            assert.equal(await readFile(join(userProfile, ".codex", "AGENTS.md"), "utf8"), "Previous instructions");
+            await writeFile(rulePath, original);
+            await writeFile(join(agents, "later.md"), "External later");
+            await assert.rejects(setup(root, undefined, userProfile, preview.revision), /preview expired/u);
+            await unlink(join(agents, "later.md"));
+            await mkdir(join(userProfile, ".cursor"));
+            await assert.rejects(setup(root, undefined, userProfile, preview.revision), /preview expired/u);
+            const fresh = await previewSetup(root, undefined, userProfile);
+            await setup(root, undefined, userProfile, fresh.revision, true);
+            assert.equal(await readFile(join(userProfile, ".codex", "unrelated.json"), "utf8"), "Keep");
+            await assert.rejects(readFile(join(agents, "extra.md")), /ENOENT/u);
+            assert.ok((await previewSetup(root, undefined, userProfile)).changes.every((change) => change.status === "unchanged" || change.status === "skipped"));
+        }
+        finally { await rm(userProfile, { recursive: true, force: true }); }
+    });
+});
+
+test("operation timings distinguish queued work, failed initialization, archive extraction and cache reuse", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const previousHome = process.env.USERPROFILE;
+        process.env.USERPROFILE = root;
+        clearLogs();
+        let finish = () => {};
+        let ready = () => {};
+        const gate = new Promise<void>((done) => { finish = done; });
+        const started = new Promise<void>((done) => { ready = done; });
+        try
+        {
+            const first = withWorkspace(async () => { ready(); await gate; throw new Error("controlled failure"); }, "Failed write");
+            const rejected = assert.rejects(first, /controlled failure/u);
+            await started;
+            const next = withWorkspace(async () => "loaded", "Queued load");
+            finish();
+            await rejected;
+            assert.equal(await next, "loaded");
+            process.env.USERPROFILE = "";
+            await assert.rejects(withWorkspace(async () => "unexpected", "Initialize failure"), /USERPROFILE/u);
+            process.env.USERPROFILE = root;
+            const { zipSync } = await import("fflate");
+            const archive = zipSync({ "repo/demo/SKILL.md": Buffer.from("# Timing\n") });
+            t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) => String(input).includes("/commits/") ? Response.json({ sha: "f".repeat(40) }) : new Response(Buffer.from(archive)));
+            await addSkillSource(root, { url: "https://github.com/timing-regression/repo" });
+            await workspaceService.discoverSkills();
+            await workspaceService.discoverSkills();
+            const logs = readLogs().entries;
+            assert.deepEqual(logs.slice(0, 3).map(({ title }) => title), ["Failed write timing", "Queued load timing", "Initialize failure timing"]);
+            assert.match(logs[0]!.details!, /Outcome: failed/u);
+            assert.match(logs[1]!.details!, /Outcome: completed/u);
+            assert.match(logs[2]!.details!, /Outcome: failed/u);
+            for (const log of logs.filter(({ title }) => ["Failed write timing", "Queued load timing", "Initialize failure timing", "Discover Skills timing"].includes(title)))
+            {
+                assert.match(log.details!, /Queue: \d+\.\d ms\nInitialize: \d+\.\d ms/u);
+                assert.equal(log.details!.includes(root), false);
+            }
+            assert.equal(logs.filter(({ title }) => title === "Skills download timing").length, 1);
+            assert.equal(logs.filter(({ title }) => title === "Skills extraction timing").length, 1);
+            assert.equal(logs.filter(({ title }) => title === "Skills archive cache hit").length, 1);
+            assert.match(logs.find(({ title }) => title === "Skills extraction timing")!.details!, /1 files in \d+\.\d ms/u);
+        }
+        finally
+        {
+            finish();
+            clearLogs();
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+        }
+    });
+});
+
+test("application downloads drain workspace work, exclude new writes, protect new drafts, and release after failure", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const previousHome = process.env.USERPROFILE;
+        process.env.USERPROFILE = root;
+        /** Control asynchronous test phases without timers or external processes. */
+        function deferred()
+        {
+            let resolve = () => {};
+            const promise = new Promise<void>((done) => { resolve = done; });
+            return { promise, resolve };
+        }
+        const writeReady = deferred();
+        const finishWrite = deferred();
+        const downloadReady = deferred();
+        const finishDownload = deferred();
+        const order: string[] = [];
+        try
+        {
+            setUpdateDraftState(true);
+            await assert.rejects(withWorkspaceForUpdate(async () => { order.push("unexpected download"); }), /save all/u);
+            setUpdateDraftState(false);
+            const write = withWorkspace(async () =>
+            {
+                writeReady.resolve();
+                await finishWrite.promise;
+                order.push("write finished");
+            });
+            await writeReady.promise;
+            const update = withWorkspaceForUpdate(async () =>
+            {
+                order.push("download started");
+                downloadReady.resolve();
+                await finishDownload.promise;
+                assertUpdateDraftsSaved();
+                order.push("installer started");
+            });
+            await assert.rejects(workspaceService.generate(), /application update is downloading/u);
+            assert.equal(JSON.stringify(order), "[]");
+            finishWrite.resolve();
+            await write;
+            await downloadReady.promise;
+            assert.equal(order.join(","), "write finished,download started");
+            setUpdateDraftState(true);
+            finishDownload.resolve();
+            await assert.rejects(update, /save all/u);
+            assert.equal(order.includes("installer started"), false);
+            assert.ok((await workspaceService.load()).config);
+            setUpdateDraftState(false);
+            await assert.rejects(withWorkspaceForUpdate(async () => { throw new Error("download failed"); }), /download failed/u);
+            assert.ok((await workspaceService.load()).config);
+        }
+        finally
+        {
+            finishWrite.resolve();
+            finishDownload.resolve();
+            setUpdateDraftState(true);
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+        }
+    });
+});
+
+test("opened source guards reject external edits, deletion, creation races, and rename conflicts without losing drafts", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await saveSharedRule(root, ".harness-align/rules/shared/guarded.md", "Shared original");
+        const opened = await loadWorkspace(root);
+        const rule = opened.rootRules[0]!;
+        const option = Object.values(opened.layerOptions).flat()[0]!;
+        const agent = opened.agents[0]!;
+        const shared = opened.sharedRules.find((item) => item.path.endsWith("/guarded.md"))!;
+        const items = [
+            { path: ".harness-align/config.json", save: () => saveConfig(root, { ...opened.config, name: "Draft" }, guard(".harness-align/config.json")) },
+            { path: rule.path, save: () => saveRule(root, { ...rule, path: ".harness-align/rules/renamed.md", body: "Draft" }, guard(rule.path)) },
+            { path: option.path, save: () => saveLayerOption(root, { ...option, path: `.harness-align/layers/${option.layer}/renamed.md`, body: "Draft" }, guard(option.path)) },
+            { path: shared.path, save: () => saveSharedRule(root, ".harness-align/rules/shared/renamed.md", "Draft", guard(shared.path)) },
+            { path: agent.path, save: () => saveAgent(root, { ...agent, path: ".harness-align/agents/renamed.md", name: "renamed", body: "Draft" }, guard(agent.path)) },
+        ];
+        /** Use only revisions captured when the editor was opened. */
+        function guard(path: string) { return { path, revision: opened.sourceRevisions[path]! }; }
+        for (const item of items)
+        {
+            const path = join(root, item.path);
+            const original = await readFile(path);
+            await writeFile(path, Buffer.concat([original, Buffer.from("\n")]));
+            await assert.rejects(item.save(), /content changed since it was opened/u);
+            assert.deepEqual(await readFile(path), Buffer.concat([original, Buffer.from("\n")]));
+            await writeFile(path, original);
+        }
+        await unlink(join(root, rule.path));
+        await assert.rejects(saveRule(root, rule, guard(rule.path)), /got null/u);
+        await assert.rejects(readFile(join(root, ".harness-align/rules/renamed.md")), /ENOENT/u);
+        const next = ".harness-align/rules/new.md";
+        await saveRule(root, { ...rule, path: next }, { path: next, revision: null });
+        await assert.rejects(saveRule(root, { ...rule, path: next }, { path: next, revision: null }), /content changed/u);
+        await saveAgent(root, { ...agent, path: ".harness-align/agents/renamed.md", name: "renamed" }, guard(agent.path));
+        await assert.rejects(readFile(join(root, agent.path)), /ENOENT/u);
+        await saveLayerOption(root, { ...option, path: `.harness-align/layers/${option.layer}/renamed.md` }, guard(option.path));
+        assert.equal((await loadConfig(root)).layers.find((layer) => layer.name === option.layer)?.selected, "renamed");
+
+        const state = useAppStore.getState();
+        const previous = { ...state };
+        try
+        {
+            const workspace = { ...opened, generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [] };
+            state.resetWorkspace(workspace);
+            state.setEditorDraft(`rule:${rule.path}`, { selection: { kind: "rule", path: rule.path }, baseline: { body: [rule.body] }, current: { body: ["Draft"] }, sourceRevisions: opened.sourceRevisions });
+            state.setWorkspace({ ...workspace, sourceRevisions: { ...opened.sourceRevisions, [rule.path]: "b".repeat(64) } });
+            assert.equal(useAppStore.getState().editorDrafts[`rule:${rule.path}`]?.sourceRevisions?.[rule.path], opened.sourceRevisions[rule.path]);
+            assert.deepEqual(useAppStore.getState().editorDrafts[`rule:${rule.path}`]?.current.body, ["Draft"]);
+        }
+        finally { useAppStore.setState(previous); }
+    });
+});
+
+test("Renderer option creation rejects existing names and files created after the form was opened", async () =>
+{
+    const { persistEditorSnapshot } = await loadRendererTasks();
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        try
+        {
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [] };
+            initial.resetWorkspace(workspace);
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                saveLayerOption: (input: Parameters<typeof workspaceService.saveLayerOption>[0], guard: Parameters<typeof workspaceService.saveLayerOption>[1]) => saveLayerOption(root, input, guard),
+            } } } });
+            const selection = { kind: "layer-option-new" as const, layer: "soul" };
+            const original = await readFile(join(root, ".harness-align", "layers", "soul", "arona.md"));
+            for (const name of ["arona", "Arona"])
+            {
+                await assert.rejects(persistEditorSnapshot(workspace, selection, { name: [name], body: ["Overwrite"], targets: [] }), /option already exists/u);
+                assert.deepEqual(await readFile(join(root, ".harness-align", "layers", "soul", "arona.md")), original);
+            }
+            const racePath = ".harness-align/layers/soul/race.md";
+            await saveLayerOption(root, { path: racePath, targets: [], body: "External new option" });
+            await assert.rejects(persistEditorSnapshot(workspace, selection, { name: ["race"], body: ["Overwrite"], targets: [] }), /content changed since it was opened/u);
+            assert.equal((await loadWorkspace(root)).layerOptions.soul!.find((item) => item.path === racePath)!.body, "External new option\n");
+            await persistEditorSnapshot(workspace, selection, { name: ["unique"], body: ["New option"], targets: [] });
+            assert.equal((await loadWorkspace(root)).layerOptions.soul!.find((item) => item.name === "unique")!.body, "New option\n");
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
+    });
+});
+
+test("Renderer Layer rename migrates opened draft revisions and still rejects later external edits", async () =>
+{
+    const { persistEditorSnapshot, persistLayerRename } = await loadRendererTasks();
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        try
+        {
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [] };
+            initial.resetWorkspace(workspace);
+            const option = workspace.layerOptions.soul!.find((item) => item.name === "arona")!;
+            const originalKey = `layer-option:${option.path}`;
+            initial.setEditorDraft(originalKey, { selection: { kind: "layer-option", path: option.path }, baseline: { body: [option.body] },
+                current: { name: [option.name], body: ["Retained draft"], targets: option.targets }, sourceRevisions: workspace.sourceRevisions });
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                renameLayer: (from: string, to: string) => renameLayer(root, from, to),
+                saveLayerOption: (input: Parameters<typeof workspaceService.saveLayerOption>[0], guard: Parameters<typeof workspaceService.saveLayerOption>[1]) => saveLayerOption(root, input, guard),
+            } } } });
+            await persistLayerRename("soul", "renamed");
+            const path = ".harness-align/layers/renamed/arona.md";
+            const draft = useAppStore.getState().editorDrafts[`layer-option:${path}`]!;
+            assert.equal(draft.sourceRevisions?.[path], workspace.sourceRevisions[option.path]);
+            assert.equal(draft.sourceRevisions?.[option.path], undefined);
+            assert.ok(workspace.sourceRevisions[option.path]);
+            const nextWorkspace = { ...workspace, ...await loadWorkspace(root) };
+            const original = await readFile(join(root, path));
+            await writeFile(join(root, path), "External post-rename edit");
+            await assert.rejects(persistEditorSnapshot(nextWorkspace, draft.selection, draft.current), /content changed since it was opened/u);
+            assert.equal(await readFile(join(root, path), "utf8"), "External post-rename edit");
+            assert.deepEqual(useAppStore.getState().editorDrafts[`layer-option:${path}`]!.current, draft.current);
+            await writeFile(join(root, path), original);
+            await persistEditorSnapshot(nextWorkspace, draft.selection, draft.current);
+            assert.equal((await loadWorkspace(root)).layerOptions.renamed!.find((item) => item.path === path)!.body, "Retained draft\n");
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
+    });
+});
 
 test("Markdown preview renders GFM while keeping HTML, document links, and images inert", () =>
 {
@@ -332,6 +1568,174 @@ function createSyncRemote()
     };
     return { request, publish, removeArchive, controls, rootEntries: () => trees.get(commits.get(head)!.tree.sha)! };
 }
+
+test("GitHub sync upgrades legacy candidates without mutating raw baselines or conflicting with remote config edits", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        await writeFile(path, JSON.stringify({ ...config, version: 1 }));
+        const legacy = await readSyncSnapshot(root);
+        const unchanged = structuredClone(legacy);
+        assert.equal(JSON.parse(Buffer.from(upgradeSyncConfig(legacy).files["config.json"]!, "base64").toString()).version, 3);
+        assert.deepEqual(legacy, unchanged);
+        const remote = createSyncRemote();
+        remote.publish(legacy);
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const statePath = join(state, "github-sync.json");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const first = await previewSync(root, state, input.token);
+            assert.match(first.notice, /remote configuration uses format 1/u);
+            assert.ok(first.changes.some((change) => change.key === "config.json" && change.direction === "upload"));
+            const saved = JSON.parse(await readFile(statePath, "utf8"));
+            saved.base = { connectionKey: "test/sync@main", head: first.head, snapshot: legacy, syncedAt: new Date().toISOString() };
+            await writeFile(statePath, JSON.stringify(saved));
+            await connectSync(state, input, "encrypted");
+            const cached = await previewSync(root, state, input.token);
+            assert.equal(cached.uploadCount, 1);
+            assert.deepEqual(JSON.parse(await readFile(statePath, "utf8")).base.snapshot, legacy);
+            assert.equal(remote.controls.patchCount, 0);
+            const changed = structuredClone(legacy);
+            changed.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 1, name: "Remote title" })).toString("base64");
+            remote.publish(changed);
+            const preview = await previewSync(root, state, input.token);
+            assert.ok(preview.changes.some((change) => change.key === "config.json" && change.direction === "download"));
+            assert.equal(preview.changes.some((change) => change.direction === "conflict"), false);
+            assert.equal(preview.uploadCount, 1);
+            assert.equal(preview.downloadCount, 1);
+            await applySync(root, state, input.token, { previewId: preview.id, mode: "merge", choices: {} });
+            assert.equal((await loadConfig(root)).name, "Remote title");
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+            assert.equal(JSON.parse(Buffer.from(JSON.parse(await readFile(statePath, "utf8")).base.snapshot.files["config.json"], "base64").toString()).version, 3);
+            assert.equal((await getSyncStatus(state, root)).localState, "current");
+            assert.equal(remote.controls.patchCount, 1);
+        }
+        finally { mocked.mock.restore(); }
+    });
+});
+
+test("GitHub remote adoption and config restoration persist format 3 and retain the raw local backup", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const source = await readSyncSnapshot(root);
+        source.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 1, name: "Legacy remote" })).toString("base64");
+        remote.publish(source);
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const first = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: first.id, mode: "remote", choices: {} });
+            assert.equal((await loadConfig(root)).name, "Legacy remote");
+            assert.equal(JSON.parse(await readFile(join(root, ".harness-align/config.json"), "utf8")).version, 3);
+            await saveConfig(root, { ...await loadConfig(root), name: "Local title" });
+            remote.publish(source);
+            const preview = await previewSync(root, state, input.token);
+            assert.ok(preview.changes.some((change) => change.key === "config.json" && change.direction === "upload"));
+            const before = await readSyncSnapshot(root);
+            const patches = remote.controls.patchCount;
+            await discardSync(root, state, input.token, { previewId: preview.id, key: "config.json" });
+            assert.equal((await loadConfig(root)).name, "Legacy remote");
+            assert.equal(JSON.parse(await readFile(join(root, ".harness-align/config.json"), "utf8")).version, 3);
+            assert.deepEqual(JSON.parse(await readFile(join(root, ".harness-align/.sync-backup.json"), "utf8")), before);
+            assert.equal(remote.controls.patchCount, patches);
+        }
+        finally { mocked.mock.restore(); }
+    });
+});
+
+test("workspace defers config persistence until raw legacy pending-upload recovery completes", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(JSON.stringify({ ...config, version: 1 }));
+        await writeFile(path, original);
+        const before = await readSyncSnapshot(root);
+        const accepted = structuredClone(before);
+        accepted.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 1, name: "Published legacy title" })).toString("base64");
+        const remote = createSyncRemote();
+        const parent = (await (await remote.request("https://api.github.com/repos/test/sync/git/ref/heads/main")).json()).object.sha as string;
+        remote.publish(accepted);
+        const head = (await (await remote.request("https://api.github.com/repos/test/sync/git/ref/heads/main")).json()).object.sha as string;
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        const previousHome = process.env.USERPROFILE;
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const saved = JSON.parse(await readFile(join(state, "github-sync.json"), "utf8"));
+            saved.pending = { connectionKey: "test/sync@main", head, parent, before, snapshot: accepted };
+            await writeFile(join(state, "github-sync.json"), JSON.stringify(saved));
+            process.env.USERPROFILE = root;
+            setWorkspaceSyncDirectory(state);
+            clearLogs();
+            const loaded = await withWorkspace((home) => loadWorkspace(home));
+            assert.equal(loaded.config.version, 3);
+            assert.deepEqual(await readFile(path), original);
+            assert.ok(readLogs().entries.some((entry) => entry.title === "Configuration upgrade deferred"));
+            const recovered = await withWorkspace((home) => previewSync(home, state, input.token));
+            assert.match(recovered.notice, /Recovered an earlier upload/u);
+            assert.equal((await getSyncStatus(state)).hasPendingUpload, false);
+            assert.equal((await loadConfig(root)).name, "Published legacy title");
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+            assert.equal(remote.controls.patchCount, 0);
+            const baseline = JSON.parse(await readFile(join(state, "github-sync.json"), "utf8")).base.snapshot;
+            assert.deepEqual(baseline, accepted);
+            assert.equal(recovered.uploadCount, 1);
+            await withWorkspace((home) => applySync(home, state, input.token, { previewId: recovered.id, mode: "merge", choices: {} }));
+            assert.equal(remote.controls.patchCount, 1);
+            const again = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: again.id, mode: "merge", choices: {} });
+            assert.equal(remote.controls.patchCount, 1);
+        }
+        finally
+        {
+            setWorkspaceSyncDirectory();
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+            mocked.mock.restore();
+            clearLogs();
+        }
+    });
+});
+
+test("GitHub sync rejects unsupported config versions retained in a baseline before writes", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        remote.publish(await readSyncSnapshot(root));
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const first = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: first.id, mode: "remote", choices: {} });
+            const path = join(state, "github-sync.json");
+            const saved = JSON.parse(await readFile(path, "utf8"));
+            saved.base.snapshot.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 4, future_field: true })).toString("base64");
+            await writeFile(path, JSON.stringify(saved));
+            await connectSync(state, input, "encrypted");
+            const before = await snapshot(join(root, ".harness-align"));
+            await assert.rejects(previewSync(root, state, input.token), /newer than supported version 3/u);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+            assert.equal(remote.controls.patchCount, 0);
+        }
+        finally { mocked.mock.restore(); }
+    });
+});
 
 test("sync snapshots preserve binary assets and empty layers while rejecting unsafe paths", async () =>
 {
@@ -1193,6 +2597,11 @@ test("sync uploads only local skill bytes and restores pinned remote skills with
         await addSkillSource(first, { url: "https://github.com/example/repo" });
         await discoverSkills(first);
         await installSkills(first, ["demo"]);
+        // A later repository commit can retain identical skill content but need a cold download on another device.
+        const provenance = await loadSkillIndex(first);
+        const installedEntry = provenance.demo!;
+        if (installedEntry.origin === "github") installedEntry.commit = "b".repeat(40);
+        await writeFile(join(first, ".harness-align", "skills", "index.json"), JSON.stringify({ skills: provenance }));
         const source = join(first, "incoming");
         await mkdir(source);
         await writeFile(join(source, "SKILL.md"), "# Local\n");
@@ -1227,7 +2636,7 @@ test("sync uploads only local skill bytes and restores pinned remote skills with
         assert.equal(remote.controls.patchCount, patches);
         assert.equal((await getSyncStatus(secondState)).hasPendingUpload, false);
         assert.deepEqual(await readSyncSnapshot(second), full);
-        assert.ok(archives.every((url) => url.endsWith(`${"a".repeat(40)}.zip`)));
+        assert.ok(archives.every((url) => url.endsWith(`${"a".repeat(40)}.zip`) || url.endsWith(`${"b".repeat(40)}.zip`)));
         const stable = await previewSync(second, secondState, input.token);
         assert.equal(stable.uploadCount + stable.downloadCount, 0);
         const hidden = join(second, ".harness-align/skills/demo/.custom.json");
@@ -1238,7 +2647,7 @@ test("sync uploads only local skill bytes and restores pinned remote skills with
         assert.equal(cached.uploadCount + cached.downloadCount, 0);
         const downloads = archives.length;
         await applySync(second, secondState, input.token, { previewId: cached.id, mode: "merge", choices: {} });
-        assert.equal(archives.length, downloads + 1);
+        assert.equal(archives.length, downloads);
         assert.equal(remote.controls.patchCount, patches);
         assert.deepEqual(await readSyncSnapshot(second), full);
     }));
@@ -1277,6 +2686,28 @@ test("sync preserves legacy skill provenance and rejects unavailable or unsafe r
         await assert.rejects(validateSyncSources(portable, true), /safe GitHub owner/u);
     });
 });
+
+/** Load actual Renderer workflows with Node 24 type stripping, sharing the compiled Store and stubbing only UI feedback. */
+async function loadRendererTasks(): Promise<{
+    persistEditorSnapshot(workspace: Workspace, selection: Selection, snapshot: FormSnapshot): Promise<unknown>;
+    persistLayerRename(from: string, to: string): Promise<void>;
+    checkWorkspaceSkillUpdates(isAutomatic?: boolean): Promise<void>;
+}>
+{
+    const source = new URL("../../src/renderer/src/features/workspace/WorkspaceTasks.ts", import.meta.url).href;
+    const dependencies = new Map([
+        ["@/lib/Utils", new URL("../src/renderer/src/lib/Utils.js", import.meta.url).href],
+        ["@/stores/AppStore", new URL("../src/renderer/src/stores/AppStore.js", import.meta.url).href],
+        ["@/components/common/Feedback", "data:text/javascript,export function showError(){};export function showSuccess(){};export function writeLog(){}"],
+    ]);
+    const hooks = registerHooks({ resolve: (specifier, context, nextResolve) =>
+    {
+        const url = context.parentURL === source ? dependencies.get(specifier) : undefined;
+        return url ? { url, shortCircuit: true } : nextResolve(specifier, context);
+    } });
+    try { return await import(source); }
+    finally { hooks.deregister(); }
+}
 
 /** Create a temporary `.harness-align` project, run the case, then delete the directory. */
 async function withProject(run: (root: string) => Promise<void>): Promise<void>
@@ -1491,7 +2922,7 @@ test("config and metadata validation reject unsafe input", async () =>
         ] }), "utf8");
         await assert.rejects(buildOutputs(root), /Windows reserved device name/u);
         await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, version: 2 }), "utf8");
-        await assert.rejects(buildOutputs(root), /version must be integer 1/u);
+        await assert.rejects(buildOutputs(root), /legacy Profile format version 2/u);
         await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, profiles: ["legacy"] }), "utf8");
         await assert.rejects(buildOutputs(root), /unknown field "profiles"/u);
         await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], extra: true }] }), "utf8");
@@ -1683,7 +3114,7 @@ test("setup deploys generated harness content into existing roots and shared rul
         await writeFile(join(userProfile, ".config", "opencode", "AGENTS.md"), "old opencode\n", "utf8");
         await writeFile(join(userProfile, ".config", "opencode", "agents", "old.md"), "old opencode agent\n", "utf8");
 
-        await setup(root, undefined, userProfile);
+        await setup(root, undefined, userProfile, undefined, true);
 
         assert.deepEqual(await snapshot(join(userProfile, ".codex")), await snapshot(join(root, ".harness-align", "generated", "codex")));
         assert.deepEqual(await snapshot(join(userProfile, ".config", "opencode")), await snapshot(join(root, ".harness-align", "generated", "opencode")));
@@ -2031,14 +3462,14 @@ test("skill_sources config omit, write, unknown field, duplicates, version, and 
     {
         const loaded = await loadConfig(root);
         assert.deepEqual(loaded.skillSources, []);
-        assert.equal(loaded.version, 1);
+        assert.equal(loaded.version, CONFIG_VERSION);
         const withSources = await saveConfig(root, {
             ...loaded,
             skillSources: [{ owner: "acme", name: "skills", branch: "main" }],
         });
         assert.deepEqual(withSources.skillSources, [{ owner: "acme", name: "skills", branch: "main" }]);
         const written = JSON.parse(await readFile(join(root, ".harness-align", "config.json"), "utf8")) as { skill_sources?: unknown; version: number };
-        assert.equal(written.version, 1);
+        assert.equal(written.version, CONFIG_VERSION);
         assert.deepEqual(written.skill_sources, [{ owner: "acme", name: "skills", branch: "main" }]);
         await assert.rejects(Promise.resolve().then(() => validateConfig({
             ...config,
@@ -2051,7 +3482,7 @@ test("skill_sources config omit, write, unknown field, duplicates, version, and 
                 { owner: "Acme", name: "Skills", branch: "dev" },
             ],
         })), /owner\/name must be unique/u);
-        await assert.rejects(Promise.resolve().then(() => validateConfig({ ...config, version: 2 })), /version must be integer 1/u);
+        await assert.rejects(Promise.resolve().then(() => validateConfig({ ...config, version: 2 })), /legacy Profile format version 2/u);
         await assert.rejects(Promise.resolve().then(() => validateConfig({
             ...config,
             harnesses: [{ ...config.harnesses[0], config_path: ".agents/skills" }],
@@ -2060,6 +3491,10 @@ test("skill_sources config omit, write, unknown field, duplicates, version, and 
             ...config,
             harnesses: [{ ...config.harnesses[0], config_path: ".agents/skills/nested" }],
         })), /managed skills target/u);
+        for (const configPath of [".agents/.harness-align.lock.json", ".agents/.HARNESS-ALIGN.lock.json/nested"])
+        {
+            assert.throws(() => validateConfig({ ...config, harnesses: [{ ...config.harnesses[0], config_path: configPath }] }), /deployment ownership lock/u);
+        }
         await saveConfig(root, { ...withSources, skillSources: [] });
         const omitted = JSON.parse(await readFile(join(root, ".harness-align", "config.json"), "utf8")) as { skill_sources?: unknown };
         assert.equal(omitted.skill_sources, undefined);
@@ -2298,13 +3733,190 @@ test("setup overwrites same-name skills and keeps unrelated siblings", async () 
         await mkdir(join(userProfile, ".agents", "skills", "unrelated"), { recursive: true });
         await writeFile(join(userProfile, ".agents", "skills", "demo", "SKILL.md"), "old\n", "utf8");
         await writeFile(join(userProfile, ".agents", "skills", "unrelated", "SKILL.md"), "keep\n", "utf8");
-        const result = await setup(root, undefined, userProfile);
+        const result = await setup(root, undefined, userProfile, undefined, true);
         assert.equal(result.skills.skipped, false);
         assert.deepEqual(result.skills.ids, ["demo"]);
         assert.equal(await readFile(join(userProfile, ".agents", "skills", "demo", "SKILL.md"), "utf8"), "---\nname: Demo\n---\n\nProject skill.\n");
         assert.equal(await readFile(join(userProfile, ".agents", "skills", "unrelated", "SKILL.md"), "utf8"), "keep\n");
         assert.ok(reportSetup(result).includes(`Updated skills at ${join(userProfile, ".agents", "skills")}`));
         assert.ok(reportSetup(result).includes("  demo"));
+    });
+});
+
+test("setup lock removes retired skills and shared rules while preserving untracked skills", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "lock-home");
+        await mkdir(join(home, ".agents", "skills", "unrelated"), { recursive: true });
+        await writeFile(join(home, ".agents", "skills", "unrelated", "SKILL.md"), "Keep");
+        await saveSharedRule(root, ".harness-align/rules/shared/old.md", "Old shared");
+        const source = join(root, "incoming");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Demo\n");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" });
+        await setup(root, undefined, home);
+        const lockPath = join(home, ".agents", ".harness-align.lock.json");
+        const lock = JSON.parse(await readFile(lockPath, "utf8")) as { scopes: Record<string, unknown> };
+        assert.deepEqual(Object.keys(lock.scopes), [".agents/shared-rules", ".agents/skills/demo"]);
+        await removeSkill(root, "demo");
+        await unlink(join(root, ".harness-align", "rules", "shared", "old.md"));
+        const preview = await previewSetup(root, undefined, home);
+        assert.equal(preview.changes.find((item) => item.path === "~/.agents/skills/demo")?.status, "deleted");
+        assert.equal(preview.changes.find((item) => item.path.endsWith("/old.md"))?.status, "deleted");
+        assert.equal(preview.changes.some((item) => item.external), false);
+        const result = await setup(root, undefined, home, preview.revision);
+        assert.equal(result.skills.skipped, false);
+        assert.deepEqual(result.skills.removedIds, ["demo"]);
+        assert.match(reportSetup(result), /Removed demo/u);
+        await assert.rejects(readdir(join(home, ".agents", "skills", "demo")), /ENOENT/u);
+        assert.deepEqual(await readdir(join(home, ".agents", "shared-rules")), []);
+        assert.equal(await readFile(join(home, ".agents", "skills", "unrelated", "SKILL.md"), "utf8"), "Keep");
+        assert.deepEqual(Object.keys((JSON.parse(await readFile(lockPath, "utf8")) as typeof lock).scopes), [".agents/shared-rules"]);
+        assert.equal((await setup(root, undefined, home)).skills.skipped, true);
+    });
+});
+
+test("missing locks preserve historical skills and recorded ownership cleans up missing source directories", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "lock-home");
+        await mkdir(home);
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared");
+        const source = join(root, "incoming");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Demo\n");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" });
+        await setup(root, undefined, home);
+        const lockPath = join(home, ".agents", ".harness-align.lock.json");
+        const lock = await readFile(lockPath);
+        await rename(join(root, ".harness-align", "skills"), join(root, "removed-sources"));
+        await unlink(lockPath);
+        assert.equal((await setup(root, undefined, home)).skills.skipped, true);
+        const target = join(home, ".agents", "skills", "demo");
+        assert.equal(await readFile(join(target, "SKILL.md"), "utf8"), "# Demo\n");
+        await writeFile(lockPath, lock);
+        assert.deepEqual((await setup(root, undefined, home)).skills.removedIds, ["demo"]);
+        await assert.rejects(readdir(target), /ENOENT/u);
+    });
+});
+
+test("setup lock validates ownership, preview freshness and external edits before retired skill deletion", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "lock-home");
+        await mkdir(home);
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared");
+        const source = join(root, "incoming");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Demo\n");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" });
+        await setup(root, undefined, home);
+        await removeSkill(root, "demo");
+        const lockPath = join(home, ".agents", ".harness-align.lock.json");
+        const lock = await readFile(lockPath);
+        const preview = await previewSetup(root, undefined, home);
+        await writeFile(lockPath, `${lock.toString("utf8")}\n`);
+        await assert.rejects(setup(root, undefined, home, preview.revision), /preview expired/u);
+        for (const scopes of [{ "../outside": { ".": "directory" } }, { ".agents/skills/../outside": { ".": "directory" } }, { ".agents/skills/demo": {} }])
+        {
+            await writeFile(lockPath, JSON.stringify({ version: 1, scopes }));
+            const before = await snapshot(home);
+            await assert.rejects(setup(root, undefined, home));
+            assert.deepEqual(await snapshot(home), before);
+        }
+        await unlink(lockPath);
+        await symlink(join(home, ".agents", "skills"), lockPath, "junction");
+        await assert.rejects(previewSetup(root, undefined, home), /reparse/u);
+        await unlink(lockPath);
+        await writeFile(lockPath, lock);
+        const target = join(home, ".agents", "skills", "demo");
+        const held = join(home, "held-demo");
+        await rename(target, held);
+        await symlink(held, target, "junction");
+        await assert.rejects(setup(root, undefined, home), /reparse/u);
+        await unlink(target);
+        await rename(held, target);
+        await writeFile(join(target, "SKILL.md"), "Manual edit");
+        const edited = await previewSetup(root, undefined, home);
+        assert.match(edited.changes.find((item) => item.path.endsWith("demo/SKILL.md"))?.external ?? "", /Changed since last deployment/u);
+        await assert.rejects(setup(root, undefined, home, edited.revision), /explicit overwrite approval/u);
+        assert.deepEqual(await readFile(lockPath), lock);
+        await setup(root, undefined, home, edited.revision, true);
+        await assert.rejects(readdir(target), /ENOENT/u);
+    });
+});
+
+test("retired skill deletion and ownership lock recover together after interrupted replacement and cleanup", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "lock-home");
+        await mkdir(home);
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared");
+        const source = join(root, "incoming");
+        await mkdir(source);
+        await writeFile(join(source, "SKILL.md"), "# Demo\n");
+        await installSkillFromDirectory(root, "demo", source, { kind: "local", contentHash: "" });
+        await setup(root, undefined, home);
+        await removeSkill(root, "demo");
+        const lockPath = join(home, ".agents", ".harness-align.lock.json");
+        const oldLock = await readFile(lockPath);
+        const target = join(home, ".agents", "skills", "demo");
+        const originalRename = fs.rename;
+        const blockedSwap = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            if (String(args[0]).includes(".harness-align-stage-") && String(args[1]) === lockPath) throw new Error("Interrupted lock replacement");
+            if (String(args[0]).includes(".harness-align-backup-") && String(args[1]) === target) throw new Error("Interrupted skill restore");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, home), /recovery preserved.*Interrupted skill restore/u); }
+        finally { blockedSwap.mock.restore(); }
+        assert.equal(await recoverDeployment(root, home), "restored");
+        assert.deepEqual(await readFile(lockPath), oldLock);
+        assert.equal(await readFile(join(target, "SKILL.md"), "utf8"), "# Demo\n");
+        const originalRemove = fs.rm;
+        const blockedCleanup = t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) =>
+        {
+            if (String(args[0]).includes(join("skills", ".harness-align-backup-"))) throw new Error("Interrupted lock cleanup");
+            return originalRemove(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, home), /recovery preserved.*Interrupted lock cleanup/u); }
+        finally { blockedCleanup.mock.restore(); }
+        const newLock = await readFile(lockPath);
+        await writeFile(lockPath, "External lock edit");
+        await assert.rejects(recoverDeployment(root, home), /changed outside/u);
+        await writeFile(lockPath, newLock);
+        assert.equal(await recoverDeployment(root, home), "completed");
+        await assert.rejects(readdir(target), /ENOENT/u);
+        assert.equal(Object.hasOwn((JSON.parse(newLock.toString("utf8")) as { scopes: Record<string, unknown> }).scopes, ".agents/skills/demo"), false);
+        assert.equal((await previewSetup(root, undefined, home)).changes.some((item) => item.status === "deleted"), false);
+    });
+});
+
+test("setup refuses oversized recovery records before replacing targets or publishing a journal", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "lock-home");
+        await mkdir(home);
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared");
+        await setup(root, undefined, home);
+        const tree = Object.fromEntries([[".", "directory"], ...Array.from({ length: 65000 }, (_, index) => [`assets/document-${String(index).padStart(5, "0")}.md`, "a".repeat(64)])]);
+        const lockPath = join(home, ".agents", ".harness-align.lock.json");
+        const lock = JSON.stringify({ version: 1, scopes: { ".agents/skills/demo": tree } }, null, 2);
+        assert.ok(Buffer.byteLength(lock) < 8 * 1024 * 1024);
+        await writeFile(lockPath, lock);
+        const baselinePath = join(root, ".harness-align", ".deployment.json");
+        const baseline = JSON.stringify({ version: 1, scopes: { ".agents/skills/demo": tree, ".inactive/agents": tree } }, null, 2);
+        await writeFile(baselinePath, baseline);
+        const before = await snapshot(home);
+        await assert.rejects(setup(root, undefined, home, undefined, true), /recovery record including cleanup progress must not exceed 32 MiB/u);
+        assert.deepEqual(await snapshot(home), before);
+        assert.equal(await readFile(baselinePath, "utf8"), baseline);
+        await assert.rejects(readFile(join(root, ".harness-align", ".deployment-recovery.json")), /ENOENT/u);
     });
 });
 
@@ -2367,7 +3979,8 @@ test("ensureUserWorkspace creates a default user config once", async () =>
     {
         const root = await ensureUserWorkspace(home);
         assert.equal(root, resolve(home));
-        const created = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string; harnesses: unknown[] };
+        const created = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { version: number; name: string; harnesses: unknown[] };
+        assert.equal(created.version, CONFIG_VERSION);
         assert.equal(created.name, "AGENTS");
         assert.deepEqual(created.harnesses, []);
         assert.equal(CONFIG_SCHEMA.safeParse(await loadConfig(home)).success, true);
@@ -2796,7 +4409,7 @@ test("setup staging and swap failures preserve previously deployed files", async
         });
         try
         {
-            await assert.rejects(setup(root, undefined, home), /Injected copy failure/u);
+            await assert.rejects(setup(root, undefined, home, undefined, true), /Injected copy failure/u);
             assert.deepEqual(await snapshot(home), before);
         }
         finally
@@ -2816,7 +4429,7 @@ test("setup staging and swap failures preserve previously deployed files", async
         });
         try
         {
-            await assert.rejects(setup(root, undefined, home), /Injected swap failure/u);
+            await assert.rejects(setup(root, undefined, home, undefined, true), /Injected swap failure/u);
             assert.equal(failed, true);
             assert.deepEqual(await snapshot(home), before);
         }
@@ -2932,7 +4545,7 @@ test("repository-root skills survive batch installation, workspace reload, reins
             + "L1NLSUxMLm1kUEsBAhQAFAAAAAgAjHAsXfTGoYcJAAAABwAAABcAAAAAAAAAAAAAAAAAOQAAAHJlcG8tbWFpbi9kZW1vL1NLSUxMLm1kUEsFBgAAAAACAAIAhQAAAHcAAAAAAA==",
             "base64",
         );
-        const mocked = t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) => String(url).includes("/commits/") ? Response.json({ sha: "a".repeat(40) }) : new Response(archive));
+        const mocked = t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) => String(url).includes("/commits/") ? Response.json({ sha: createHash("sha1").update(archive).digest("hex") }) : new Response(archive));
         try
         {
             const discovered = await discoverSkills(root);
@@ -2991,7 +4604,7 @@ test("discovered SKILL.md previews use the current cache and report invalid Mark
         const mocked = t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) =>
         {
             requests += 1;
-            return String(url).includes("/commits/") ? Response.json({ sha: "a".repeat(40) }) : new Response(archive);
+            return String(url).includes("/commits/") ? Response.json({ sha: createHash("sha1").update(archive).digest("hex") }) : new Response(archive);
         });
         try
         {
@@ -3030,7 +4643,7 @@ test("discovery preserves network errors and only falls back to another branch o
             if (mode === "network") throw new TypeError("fetch failed", { cause: Object.assign(new Error("connection timed out"), { code: "ETIMEDOUT" }) });
             if (mode === "unavailable") return new Response(null, { status: 503 });
             if (requests.length === 1) return new Response(null, { status: 404 });
-            return String(url).includes("/commits/") ? Response.json({ sha: "a".repeat(40) }) : new Response(TEST_SKILL_ARCHIVE);
+            return String(url).includes("/commits/") ? Response.json({ sha: "c".repeat(40) }) : new Response(TEST_SKILL_ARCHIVE);
         });
         try
         {
@@ -3043,7 +4656,7 @@ test("discovery preserves network errors and only falls back to another branch o
             mode = "fallback";
             requests.length = 0;
             assert.equal((await discoverSkills(root))[0]?.branch, "master");
-            assert.deepEqual(requests.map((url) => new URL(url).pathname), ["/repos/example/repo/commits/main", "/repos/example/repo/commits/master", `/example/repo/archive/${"a".repeat(40)}.zip`]);
+            assert.deepEqual(requests.map((url) => new URL(url).pathname), ["/repos/example/repo/commits/main", "/repos/example/repo/commits/master", `/example/repo/archive/${"c".repeat(40)}.zip`]);
         }
         finally
         {
@@ -3219,9 +4832,109 @@ test("discovery rejects backslash paths before installing archive contents", asy
         await addSkillSource(root, { url: "https://github.com/example/repo" });
         const archive = Buffer.from(TEST_SKILL_ARCHIVE.toString("latin1").replaceAll("repo-main/", "repo-main\\"), "latin1");
         assert.notDeepEqual(archive, TEST_SKILL_ARCHIVE);
-        t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) => String(url).includes("/commits/") ? Response.json({ sha: "a".repeat(40) }) : new Response(archive));
+        t.mock.method(globalThis, "fetch", async (url: Parameters<typeof fetch>[0]) => String(url).includes("/commits/") ? Response.json({ sha: createHash("sha1").update(archive).digest("hex") }) : new Response(archive));
         await assert.rejects(discoverSkills(root), /zip entry path is unsafe/u);
         assert.deepEqual(await loadSkills(root), []);
+    });
+});
+
+test("Skill checks run once at startup and retain only actionable results for unchanged sources and provenance", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        try
+        {
+            const loaded = await loadWorkspace(root);
+            const skills: ProjectSkill[] = ["first", "second", "unchanged", "failed"].map((id) => ({ id, title: id, description: "",
+                origin: { kind: "github", owner: "example", name: "repo", branch: "main", sourcePath: id, contentHash: "a".repeat(64), commit: "a".repeat(40) } }));
+            const workspace: Workspace = { ...loaded, config: { ...loaded.config, skillSources: [{ owner: "example", name: "repo", branch: "main" }] }, skills,
+                generatedFiles: [], generationStatus: { state: "missing", changes: [] }, deploymentStatus: { state: "pending", changes: [] }, harnessRoots: [] };
+            const updates: SkillUpdate[] = skills.map((skill) => ({ id: skill.id, currentHash: "a".repeat(64),
+                remoteHash: skill.id === "unchanged" ? "a".repeat(64) : "b".repeat(64), previewId: `${skill.id}-preview`,
+                ...(skill.id === "failed" ? { error: "Repository unavailable" } : {}) }));
+            useAppStore.setState({ workspace, skillUpdates: [], isCheckingSkillUpdates: false, hasStartedSkillUpdateCheck: false, isBusy: true });
+            let calls = 0;
+            let finish: (value: SkillUpdate[]) => void = () => { throw new Error("Missing pending check"); };
+            let response = new Promise<SkillUpdate[]>((resolveCheck) => { finish = resolveCheck; });
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                checkSkillUpdates: () => { calls++; return response; },
+            } } } });
+            const tasks = await loadRendererTasks();
+            await tasks.checkWorkspaceSkillUpdates(true);
+            assert.equal(calls, 0);
+            assert.equal(useAppStore.getState().hasStartedSkillUpdateCheck, false);
+            initial.setIsBusy(false);
+            const startup = tasks.checkWorkspaceSkillUpdates(true);
+            assert.equal(useAppStore.getState().isCheckingSkillUpdates, true);
+            assert.equal(useAppStore.getState().isBusy, false);
+            await tasks.checkWorkspaceSkillUpdates(true);
+            await tasks.checkWorkspaceSkillUpdates();
+            assert.equal(calls, 1);
+            finish(updates);
+            await startup;
+            assert.equal(useAppStore.getState().isCheckingSkillUpdates, false);
+            assert.deepEqual(useAppStore.getState().skillUpdates.filter(isSkillUpdateAvailable).map((update) => update.id), ["first", "second"]);
+            assert.equal(isSkillUpdateAvailable({ id: "missing-preview", currentHash: "a", remoteHash: "b" }), false);
+            await tasks.checkWorkspaceSkillUpdates(true);
+            assert.equal(calls, 1);
+            initial.setView("console");
+            initial.setView("skills");
+            initial.resetWorkspace(workspace);
+            assert.equal(useAppStore.getState().skillUpdates.filter(isSkillUpdateAvailable).length, 2);
+            assert.equal(useAppStore.getState().hasStartedSkillUpdateCheck, true);
+
+            const changed: Workspace = { ...workspace, skills: skills.map((skill) => skill.id === "first" && skill.origin.kind === "github"
+                ? { ...skill, origin: { ...skill.origin, commit: "b".repeat(40) } } : skill) };
+            initial.setWorkspace(changed);
+            assert.deepEqual(useAppStore.getState().skillUpdates.filter(isSkillUpdateAvailable).map((update) => update.id), ["second"]);
+            initial.setWorkspace({ ...changed, skills: changed.skills.filter((skill) => skill.id !== "second") });
+            assert.equal(useAppStore.getState().skillUpdates.some(isSkillUpdateAvailable), false);
+            initial.setWorkspace(workspace);
+            initial.setSkillUpdates(updates, workspace);
+            initial.setSkillUpdates(useAppStore.getState().skillUpdates.filter((update) => update.id !== "first"));
+            assert.deepEqual(useAppStore.getState().skillUpdates.filter(isSkillUpdateAvailable).map((update) => update.id), ["second"]);
+
+            response = new Promise<SkillUpdate[]>((resolveCheck) => { finish = resolveCheck; });
+            const manual = tasks.checkWorkspaceSkillUpdates();
+            assert.equal(calls, 2);
+            assert.deepEqual(useAppStore.getState().skillUpdates, []);
+            initial.setWorkspace({ ...workspace, config: { ...workspace.config, skillSources: [] } });
+            finish(updates);
+            await manual;
+            assert.deepEqual(useAppStore.getState().skillUpdates, []);
+            initial.setWorkspace(workspace);
+            response = Promise.reject(new Error("Network unavailable"));
+            await tasks.checkWorkspaceSkillUpdates();
+            assert.equal(calls, 3);
+            assert.equal(useAppStore.getState().isCheckingSkillUpdates, false);
+            assert.deepEqual(useAppStore.getState().skillUpdates, []);
+            response = Promise.resolve(updates);
+            await tasks.checkWorkspaceSkillUpdates();
+            assert.equal(calls, 4);
+            assert.equal(useAppStore.getState().skillUpdates.filter(isSkillUpdateAvailable).length, 2);
+            initial.setSkillUpdates([]);
+            assert.equal(useAppStore.getState().skillUpdates.some(isSkillUpdateAvailable), false);
+            initial.setSkillUpdates(updates, workspace);
+            initial.setWorkspace({ ...workspace, config: { ...workspace.config, skillSources: [] } });
+            assert.deepEqual(useAppStore.getState().skillUpdates, []);
+
+            useAppStore.setState({ workspace: { ...workspace, skills: [] }, hasStartedSkillUpdateCheck: false });
+            await tasks.checkWorkspaceSkillUpdates(true);
+            assert.equal(calls, 4);
+            assert.equal(useAppStore.getState().hasStartedSkillUpdateCheck, true);
+            useAppStore.setState({ workspace: { ...workspace, config: { ...workspace.config, skillSources: [] } }, hasStartedSkillUpdateCheck: false });
+            await tasks.checkWorkspaceSkillUpdates(true);
+            assert.equal(calls, 4);
+            assert.equal(useAppStore.getState().isCheckingSkillUpdates, false);
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
     });
 });
 
@@ -3232,7 +4945,7 @@ test("Layer selection keeps local choices and falls back only when the selected 
         const initial = useAppStore.getState();
         try
         {
-            const workspace = { ...await loadWorkspace(root), generatedFiles: [] };
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [] };
             initial.setWorkspace(undefined);
             initial.setWorkspace(workspace);
             initial.setLayerSelection([{ name: "soul", option: "kei" }]);
@@ -3269,7 +4982,7 @@ test("workspace reload replaces drafts and Layer choices only after a valid disk
         const initial = useAppStore.getState();
         try
         {
-            const workspace = { ...await loadWorkspace(root), generatedFiles: [] };
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [] };
             initial.setWorkspace(undefined);
             initial.setWorkspace(workspace);
             initial.setView("rules");
@@ -3285,12 +4998,12 @@ test("workspace reload replaces drafts and Layer choices only after a valid disk
             const configPath = join(root, ".harness-align/config.json");
             const savedConfig = await readFile(configPath, "utf8");
             await writeFile(configPath, "invalid JSON");
-            await assert.rejects(loadWorkspace(root).then((loaded) => initial.resetWorkspace({ ...loaded, generatedFiles: [] })));
+            await assert.rejects(loadWorkspace(root).then((loaded) => initial.resetWorkspace({ ...loaded, generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [] })));
             assert.equal(useAppStore.getState(), before);
             await writeFile(configPath, savedConfig);
             await writeRule(root, rule.path.split("/").at(-1)!, rule.priority, "Changed outside the app");
             await saveConfig(root, { ...await loadConfig(root), layers: [{ name: "soul", selected: "kei" }] });
-            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [] });
+            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [] });
             const reloaded = useAppStore.getState();
             assert.match(reloaded.workspace!.rootRules.find((item) => item.path === rule.path)!.body, /Changed outside the app/u);
             assert.deepEqual(reloaded.layerSelection, [{ name: "soul", option: "kei" }]);
@@ -3305,7 +5018,7 @@ test("workspace reload replaces drafts and Layer choices only after a valid disk
             initial.resetWorkspace(reloaded.workspace!);
             assert.equal(useAppStore.getState().workspaceRevision, reloaded.workspaceRevision + 1);
             await unlink(join(root, rule.path));
-            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [] });
+            initial.resetWorkspace({ ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] }, deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [] });
             assert.notDeepEqual(useAppStore.getState().selection, selection);
             assert.equal(useAppStore.getState().view, "rules");
             initial.setView("console");
@@ -3353,6 +5066,101 @@ test("skill batches reject later origin and case conflicts before installing the
     });
 });
 
+test("automatic application checks run at startup and every six hours without overlapping or downloading", async (t) =>
+{
+    const serviceUrl = new URL("../../src/main/services/AppUpdateService.ts", import.meta.url).href;
+    const electronUrl = "data:text/javascript,export const app = { isPackaged: true, getVersion: () => '1.2.1' };";
+    const updaterUrl = "data:text/javascript,export const autoUpdater = { on() {}, async checkForUpdates() { return { isUpdateAvailable: true, updateInfo: { version: '1.3.0' } }; } };";
+    const hooks = registerHooks({ resolve: (specifier, context, nextResolve) =>
+    {
+        if (specifier === "electron") return { url: electronUrl, shortCircuit: true };
+        if (specifier === "electron-updater") return { url: updaterUrl, shortCircuit: true };
+        if (context.parentURL === serviceUrl && specifier.startsWith("."))
+        {
+            return { url: new URL(specifier, new URL("../src/main/services/AppUpdateService.js", import.meta.url)).href, shortCircuit: true };
+        }
+        return nextResolve(specifier, context);
+    } });
+    const previousProxy = process.env.HTTPS_PROXY;
+    const previousLowerProxy = process.env.https_proxy;
+    const previousHttpProxy = process.env.HTTP_PROXY;
+    const previousLowerHttpProxy = process.env.http_proxy;
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.HTTP_PROXY;
+    delete process.env.http_proxy;
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    /** Stop the current schedule even when an assertion fails. */
+    let stop = (): void => {};
+    try
+    {
+        const service: {
+            startAutomaticAppUpdateChecks(isPackaged: boolean): () => void;
+            checkForAppUpdate(): Promise<AppUpdateStatus>;
+            getAppUpdateStatus(): Promise<AppUpdateStatus>;
+        } = await import(serviceUrl);
+        const { autoUpdater } = await import(updaterUrl);
+        const check = t.mock.method(autoUpdater, "checkForUpdates");
+        stop = service.startAutomaticAppUpdateChecks(false);
+        t.mock.timers.tick(6 * 60 * 60 * 1000);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 0);
+        stop();
+
+        stop = service.startAutomaticAppUpdateChecks(true);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 1);
+        assert.equal((await service.getAppUpdateStatus()).phase, "available");
+        assert.equal(autoUpdater.autoDownload, false);
+        assert.equal(autoUpdater.autoInstallOnAppQuit, false);
+        assert.equal(autoUpdater.allowPrerelease, false);
+        t.mock.timers.tick(6 * 60 * 60 * 1000 - 1);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 1);
+        t.mock.timers.tick(1);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 2);
+
+        let finishCheck!: () => void;
+        check.mock.mockImplementationOnce(() => new Promise((resolve) =>
+        {
+            finishCheck = () => resolve({ isUpdateAvailable: false });
+        }));
+        const manual = service.checkForAppUpdate();
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 3);
+        t.mock.timers.tick(6 * 60 * 60 * 1000);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 3);
+        finishCheck();
+        await manual;
+        assert.equal((await service.getAppUpdateStatus()).availableVersion, null);
+
+        check.mock.mockImplementationOnce(async () => { throw new Error("offline"); });
+        t.mock.timers.tick(6 * 60 * 60 * 1000);
+        await new Promise(setImmediate);
+        assert.equal((await service.getAppUpdateStatus()).phase, "error");
+        t.mock.timers.tick(6 * 60 * 60 * 1000);
+        await new Promise(setImmediate);
+        assert.equal((await service.getAppUpdateStatus()).phase, "available");
+        assert.equal(check.mock.callCount(), 5);
+        stop();
+        t.mock.timers.tick(6 * 60 * 60 * 1000);
+        await new Promise(setImmediate);
+        assert.equal(check.mock.callCount(), 5);
+    }
+    finally
+    {
+        stop();
+        hooks.deregister();
+        t.mock.timers.reset();
+        if (previousProxy === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = previousProxy;
+        if (previousLowerProxy === undefined) delete process.env.https_proxy; else process.env.https_proxy = previousLowerProxy;
+        if (previousHttpProxy === undefined) delete process.env.HTTP_PROXY; else process.env.HTTP_PROXY = previousHttpProxy;
+        if (previousLowerHttpProxy === undefined) delete process.env.http_proxy; else process.env.http_proxy = previousLowerHttpProxy;
+    }
+});
+
 test("application update installs only a downloaded offered release and rejects unsafe proxy values", () =>
 {
     const initial = initialAppUpdateStatus("1.2.1");
@@ -3367,6 +5175,11 @@ test("application update installs only a downloaded offered release and rejects 
     const checking = beginAppUpdateCheck(initial);
     const available = markAppUpdateAvailable(checking, "1.3.0-beta.1");
     assert.equal(available.availableVersion, "1.3.0-beta.1");
+    const rechecking = beginAppUpdateCheck(available);
+    assert.equal(rechecking.availableVersion, available.availableVersion);
+    const failedRecheck = failAppUpdate(rechecking, "offline");
+    assert.equal(failedRecheck.availableVersion, available.availableVersion);
+    assert.throws(() => beginAppUpdateDownload(failedRecheck), /cannot download while error/u);
     const downloading = beginAppUpdateDownload(available);
     assert.equal(updateAppUpdateProgress(downloading, 140.2).percent, 100);
     assert.throws(() => updateAppUpdateProgress(downloading, Number.NaN), /finite/u);

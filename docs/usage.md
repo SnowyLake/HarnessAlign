@@ -15,7 +15,7 @@
 
 应用会自动加载 `%USERPROFILE%\.harness-align` 中的配置. 首次启动时, 如果存在旧的 `.halign` 目录, 应用会迁移它; 没有配置时会创建目录和默认 `config.json`. 配置目录固定, 与应用安装位置无关, 界面不提供修改入口. 迁移规则见[配置目录](configuration.md#配置目录).
 
-新建配置时, 应用依次检测用户目录下的 `.codex`, `.cursor`, `.grok` 和 `.config/opencode`, 只将已有配置目录的 Codex, Cursor, Grok Build 和 OpenCode 加入 Harnesses. 文件, 符号链接和 junction 不计入检测结果. 检测依据是配置目录, 卸载后的残留目录仍可能被识别; 已安装但尚未初始化目录的工具需要先启动一次, 再通过 Add harness 手动添加. 全部未检测到时列表为空, 应用仍可正常使用. 已有配置和迁移配置保持原样, 后续启动不会自动增删 Harnesses.
+新建配置时, 应用依次检测用户目录下的 `.codex`, `.cursor`, `.grok` 和 `.config/opencode`, 只将已有配置目录的 Codex, Cursor, Grok Build 和 OpenCode 加入 Home 页面. 文件, 符号链接和 junction 不计入检测结果. 检测依据是配置目录, 卸载后的残留目录仍可能被识别; 已安装但尚未初始化目录的工具需要先启动一次, 再通过 Add harness 手动添加. 全部未检测到时列表为空, 应用仍可正常使用. 已有配置和迁移配置保持原样, 后续启动不会自动增删 Harnesses.
 
 应用同时只运行一个窗口, 再次启动会聚焦已有窗口. Settings 中可以切换主题. 主题和窗口位置保存在本机.
 
@@ -23,24 +23,37 @@
 
 安装版可以在 Settings 的 Application 中升级, 不需要再打开发布页面下载.
 
-1. 点击 Check for updates. 应用只查看 GitHub 上最新的正式版.
-2. 发现新版本后, 点击 Download and install. 应用下载安装包, 校验后退出, 静默安装并重新打开.
+1. 应用每次启动及运行中每隔 6 小时自动检查 GitHub 上最新的正式版, 也可以点击 Check for updates 手动检查. 检查或安装正在进行时跳过本次自动检查.
+2. 发现新版本后, Settings 图标显示消息点, Application 中显示已有的 Download and install 按钮. 点击后应用下载安装包, 校验后退出, 静默安装并重新打开.
 
-升级替换安装目录里的程序文件. `%USERPROFILE%\.harness-align` 中的配置, 以及保存在安装目录外的主题和 GitHub 同步凭据, 都会保留. 安装开始后应用会关闭, 尚未保存的编辑会丢弃.
+自动检查失败不会弹出对话框, 错误显示在 Application 和 Console. 已发现新版时保留消息点和安装按钮; 重新检查期间或检查失败后, 安装按钮暂时禁用, 检查成功后恢复.
+
+升级替换安装目录里的程序文件. `%USERPROFILE%\.harness-align` 中的配置, 以及保存在安装目录外的主题和 GitHub 同步凭据, 都会保留. 有未保存草稿或 Layer 选择时, 请先 Save all, 下载按钮会暂时禁用. 下载和安装期间编辑界面暂停, Main 等待已有工作区操作完成并拒绝新的工作区操作. 下载失败会恢复编辑; 下载期间收到新的未保存草稿状态时会拒绝启动安装, 保留草稿.
 
 尚未包含应用内更新的已安装版本, 需要先手动安装一次包含该功能的版本. 从源码运行的窗口不能在软件内升级. 当前安装包未签名, 升级时 Windows 仍可能显示安全提示.
 
 应用更新默认使用 Windows 系统代理. 启动时如果设置了 `HTTP_PROXY` 或 `HTTPS_PROXY`, 更新请求优先使用该代理, 并遵守 `NO_PROXY`.
 
+应用版本与配置格式版本分别管理. 当前配置格式是 v3, 现行 Layer 格式 v1 会在完整校验后自动升级并保留原始配置备份. 待确认 GitHub 上传先恢复, 再升级; 升级或延迟原因显示在 Console, 不自动生成或部署. 兼容范围和回退方法见[配置版本与自动升级](configuration.md#配置版本与自动升级).
+
 ## 编辑和保存
 
-侧栏提供 Harnesses, Rules, Layers, Agents 和 Skills, 底部是 Generated, Console 和 Settings. 窄窗口下侧栏会收起为图标. 文件列表可以折叠或调整宽度, Layers, Rules 和 Agents 的列表默认占 28%, 可在 20% 到 45% 之间调整. 在 Rules, Layers 和 Agents 中切换条目时, 右侧编辑区会保持滚动位置.
+侧栏提供 Home, Rules, Layers, Agents 和 Skills, 底部是 Generated, Console 和 Settings. 窄窗口下侧栏会收起为图标. 文件列表可以折叠或调整宽度, Layers, Rules 和 Agents 的列表默认占 28%, 可在 20% 到 45% 之间调整. 在 Rules, Layers 和 Agents 中切换条目时, 右侧编辑区会保持滚动位置.
+
+顶部状态区在所有页面以紧凑标签显示 Edits, Generated, Setup 和 Sync. 已完成项显示勾选, 待处理项显示 Pending, 未保存或异常保留具体状态. 点击状态区可查看各阶段状态、必要的错误提示和可展开的差异路径, 不展示操作日志或重复说明. Generated 页只保留产物查看, 不再单独展示保存源状态.
+
+- Edits 显示 Saved 或未保存数量, 包括全部编辑草稿和 Layer 选择. 有未保存内容时, 下游显示 Save first, 保存后再判断是否需要 Generate, Setup 或 Sync.
+- Generated 的 Current 表示输出与已保存源一致; Generate needed 表示需要重新生成.
+- Setup 对比实际部署目标, 包括 Shared Rules 和 Skills. Deploy needed 表示需要部署, Review changes 表示存在外部修改或额外路径, Skipped targets 表示部分 Harness 目录缺失. 没有 Skills 时跳过 Skills 不算待办. Setup 会重新生成, 可以直接完成生成和部署.
+- Sync 的 Locally synced 仅表示本地内容与上次同步基线一致; Sync needed 表示本地有待同步修改. 远端只在打开 Sync 时检查, 最新预览中的待处理改动或冲突也会显示在顶部. Not connected 表示尚未启用可选的 GitHub 同步.
+
+状态在加载及应用内操作后更新, 外部修改后使用 Reload 重新检查. 检查失败显示 Error 或 Check needed, 不视为已完成. 窄窗口会把状态区放到工具栏第二行.
 
 日常修改按以下顺序进行:
 
 1. 在对应页面编辑内容, 用 Save file 保存当前文件, 或用顶部 Save all 保存全部草稿.
 2. 点击 Generate, 在 Generated 页查看输出.
-3. 确认后点击 Setup, 更新本机助手目录.
+3. 点击 Setup 审阅部署预览. 默认 Changed 只显示新增, 修改和删除项, 切换 All 可查看未变化及跳过的路径. 列表固定表头并在限定高度内滚动, 不分页; 切换后回到列表顶部. 确认后执行 Setup, 更新本机助手目录. 外部修改仍需明确确认覆盖.
 
 文件列表顶部的 Add 用于新建内容. 编辑区的 Create 或 Save file, 文件行菜单和右键菜单中的 Save, 都只保存当前项. Discard changes 会恢复当前项的已保存内容.
 
@@ -58,15 +71,19 @@ Markdown 正文默认显示 Source. 点击 Body 或 Content 标题行最右侧�
 
 在软件外修改本地文件后, 点击顶部 Reload 重新读取文件. 没有未保存修改时会直接刷新; 有草稿或未保存的 Layer 顺序与选项时, 可以 Cancel 保留当前内容, 或选择 Discard and reload 丢弃软件内全部未保存修改, 以本地文件为准. 读取或校验失败时保留原有页面内容和草稿, 详情见 Console. 重载后保留当前页面和仍存在的选中项; 选中项被外部删除时会选择该页面的其他可用项.
 
-Reload 不会自动合并软件内外的修改. 同一文件在软件内外都被修改时, 先确认要保留的内容再选择保存或重载; 保存仍使用现有写回行为, 不会检测或提示外部修改冲突.
+Config, Rule, Layer Option, Shared Rule 和 Agent 保存会校验打开时的文件内容, 包括 Save all 和编辑器内改名. 文件被外部修改或删除时会拒绝保存, 保留草稿并在 Console 显示冲突文件及版本. 新建文件也不会覆盖同时出现的同名文件. 先复制需要保留的草稿与磁盘内容进行比较, 再决定是否 Discard and reload. Reload 不会自动合并修改.
+
+树内对单个文件改名前需要先保存该文件的草稿. Layer Group 改名会保留并迁移其 Option 草稿和打开时的内容基线, 改名后可以继续保存; 后续外部修改仍会触发冲突. 编辑器内修改名称和正文可以一起保存, 冲突校验发生在改名之前. 新建 Layer Option 的名称不能与已有选项重名, 匹配时不区分大小写.
 
 Settings 中的 `AGENTS.md title` 只控制生成文档的一级标题, 随 Save all 一起保存.
 
 ## 管理助手与规则
 
-### Harnesses
+### Home
 
 一个 Harness 对应一个编码助手的输出格式和配置目录. 点击 Add harness 新建, 或点击卡片上的 Edit 编辑. 路径填写 `.codex` 这样的相对用户主目录路径, 卡片会显示为 `~/.codex`. 点击路径可以打开已经存在的文件夹, 应用不会创建缺失目录.
+
+Home 页标题为 Harness Align, 以双列卡片展示助手, 窄窗口下切换为单列. 每张卡片展示目录状态和纳入输出的 Rules, Layers 和 Agents 数量; Agent 文件格式在编辑面板中查看和配置. 数量使用已保存源内容和当前 Layer 选择, 包含被选中的空 Layer Option; 不表示已生成或已部署. 点击卡片底部 Explain effects 查看纳入或排除的具体原因. Ready 只表示配置目录可用.
 
 Save harness 只保存当前助手. 关闭编辑面板会保留草稿, 卡片用 Unsaved 标记未保存项. 新建草稿可以通过 Continue new harness 继续编辑. Discard changes 放弃当前草稿; 删除操作位于编辑面板内, 需要再次确认. 保存 Harness 后再执行 Generate 或 Setup.
 
@@ -94,20 +111,65 @@ Generate 只更新 `%USERPROFILE%\.harness-align\generated`. 每个已声明 Har
 
 Generated 的 Open in explorer 打开生成文件在 `generated/` 中所在的文件夹. 操作基于已有磁盘文件, 不会保存编辑预览或打开部署后的助手副本.
 
-Setup 会重新生成, 然后按下表更新本机目录. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
+点击 Setup 会先打开 Review deployment, 按路径列出 added, modified, deleted, unchanged 和 skipped. External changes 列用 Modified, Extra 和 Untracked 分别表示部署后发生变动, 将被删除的额外路径和没有部署基线的已有内容, 点击类别查看完整原因. 预览不生成或部署文件. 确认后重新生成, 再按下表更新本机目录. 源内容, 目标内容或被跳过目录的状态在预览后变化时, 执行会拒绝过期预览, 请重新点击 Setup 审阅. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
+
+External changes 标记上次成功部署后被修改或删除的目标, 将被删除的额外路径, 以及没有文件部署基线的既有内容. 新增源文件与目标手写文件同名时, 即使其所在目录已经部署过, 也需要勾选 Overwrite modified targets and delete extra paths shown above 才能覆盖. 取消会保留目标内容. 上次成功部署的哈希保存在本机 `.harness-align/.deployment.json`, 不进入生成结果或 GitHub 同步; 正常移除未被手改的旧输出不需要额外勾选.
 
 | 目标 | 更新方式 |
 | --- | --- |
 | `%USERPROFILE%\<config_path>\AGENTS.md` | 替换为本次生成的规则 |
 | `%USERPROFILE%\<config_path>\agents\` | 整个目录替换为本次生成的 Subagent; 没有生成项时替换为空目录 |
 | `%USERPROFILE%\.agents\shared-rules\` | 整个目录替换为 `.harness-align/rules/shared/` 的内容 |
-| `%USERPROFILE%\.agents\skills\<id>\` | 按 Skill id 覆盖同名目录, 保留无关 Skills, 不复制 `index.json` |
+| `%USERPROFILE%\.agents\skills\<id>\` | 按 Skill id 覆盖同名目录, 删除 lock 记录且源中已移除的 Skill, 保留无关 Skills, 不复制 `index.json` |
+| `%USERPROFILE%\.agents\.harness-align.lock.json` | 记录本应用部署的 Shared Rules 和 Skill 目录及内容哈希, 随部署更新 |
 
-Setup 只处理配置中声明且根目录已存在的 Harness. 缺失的根目录会被跳过, 需要先由对应助手初始化. `generated/` 中的未知文件不会部署. 没有已安装 Skills 时会跳过 Skills 部署, shared-rules 仍然必需.
+Setup 只处理配置中声明且根目录已存在的 Harness. 缺失的根目录会被跳过, 需要先由对应助手初始化. `generated/` 中的未知文件不会部署. 没有已安装 Skills 且 lock 中没有待清理 Skill 时会跳过 Skills 部署, shared-rules 仍然必需.
+
+`.agents/.harness-align.lock.json` 是部署归属清单. 从项目中移除 Skill 后, 下次 Setup 会在预览中列出对应目录的删除项; 目标被手工修改或增加文件时, 仍需明确确认覆盖和删除. 首次使用或 lock 缺失时, 只记录本次实际部署的 Skill, 不根据目录名或旧 `.deployment.json` 推断历史归属, 因而不会自动清理未记录的旧副本. Shared Rules 仍按整目录管理. 请保留 lock; 格式损坏或路径不安全时, Setup 会停止并报错.
 
 应用会拒绝路径逃逸, 符号链接, junction 和其他 reparse point. 配置或目标校验失败时会停止后续写入, 在 Console 显示原因. 部署会先准备完整替换内容, 替换失败时尝试恢复原文件. 如果恢复失败, 日志会列出目标和备份位置.
 
+部署进度持久保存在本机 `.harness-align/.deployment-recovery.json`. 过期 Skill 删除和 lock 更新参与同一恢复流程. 中断后重新打开应用, 未完成替换的部署会逆序还原目标及 lock, 已完成替换的部署会补齐基线并清理备份. 恢复也会检查当前内容: 检测到后续外部修改, junction 或无法确定归属的部分暂存内容时, 保留目标, 备份, 暂存和恢复记录并报错. 请先保存现场并比较 Console 中的路径, 不要直接删除恢复记录或覆盖备份. 恢复记录和 lock 不进入 GitHub 同步.
+
+部署和 Layer 删除会在递归清理前保存清理意图. 清理只完成一部分时, 下次加载可以继续处理记录范围内未被改写的剩余内容. 剩余文件被改写或新增了记录外的路径时, 恢复会停止并保留现场.
+
+Harness 改名或删除会同时更新 Config, Rules, Layer Options 和 Agents. Layer 改名或删除会同时更新保存的选择. 这些跨文件操作先记录本机 `.harness-align/.edit-recovery.json`, 中断后在加载前还原未提交内容, 保持引用一致. 如果后续外部修改了受影响文件或移动目录, 恢复会停止并保留记录及现场; 请先比较并保存这些内容. 此记录不进入 GitHub 同步, 不影响其他未参与操作的源文件.
+
+Generated 页面显示相对已保存源内容和已保存 Layer 选择的实际状态: `current` 表示托管文件字节一致, `stale` 表示内容或 manifest 过期, `missing` 表示尚无输出, `partial` 表示缺失文件或无效 manifest, `error` 表示当前源内容无法生成并显示具体错误. 生成错误不会阻止加载可编辑的源文件, 可以在对应编辑器修正后重新 Generate. 状态列出需要更新的路径, 不把上次点击成功当作当前完整状态. Reload 重新检查磁盘, Generate 更新结果; 本地未保存的 Layer 选择可能与保存选择不同. 未由 manifest 管理的其他文件保留, 不计入过期输出.
+
+Windows 上的状态检查不区分路径大小写. Harness 名称与已有生成目录仅大小写不同时, 不会误报文件缺失; 文件内容和 manifest 内容仍按实际字节比较.
+
+Skills 的 Discover 和 Check updates 每次重新解析分支 commit, 同一个来源仓库与 commit 的已验证下载及解压内容在本次会话中复用, 缓存有总量限制. Apply updates 只安装本次检查已审阅的固定 commit, 不在执行时改装分支的新版本. 再次 Discover 或检查, 来源配置变化, 或已安装 provenance 变化会使旧预览失效; 请重新检查后应用.
+
+启动后会静默检测一次已安装 GitHub Skills 的更新, More > Check updates 可手动重新检测. 可用更新在 Skill 行和侧栏 Skills 图标上显示红色小圆点, 使用与 Settings 应用更新相同的 Badge 样式; 切换页面不会清除结果. 后台检测不安装或部署内容, 错误记录在 Console. 详细流程见 [Skills 管理](skills.md#从-github-安装).
+
+Harness 卡片的 Explain effects 按当前 Harness 列出 Rules, Layer Options 和 Agents 的 Included / Excluded 原因. 说明使用已保存源内容和当前 Layer 顺序与选择, 显示空 targets 未生效, 未启用 Layer, 未选中的选项及缺少 Harness Agent metadata. 点击源路径跳转到编辑器. Shared rules 和 Skills 独立部署, 不进入该 Harness 的 `AGENTS.md`.
+
+Rules, Agents 与 Skills 使用统一的紧凑搜索栏, 搜索在左, 筛选在右, 同行排列. Shared Rules 只显示搜索框. Rules 与 Agents 列表支持按名称, 源路径和已保存正文搜索, 多个空格分隔词同时匹配, 不区分大小写. Harness 筛选使用严格 targets 或 Agent metadata block, 空 targets 不会匹配任何 Harness. Shared Rules 只按文字搜索, 因为它们独立部署. 点击匹配项打开现有编辑器, 搜索不会清除草稿; 筛选时暂停 Rules 拖动排序, 清除筛选后可继续排序.
+
+首次使用没有 Harness 时, Home 页面说明先初始化工具的用户配置目录再 Add harness. 每张卡片显示 Ready, Missing folder 或 Unsafe / unavailable; Reload 重新检查状态. 状态检查不创建目标目录, Setup 仍跳过缺失 Harness.
+
 ## 查看日志与排查问题
+
+Console 保留保存, 生成, 部署等操作结果和完整错误信息. 启动完成, 操作开始, 主题切换和已经显示在界面中的列表或同步预览不再重复记录; Skills 发现完成仅记录数量.
+
+Console 的 `Load timing`, `Save Rule timing`, `Discover Skills timing` 等记录分别列出 Queue 排队, Initialize 初始化和操作耗时, 失败操作也保留计时. Skills 下载另列压缩字节数和耗时, 解压另列文件数和耗时, 缓存命中会显示复用记录. 排队很长时先查看前一操作; 下载很长时检查网络, 解压很长时检查仓库大小和文件数. 这些指标只保留在本次会话中.
+
+临时目录与 mock 网络的测量如下, 不访问真实用户配置或 GitHub. Windows / Node 24.16.0 下每项运行三次取中位数, 安装列为一次完整写入. 压缩包使用可压缩重复内容, archive mock 固定延迟 30 ms; 结果不代表真实网络速度或最大允许规模.
+
+| 场景 | 加载 / Discover | 单文件保存 / 安装 | 解压 | 排队中的 Load 等待 |
+| --- | --- | --- | --- | --- |
+| 100 个 Rule, 每个约 2 KiB | 107 ms | 保存 3.4 ms | 不适用 | 无前序操作 |
+| 1,000 个 Rule, 每个约 8 KiB | 933 ms | 保存 3.7 ms | 不适用 | 无前序操作 |
+| 2 MiB Skills, 65 文件 | 50 ms | 安装 100 ms | 2.5 ms | 50 ms |
+| 32 MiB Skills, 1,025 文件 | 89 ms | 安装 1,415 ms | 36.6 ms | 89 ms |
+| 32 MiB Skills, 2 文件 | 77 ms | 安装 49 ms | 31.9 ms | 77 ms |
+
+固定 commit 缓存将上述 Skills Discover 降至约 3–16 ms. 本轮保留工作区串行队列和当前解压实现: 大量小文件主要耗时在安全文件读写; 同规模原生异步解压对 1,025 文件约 34 ms, 对单个大文件约 57 ms, 后者降低事件循环停顿但增加总耗时. 当前样本未出现持续主线程停顿, 因此暂不引入自定义 worker 或拆分写入边界. 更大仓库和真实慢网络仍需根据 Console 指标评估, 本轮未测量 512 MiB 上限.
+
+Copy redacted 将当前 Console 复制到剪贴板, 替换用户主目录, 常见 GitHub token, Bearer 凭据, 密码字段和 URL 中的代理账号密码. 原始日志保留以便诊断; 分享前仍应检查是否包含自定义敏感信息.
+
+GitHub 返回明确限流状态时, 日志按有效 `Retry-After` 或 `x-ratelimit-reset` 显示等待秒数及 UTC 时间; 未提供有效时间时提示至少等待一分钟. 请在提示时间后重试, 不要连续点击. 普通权限失败仍提示核对仓库权限. 依据 [GitHub 限流排查说明](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#rate-limit-errors).
 
 顶部提示显示简短结果, Console 按时间保留操作记录, 完整报告和错误详情. 日志只保留在本次运行中, 切换页面或刷新窗口不会丢失, 关闭应用后清空. Console 支持自动滚动和手动清空, 操作进行中或工作区加载失败时也能查看. 加载失败后可点击 Retry 重试.
 
