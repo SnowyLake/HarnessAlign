@@ -3,6 +3,9 @@
  * These types must stay JSON-serializable and must not import the engine.
  */
 
+/** Current configuration format accepted by editor writes; kept in step with the engine. */
+export const CONFIG_VERSION = 3;
+
 /** Subagent metadata format declared by a harness. */
 export type AgentFormat = "toml" | "yaml";
 /** Untyped harness-specific metadata mapping. */
@@ -43,7 +46,7 @@ export interface SkillSource
 /** Validated `.harness-align/config.json` document. */
 export interface Config
 {
-    version: 1;
+    version: typeof CONFIG_VERSION;
     name: string;
     layers: LayerConfig[];
     harnesses: HarnessConfig[];

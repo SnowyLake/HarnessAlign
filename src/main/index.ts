@@ -8,6 +8,7 @@ import { registerIpcHandlers } from "./ipc/RegisterIpcHandlers.js";
 import { createMainWindow, getMainWindow } from "./windows/MainWindow.js";
 import { logMainError } from "./services/ConsoleService.js";
 import { startAutomaticAppUpdateChecks } from "./services/AppUpdateService.js";
+import { setWorkspaceSyncDirectory } from "./services/WorkspaceService.js";
 
 // Enable environment proxies before the first Node fetch; older Node 24 runtimes lack this API.
 if ("setGlobalProxyFromEnv" in http && typeof http.setGlobalProxyFromEnv === "function") http.setGlobalProxyFromEnv();
@@ -39,6 +40,7 @@ else
 
     app.whenReady().then(() =>
     {
+        setWorkspaceSyncDirectory(app.getPath("userData"));
         registerIpcHandlers();
         app.once("will-quit", startAutomaticAppUpdateChecks(app.isPackaged));
         void createMainWindow().catch((error: unknown) => logMainError("Window creation failed", error));

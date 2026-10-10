@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { CONFIG_VERSION } from "./Workspace.js";
 
 /** Require an exact opened-file revision or a missing-file baseline for creation. */
 export const SOURCE_GUARD_SCHEMA = z.strictObject({ path: z.string().min(1), revision: z.string().regex(/^[a-f0-9]{64}$/u).nullable() });
@@ -65,7 +66,7 @@ export const HARNESS_SCHEMA = z.strictObject({
 
 /** Complete editor config payload, validated before workspace initialization. */
 export const CONFIG_SCHEMA = z.strictObject({
-    version: z.literal(1),
+    version: z.literal(CONFIG_VERSION),
     name: z.string(),
     layers: z.array(z.strictObject({ name: z.string(), selected: z.string() })),
     harnesses: z.array(HARNESS_SCHEMA),

@@ -10,13 +10,14 @@ import { tmpdir } from "node:os";
 import { stringify as stringifyYaml } from "yaml";
 import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, isAtomicWriteTemporary, isTreeSubset,
          lstatIfExists, pathKey, reparseError, resolveUserHome } from "./FsSafe.js";
-import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, type SharedRule, validateAgentHarnesses, validateConfig, validateTargets } from "./Load.js";
+import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, parseConfigSource, type SharedRule, validateAgentHarnesses, validateConfig, validateTargets } from "./Load.js";
 import {
     IDENTIFIER_NAME,
     type Agent,
     assertWindowsSafeName,
     codePointCompare,
     type Config,
+    CONFIG_VERSION,
     errorText,
     type Harness,
     type HarnessConfig,
@@ -35,7 +36,7 @@ import { recoverDeployment } from "./Setup.js";
 
 /** Default candidates filtered by existing user configuration directories on first initialization. */
 const DEFAULT_USER_CONFIG = {
-    version: 1,
+    version: CONFIG_VERSION,
     name: "AGENTS",
     layers: [],
     harnesses: [
@@ -65,7 +66,7 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 
 | 路径 | 内容与作用 | 是否可直接修改 |
 | --- | --- | --- |
-| \`config.json\` | 总配置: 版本 \`version: 1\`, 输出标题 \`name\`, 有序 \`layers\` 选择, \`harnesses\` 的名称/部署路径/子代理格式, 可选 Skills 上游仓库 \`skill_sources\`. | 可以, 保持版本和字段约束. |
+| \`config.json\` | 总配置: 版本 \`version: ${CONFIG_VERSION}\`, 输出标题 \`name\`, 有序 \`layers\` 选择, \`harnesses\` 的名称/部署路径/子代理格式, 可选 Skills 上游仓库 \`skill_sources\`. | 可以, 保持版本和字段约束. |
 | \`rules/**/*.md\` (排除 \`shared/\`) | 组成助手 AGENTS.md 的规则片段. YAML frontmatter 指定非负整数 \`priority\` 和 \`targets\`, Markdown 正文是实际规则. | 可以. |
 | \`rules/shared/**/*.md\` | 供规则按需引用的独立共享文档, 不拼入助手 AGENTS.md. | 可以. |
 | \`layers/<layer>/<option>.md\` | 可切换的规则片段. config.json 的 \`layers\` 决定组顺序, \`selected\` 决定每组采用哪个选项; frontmatter 仅支持 \`targets\`. | 可以. |
@@ -77,6 +78,7 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 | \`generated/.manifest.json\` | 应用管理的生成文件清单. | 不可以; 整个 \`generated/\` 均不手改. |
 | \`AGENTS.md\` | 当前配置目录的自动生成指引, 不参与助手规则拼装, 部署或同步. | 不可以, 应用自动更新. |
 | \`.sync-backup.json\`, \`.sync-recovery.json\` | 同步时产生的本机备份和中断恢复记录, 由应用管理. | 不可以. |
+| \`.config-backup-v1-<hash>.json\`, \`.edit-recovery.json\` | 配置格式升级的原始配置备份和源编辑恢复记录, 不参与生成, 部署或同步. | 不可以. |
 
 ## 生成与部署关系
 
@@ -88,6 +90,7 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 
 - 按上表的可编辑范围修改配置源, 先读 \`config.json\` 和现有同类文件, 保持现有格式及 UTF-8 without BOM, LF. 标为不可修改的文件也不手工创建, 删除或重命名. 需要定制 GitHub Skill 时, 使用新 id 建立本地 Skill, 保留原来源记录.
 - Rule / Layer 的 \`targets\` 必须显式列出目标 Harness 名称, 省略或空数组均不生效. 名称引用大小写须一致; 重命名时更新相关 \`targets\`, 子代理 \`harnesses\` 键和 Layer 选择.
+- 配置版本独立于应用版本. 当前 Layer 格式 v1 在完整校验后自动升级到 v3, 保留当前字段含义并备份原始配置; 待确认同步上传先恢复, 再升级. 历史 Profile v2 和未来格式不会自动转换, 不通过手改版本号绕过校验.
 - 配置源修改不会立即改变助手已部署的配置. 完成后说明改了哪些源文件及影响, 由用户通过 Harness Align 的 Generate / Setup 生成和部署; 不要求当前 Agent 操作 GUI. 此目录没有 CLI 或 npm 项目.
 
 详细格式与约束见 [Harness Align 项目 README](https://github.com/SnowyLake/HarnessAlign#readme), 必要时查阅仓库 \`src/engine/\` 源码.
@@ -202,7 +205,7 @@ function sortEditableRules(rules: Rule[]): Rule[]
 function configDocument(config: Config): Record<string, unknown>
 {
     const document: Record<string, unknown> = {
-        version: 1,
+        version: config.version,
         name: config.name,
         layers: config.layers.map((layer) => ({ name: layer.name, selected: layer.selected })),
         harnesses: config.harnesses.map((harness) =>
@@ -455,13 +458,23 @@ export async function recoverSourceEdits(root: string): Promise<"none" | "restor
 }
 
 /** Persist an affected-source batch before moving layers or atomically writing any file. */
-async function writeManagedBatch(root: string, writes: Array<{ path: string; content: Buffer }>, moveInput?: { from: string; to: string; remove?: boolean }): Promise<void>
+async function writeManagedBatch(root: string, writes: Array<{ path: string; content: Buffer; expectedRevision?: string }>, moveInput?: { from: string; to: string; remove?: boolean }): Promise<void>
 {
     await recoverSourceEdits(root);
-    const journal: EditJournal = { version: 1, phase: "applying", writes: await Promise.all(writes.map(async (write) => ({
-        path: write.path, before: (await fs.readFile(await resolveManaged(root, write.path, write.path))).toString("base64"), after: write.content.toString("base64"),
-    }))) };
+    const journal: EditJournal = { version: 1, phase: "applying", writes: await Promise.all(writes.map(async (write) =>
+    {
+        const before = await fs.readFile(await resolveManaged(root, write.path, write.path));
+        if (write.expectedRevision !== undefined && sourceRevision(before) !== write.expectedRevision)
+        {
+            throw new HalignError(`${write.path}: content changed before configuration upgrade; expected revision ${write.expectedRevision}, got ${sourceRevision(before)}; reload before upgrading`);
+        }
+        return { path: write.path, before: before.toString("base64"), after: write.content.toString("base64") };
+    })) };
     if (moveInput) journal.move = { ...moveInput, remove: moveInput.remove ?? false, revision: await editTreeRevision(root, join(root, ...moveInput.from.split("/"))) };
+    for (const write of journal.writes)
+    {
+        if (write.path === ".harness-align/config.json") await backupConfigUpgrade(root, Buffer.from(write.before, "base64"));
+    }
     const recordPath = join(root, ".harness-align", ".edit-recovery.json");
     await ensureRegularSource(root, recordPath);
     const bytes = Buffer.from(`${JSON.stringify(journal)}\n`);
@@ -611,6 +624,55 @@ export async function loadWorkspace(rootPath: string): Promise<Workspace>
     const sourceRevisions = await readSourceRevisions(root);
     if (JSON.stringify(before) !== JSON.stringify(sourceRevisions)) throw new HalignError(`${root}/.harness-align: sources changed while loading; reload before editing`);
     return { config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents, skills, sourceRevisions };
+}
+
+/** Preserve the exact legacy config before any validated write can promote it to the current format. */
+async function backupConfigUpgrade(root: string, before: Buffer): Promise<string | undefined>
+{
+    if (parseConfigSource(before).upgradedText === undefined) return undefined;
+    const revision = sourceRevision(before);
+    const backup = join(root, ".harness-align", `.config-backup-v1-${revision}.json`);
+    await ensureRegularSource(root, backup);
+    const stats = await lstatIfExists(backup);
+    if (stats && (!stats.isFile() || !(await fs.readFile(backup)).equals(before)))
+    {
+        throw new HalignError(`${backup}: expected the original configuration backup; preserve this file before retrying the upgrade`);
+    }
+    if (!stats) await atomicWrite(backup, before);
+    return backup;
+}
+
+/** Upgrade a validated local workspace after recovery, retaining exact original bytes and refusing concurrent edits. */
+export async function upgradeWorkspaceConfig(rootPath: string): Promise<string | undefined>
+{
+    const root = resolve(rootPath);
+    await recoverSyncSources(root);
+    await recoverSourceEdits(root);
+    await recoverDeployment(root, root);
+    const relative = ".harness-align/config.json";
+    const path = await resolveManaged(root, relative, relative);
+    const before = await fs.readFile(path);
+    const parsed = parseConfigSource(before);
+    if (parsed.upgradedText === undefined) return undefined;
+    await loadWorkspace(root);
+    const revision = sourceRevision(before);
+    await assertSourceGuard(root, { path: relative, revision });
+    const backup = await backupConfigUpgrade(root, before);
+    await writeManagedBatch(root, [{ path: relative, content: Buffer.from(parsed.upgradedText), expectedRevision: revision }]);
+    return backup;
+}
+
+/** Upgrade only config bytes in a snapshot copy, leaving raw baselines and recovery evidence unchanged. */
+export function upgradeSyncConfig(snapshot: SyncSnapshot): SyncSnapshot
+{
+    const next = parseSyncSnapshot(snapshot);
+    const content = next.files["config.json"];
+    if (content !== undefined)
+    {
+        const parsed = parseConfigSource(Buffer.from(content, "base64"));
+        if (parsed.upgradedText !== undefined) next.files["config.json"] = Buffer.from(parsed.upgradedText).toString("base64");
+    }
+    return parseSyncSnapshot(next);
 }
 
 /** Materialize only snapshot-managed paths, preserving generated output and unrelated root files. */
@@ -807,7 +869,17 @@ export async function ensureUserWorkspace(userProfile = process.env.USERPROFILE)
 /** Atomically write an already validated config document. */
 async function writeConfig(root: string, config: Config): Promise<void>
 {
-    await writeManaged(root, ".harness-align/config.json", Buffer.from(`${JSON.stringify(configDocument(config), null, 2)}\n`, "utf8"));
+    const content = Buffer.from(`${JSON.stringify(configDocument(config), null, 2)}\n`, "utf8");
+    const path = await resolveManaged(root, ".harness-align/config.json", ".harness-align/config.json");
+    if (await lstatIfExists(path))
+    {
+        const before = await fs.readFile(path);
+        if (await backupConfigUpgrade(root, before))
+        {
+            return writeManagedBatch(root, [{ path: ".harness-align/config.json", content, expectedRevision: sourceRevision(before) }]);
+        }
+    }
+    await writeManaged(root, ".harness-align/config.json", content);
 }
 
 /** Validate sources and atomically write `config.json`. */

@@ -112,7 +112,10 @@
 
 ## 生成与写回
 
-- `.harness-align/config.json` 使用版本 `1`, 定义输出标题, 有序 Layer 选择, Harness 对象列表和可选 `skill_sources`. Harness 列表允许为空. 新建配置时仅保留默认候选中配置目录已存在且路径各级均为非链接目录的 Harness; 不重新筛选已有或迁移配置. 每个 Harness 声明 `name`, `config_path`, `agent_format`, `agent_extension`; TOML Harness 还必须声明 `instructions_field`. `config_path` 不能占用 `.agents/shared-rules`, `.agents/skills` 或 `.harness-align`.
+- `.harness-align/config.json` 当前格式为 `3`, 与应用版本独立; 格式覆盖配置源的结构和解释规则, 不兼容变化只递增, 不重置或复用历史编号. 引擎和 Shared 各自维护 `CONFIG_VERSION`, 必须保持一致; 其他持久化格式分别管理版本. 配置定义输出标题, 有序 Layer 选择, Harness 对象列表和可选 `skill_sources`. Harness 列表允许为空. 新建配置时仅保留默认候选中配置目录已存在且路径各级均为非链接目录的 Harness; 不重新筛选已有或迁移配置. 每个 Harness 声明 `name`, `config_path`, `agent_format`, `agent_extension`; TOML Harness 还必须声明 `instructions_field`. `config_path` 不能占用 `.agents/shared-rules`, `.agents/skills` 或 `.harness-align`.
+- 读取兼容当前 Layer v1, 纯内存转换为当前模型; 新建及写回只接受 v3. 历史 Profile v2 和未知格式拒绝自动转换, 不推测开发期缺失 `targets` 的旧语义. 不通过强制写入当前版本掩盖非法 payload.
+- `upgradeWorkspaceConfig` 在完整工作区校验后只升级原始配置对象的版本, 保留其他字段及省略状态; 写回前保留精确字节备份 `.config-backup-v1-<sha256>.json`, 并复用 `.edit-recovery.json` 和 revision 守卫. 备份不进入生成, 部署或同步. v3 保持原始字节, 升级不自动 Generate / Setup.
+- Main 将可信 `userData` 同步状态目录提供给 `WorkspaceService`, 不接受 Renderer 目录. 自动升级在恢复操作后执行; 有待确认上传或无法安全读取同步状态时延迟自动写回. `previewSync` 先按 raw snapshot 处理 pending, 再持久升级本机配置. 同步只转换候选副本, 保留 commit 对应的 raw remote, base, pending 和恢复记录; 合并排除版本转换单独产生的冲突, 预览仍显示并计数远端格式升级上传.
 - `skill_sources` 省略或 `[]` 表示无远端源; 校验后内存中的 `skillSources` 始终是数组; `configDocument` 仅在长度大于 `0` 时写出该键.
 - `.harness-align/rules/` 中的根 Rule 按 `(priority, repository_relative_path)` 排序, 再按 Harness `targets` 严格白名单过滤; `targets` 省略或为 `[]` 时不对任何 Harness 生效.
 - `.harness-align/layers/<layer>/<option>.md` 提供可选 Layer 内容; Layer Option 的 `targets` 使用相同的严格白名单语义. Layer 目录可以为空, 但加入 `config.json` 前必须至少存在一个选项. 生成时使用 `config.json` 中保存的选择, 或 GUI 中当前的 Layer 顺序与选项. Layer 允许空文件作为显式 no-op.

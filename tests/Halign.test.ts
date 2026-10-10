@@ -15,12 +15,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
-import { assertUpdateDraftsSaved, resolveWorkspaceItemFolder, setUpdateDraftState, withWorkspace, withWorkspaceForUpdate, workspaceService } from "../src/main/services/WorkspaceService.js";
+import {
+    assertUpdateDraftsSaved, resolveWorkspaceItemFolder, setUpdateDraftState, setWorkspaceSyncDirectory, withWorkspace, withWorkspaceForUpdate, workspaceService,
+} from "../src/main/services/WorkspaceService.js";
 import {
     defaultLayerOption, filterSetupChanges, harnessEffects, isSkillUpdateAvailable, matchesWorkspaceSource, moveLayerSelection,
     selectableRemoteSkillIds, setupExternalLabel, uniqueAgentPath, uniqueRulePath,
 } from "../src/renderer/src/lib/Utils.js";
 import type { ProjectSkill, RemoteSkill, SetupChange, SkillUpdate, Workspace, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
+import { CONFIG_VERSION as SHARED_CONFIG_VERSION } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount, type FormSnapshot, type Selection } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
 import { DiffText } from "../src/renderer/src/components/common/DiffText.js";
@@ -42,8 +45,8 @@ import {
     assertAppUpdateInstallable, assertReleaseVersion, beginAppUpdateCheck, beginAppUpdateDownload, environmentProxy, environmentProxyBypass,
     failAppUpdate, initialAppUpdateStatus, markAppUpdateAvailable, markAppUpdateCurrent, markAppUpdateDownloaded, unavailableAppUpdateStatus, updateAppUpdateProgress,
 } from "../src/main/services/AppUpdateState.js";
-import { loadConfig, validateConfig } from "../src/engine/Load.js";
-import { HalignError } from "../src/engine/Model.js";
+import { loadConfig, parseConfigSource, validateConfig } from "../src/engine/Load.js";
+import { CONFIG_VERSION, HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
 import { inspectHarnessRoots, previewSetup, recoverDeployment, reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
 import { assertSafeZipEntry, importUserSkills, listImportableUserSkills, listUserSkills, readSkillContent, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
@@ -51,11 +54,11 @@ import {
     addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
     loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkillSource,
     renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, saveSkillContent, updateHarness,
-    applySyncSources, recoverSourceEdits, recoverSyncSources, validateSyncSources,
+    applySyncSources, recoverSourceEdits, recoverSyncSources, upgradeSyncConfig, upgradeWorkspaceConfig, validateSyncSources,
 } from "../src/engine/Edit.js";
 
 const config = {
-    version: 1,
+    version: CONFIG_VERSION,
     name: "AGENTS",
     layers: [{ name: "soul", selected: "arona" }],
     harnesses: [
@@ -67,6 +70,217 @@ const config = {
 
 /** Harness allowlist shared by fixtures that should render everywhere. */
 const ALL_HARNESS_NAMES = config.harnesses.map((harness) => harness.name);
+
+test("configuration formats share the current contract and read Layer v1 without changing bytes or meaning", async () =>
+{
+    assert.equal(CONFIG_VERSION, 3);
+    assert.equal(SHARED_CONFIG_VERSION, CONFIG_VERSION);
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const legacy = { version: 1, layers: config.layers, harnesses: config.harnesses };
+        const original = Buffer.from(`${JSON.stringify(legacy)}\r\n`);
+        await writeFile(path, original);
+        await writeFile(join(root, ".harness-align/rules/base.md"), "---\npriority: 100\n---\n\n# Untargeted rule\n");
+        await writeFile(join(root, ".harness-align/layers/soul/arona.md"), "# Untargeted layer\n");
+        const loaded = await loadWorkspace(root);
+        assert.equal(loaded.config.version, 3);
+        assert.equal(loaded.config.name, "AGENTS");
+        assert.deepEqual(loaded.config.skillSources, []);
+        assert.deepEqual(loaded.rootRules[0]!.targets, []);
+        assert.deepEqual(loaded.layerOptions.soul![0]!.targets, []);
+        assert.equal(CONFIG_SCHEMA.safeParse(loaded.config).success, true);
+        assert.equal(CONFIG_SCHEMA.safeParse({ ...loaded.config, version: 1 }).success, false);
+        const outputs = await buildOutputs(root);
+        assert.doesNotMatch(outputs.get("codex/AGENTS.md")!.toString(), /Untargeted/u);
+        assert.equal(JSON.parse(outputs.get(".manifest.json")!.toString()).version, 1);
+        assert.deepEqual(await readFile(path), original);
+        const upgraded = JSON.parse(parseConfigSource(original).upgradedText!);
+        assert.deepEqual(upgraded, { ...legacy, version: 3 });
+    });
+});
+
+test("configuration upgrade preserves exact backups and unrelated sources, and current files stay byte-identical", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(`\uFEFF${JSON.stringify({ ...config, version: 1 })}\r\n`);
+        await writeFile(path, original);
+        await generate(root);
+        const before = await snapshot(join(root, ".harness-align"));
+        const backup = await upgradeWorkspaceConfig(root);
+        assert.ok(backup);
+        assert.deepEqual(await readFile(backup), original);
+        assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { ...config, version: 3 });
+        const after = await snapshot(join(root, ".harness-align"));
+        for (const [name, bytes] of before) if (name !== "config.json") assert.deepEqual(after.get(name), bytes);
+        assert.equal(after.has(".edit-recovery.json"), false);
+        const upgraded = await readFile(path);
+        assert.equal(await upgradeWorkspaceConfig(root), undefined);
+        assert.deepEqual(await readFile(path), upgraded);
+        assert.deepEqual(await readFile(backup), original);
+        assert.equal((await readSyncSnapshot(root)).files[backup.split(/[\\/]/u).at(-1)!], undefined);
+        const current = Buffer.from(`${JSON.stringify(config)}\r\n`);
+        await writeFile(path, current);
+        assert.equal(await upgradeWorkspaceConfig(root), undefined);
+        assert.deepEqual(await readFile(path), current);
+    });
+});
+
+test("configuration upgrade rejects invalid versions and incomplete sources before writing backups", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        for (const version of [0, -1, 1.5, "1", null, 2, 4, 99])
+        {
+            await writeFile(path, JSON.stringify({ ...config, version }));
+            const before = await snapshot(join(root, ".harness-align"));
+            await assert.rejects(upgradeWorkspaceConfig(root), version === 2 ? /legacy Profile format version 2/u
+                : typeof version === "number" && version > 3 ? /newer than supported version 3/u : /version must be integer 3/u);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+        }
+        const { version: omitted, ...missing } = config;
+        assert.equal(omitted, 3);
+        assert.throws(() => parseConfigSource(JSON.stringify(missing)), /version is required/u);
+        assert.throws(() => parseConfigSource(Buffer.from([0xff])), /invalid JSON or UTF-8/u);
+        assert.throws(() => parseConfigSource(JSON.stringify({ version: 2, profiles: [] })), /legacy Profile format/u);
+        assert.throws(() => parseConfigSource(JSON.stringify({ ...config, version: 1, profiles: [] })), /unknown field "profiles"/u);
+        await writeFile(path, JSON.stringify({ ...config, version: 1 }));
+        await writeFile(join(root, ".harness-align/rules/base.md"), "---\npriority: -1\n---\n\n# Invalid\n");
+        const before = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(upgradeWorkspaceConfig(root), /priority/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+    });
+});
+
+test("configuration upgrade rolls back a failed commit and preserves external edits before its guarded write", async (t) =>
+{
+    for (const external of [false, true]) await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(JSON.stringify({ ...config, version: 1 }));
+        const changed = Buffer.from(JSON.stringify({ ...config, version: 1, name: "External edit" }));
+        await writeFile(path, original);
+        const replace = fs.rename;
+        let journalWrites = 0;
+        const mocked = t.mock.method(fs, "rename", async (from: Parameters<typeof fs.rename>[0], to: Parameters<typeof fs.rename>[1]) =>
+        {
+            if (external && String(to).includes(".config-backup-v1-")) await writeFile(path, changed);
+            if (!external && String(to).endsWith(".edit-recovery.json") && ++journalWrites === 2) throw new Error("injected commit failure");
+            return replace(from, to);
+        });
+        try
+        {
+            await assert.rejects(upgradeWorkspaceConfig(root), external ? /changed before configuration upgrade/u : /injected commit failure/u);
+            assert.deepEqual(await readFile(path), external ? changed : original);
+            const backups = (await readdir(join(root, ".harness-align"))).filter((name) => name.startsWith(".config-backup-v1-"));
+            assert.equal(backups.length, 1);
+            assert.deepEqual(await readFile(join(root, ".harness-align", backups[0]!)), original);
+            await assert.rejects(readFile(join(root, ".harness-align/.edit-recovery.json")), /ENOENT/u);
+        }
+        finally { mocked.mock.restore(); }
+    });
+});
+
+test("configuration upgrade restores interrupted raw edits first and rejects linked backup paths", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const before = Buffer.from(JSON.stringify({ ...config, version: 1 }));
+        const after = Buffer.from(parseConfigSource(before).upgradedText!);
+        await writeFile(path, after);
+        await writeFile(join(root, ".harness-align/.edit-recovery.json"), JSON.stringify({ version: 1, phase: "applying", writes: [
+            { path: ".harness-align/config.json", before: before.toString("base64"), after: after.toString("base64") },
+        ] }));
+        const backup = await upgradeWorkspaceConfig(root);
+        assert.ok(backup);
+        assert.deepEqual(await readFile(backup), before);
+        assert.deepEqual(await readFile(path), after);
+        await unlink(backup);
+        await writeFile(path, before);
+        await writeFile(backup, "Unexpected backup contents");
+        await assert.rejects(upgradeWorkspaceConfig(root), /expected the original configuration backup/u);
+        assert.deepEqual(await readFile(path), before);
+        assert.equal(await readFile(backup, "utf8"), "Unexpected backup contents");
+        await unlink(backup);
+        const outside = join(root, "outside");
+        await mkdir(outside);
+        await symlink(outside, backup, "junction");
+        await assert.rejects(upgradeWorkspaceConfig(root), /symbolic link/u);
+        assert.deepEqual(await readFile(path), before);
+        assert.deepEqual(await readdir(outside), []);
+        await unlink(backup);
+    });
+});
+
+test("explicit config saves and cascaded updates retain the original legacy configuration", async () =>
+{
+    for (const cascade of [false, true]) await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(JSON.stringify({ ...config, version: 1 }));
+        await writeFile(path, original);
+        if (cascade) await updateHarness(root, "codex", { ...(await loadConfig(root)).harnesses[0]!, name: "Renamed" });
+        else await saveConfig(root, { ...await loadConfig(root), name: "Saved title" });
+        assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+        const backup = (await readdir(join(root, ".harness-align"))).find((name) => name.startsWith(".config-backup-v1-"));
+        assert.ok(backup);
+        assert.deepEqual(await readFile(join(root, ".harness-align", backup)), original);
+        await assert.rejects(readFile(join(root, ".harness-align/.edit-recovery.json")), /ENOENT/u);
+    });
+});
+
+test("workspace queue automatically upgrades supported sources and defers only persistence for unreadable sync state", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(JSON.stringify({ ...config, version: 1 }));
+        await writeFile(path, original);
+        const previousHome = process.env.USERPROFILE;
+        const state = join(root, "app-state");
+        try
+        {
+            process.env.USERPROFILE = root;
+            setWorkspaceSyncDirectory(state);
+            clearLogs();
+            await withWorkspace((home) => loadWorkspace(home));
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+            const notice = readLogs().entries.find((entry) => entry.title === "Configuration upgraded: 1 -> 3")!;
+            assert.ok(notice.details.includes(".config-backup-v1-"));
+            assert.equal(notice.details.includes(root), false);
+            const before = await snapshot(join(root, ".harness-align"));
+            const invalid = Object.assign({}, await loadConfig(root), { version: 99 });
+            await assert.rejects(saveConfig(root, invalid), /newer than supported version 3/u);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+            await mkdir(state);
+            await writeFile(join(state, "github-sync.json"), "invalid sync state");
+            clearLogs();
+            await withWorkspace((home) => loadWorkspace(home));
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+            assert.equal(readLogs().entries.some((entry) => entry.title === "Configuration upgrade deferred"), false);
+            const legacy = Buffer.from(JSON.stringify({ ...config, version: 1, name: "Another v1" }));
+            await writeFile(path, legacy);
+            clearLogs();
+            assert.equal((await withWorkspace((home) => loadWorkspace(home))).config.name, "Another v1");
+            assert.deepEqual(await readFile(path), legacy);
+            assert.ok(readLogs().entries.some((entry) => entry.title === "Configuration upgrade deferred" && entry.details.includes("could not be read")));
+            await writeFile(join(state, "github-sync.json"), JSON.stringify({ version: 1, connection: null, base: null, pending: null }));
+            await withWorkspace((home) => loadWorkspace(home));
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+        }
+        finally
+        {
+            setWorkspaceSyncDirectory();
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+            clearLogs();
+        }
+    });
+});
 
 test("deployment warning labels cover known reasons and preserve access to unknown details", () =>
 {
@@ -1355,6 +1569,174 @@ function createSyncRemote()
     return { request, publish, removeArchive, controls, rootEntries: () => trees.get(commits.get(head)!.tree.sha)! };
 }
 
+test("GitHub sync upgrades legacy candidates without mutating raw baselines or conflicting with remote config edits", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        await writeFile(path, JSON.stringify({ ...config, version: 1 }));
+        const legacy = await readSyncSnapshot(root);
+        const unchanged = structuredClone(legacy);
+        assert.equal(JSON.parse(Buffer.from(upgradeSyncConfig(legacy).files["config.json"]!, "base64").toString()).version, 3);
+        assert.deepEqual(legacy, unchanged);
+        const remote = createSyncRemote();
+        remote.publish(legacy);
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const statePath = join(state, "github-sync.json");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const first = await previewSync(root, state, input.token);
+            assert.match(first.notice, /remote configuration uses format 1/u);
+            assert.ok(first.changes.some((change) => change.key === "config.json" && change.direction === "upload"));
+            const saved = JSON.parse(await readFile(statePath, "utf8"));
+            saved.base = { connectionKey: "test/sync@main", head: first.head, snapshot: legacy, syncedAt: new Date().toISOString() };
+            await writeFile(statePath, JSON.stringify(saved));
+            await connectSync(state, input, "encrypted");
+            const cached = await previewSync(root, state, input.token);
+            assert.equal(cached.uploadCount, 1);
+            assert.deepEqual(JSON.parse(await readFile(statePath, "utf8")).base.snapshot, legacy);
+            assert.equal(remote.controls.patchCount, 0);
+            const changed = structuredClone(legacy);
+            changed.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 1, name: "Remote title" })).toString("base64");
+            remote.publish(changed);
+            const preview = await previewSync(root, state, input.token);
+            assert.ok(preview.changes.some((change) => change.key === "config.json" && change.direction === "download"));
+            assert.equal(preview.changes.some((change) => change.direction === "conflict"), false);
+            assert.equal(preview.uploadCount, 1);
+            assert.equal(preview.downloadCount, 1);
+            await applySync(root, state, input.token, { previewId: preview.id, mode: "merge", choices: {} });
+            assert.equal((await loadConfig(root)).name, "Remote title");
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+            assert.equal(JSON.parse(Buffer.from(JSON.parse(await readFile(statePath, "utf8")).base.snapshot.files["config.json"], "base64").toString()).version, 3);
+            assert.equal((await getSyncStatus(state, root)).localState, "current");
+            assert.equal(remote.controls.patchCount, 1);
+        }
+        finally { mocked.mock.restore(); }
+    });
+});
+
+test("GitHub remote adoption and config restoration persist format 3 and retain the raw local backup", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const source = await readSyncSnapshot(root);
+        source.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 1, name: "Legacy remote" })).toString("base64");
+        remote.publish(source);
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const first = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: first.id, mode: "remote", choices: {} });
+            assert.equal((await loadConfig(root)).name, "Legacy remote");
+            assert.equal(JSON.parse(await readFile(join(root, ".harness-align/config.json"), "utf8")).version, 3);
+            await saveConfig(root, { ...await loadConfig(root), name: "Local title" });
+            remote.publish(source);
+            const preview = await previewSync(root, state, input.token);
+            assert.ok(preview.changes.some((change) => change.key === "config.json" && change.direction === "upload"));
+            const before = await readSyncSnapshot(root);
+            const patches = remote.controls.patchCount;
+            await discardSync(root, state, input.token, { previewId: preview.id, key: "config.json" });
+            assert.equal((await loadConfig(root)).name, "Legacy remote");
+            assert.equal(JSON.parse(await readFile(join(root, ".harness-align/config.json"), "utf8")).version, 3);
+            assert.deepEqual(JSON.parse(await readFile(join(root, ".harness-align/.sync-backup.json"), "utf8")), before);
+            assert.equal(remote.controls.patchCount, patches);
+        }
+        finally { mocked.mock.restore(); }
+    });
+});
+
+test("workspace defers config persistence until raw legacy pending-upload recovery completes", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(JSON.stringify({ ...config, version: 1 }));
+        await writeFile(path, original);
+        const before = await readSyncSnapshot(root);
+        const accepted = structuredClone(before);
+        accepted.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 1, name: "Published legacy title" })).toString("base64");
+        const remote = createSyncRemote();
+        const parent = (await (await remote.request("https://api.github.com/repos/test/sync/git/ref/heads/main")).json()).object.sha as string;
+        remote.publish(accepted);
+        const head = (await (await remote.request("https://api.github.com/repos/test/sync/git/ref/heads/main")).json()).object.sha as string;
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        const previousHome = process.env.USERPROFILE;
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const saved = JSON.parse(await readFile(join(state, "github-sync.json"), "utf8"));
+            saved.pending = { connectionKey: "test/sync@main", head, parent, before, snapshot: accepted };
+            await writeFile(join(state, "github-sync.json"), JSON.stringify(saved));
+            process.env.USERPROFILE = root;
+            setWorkspaceSyncDirectory(state);
+            clearLogs();
+            const loaded = await withWorkspace((home) => loadWorkspace(home));
+            assert.equal(loaded.config.version, 3);
+            assert.deepEqual(await readFile(path), original);
+            assert.ok(readLogs().entries.some((entry) => entry.title === "Configuration upgrade deferred"));
+            const recovered = await withWorkspace((home) => previewSync(home, state, input.token));
+            assert.match(recovered.notice, /Recovered an earlier upload/u);
+            assert.equal((await getSyncStatus(state)).hasPendingUpload, false);
+            assert.equal((await loadConfig(root)).name, "Published legacy title");
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+            assert.equal(remote.controls.patchCount, 0);
+            const baseline = JSON.parse(await readFile(join(state, "github-sync.json"), "utf8")).base.snapshot;
+            assert.deepEqual(baseline, accepted);
+            assert.equal(recovered.uploadCount, 1);
+            await withWorkspace((home) => applySync(home, state, input.token, { previewId: recovered.id, mode: "merge", choices: {} }));
+            assert.equal(remote.controls.patchCount, 1);
+            const again = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: again.id, mode: "merge", choices: {} });
+            assert.equal(remote.controls.patchCount, 1);
+        }
+        finally
+        {
+            setWorkspaceSyncDirectory();
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+            mocked.mock.restore();
+            clearLogs();
+        }
+    });
+});
+
+test("GitHub sync rejects unsupported config versions retained in a baseline before writes", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        remote.publish(await readSyncSnapshot(root));
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            await connectSync(state, input, "encrypted");
+            const first = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: first.id, mode: "remote", choices: {} });
+            const path = join(state, "github-sync.json");
+            const saved = JSON.parse(await readFile(path, "utf8"));
+            saved.base.snapshot.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 4, future_field: true })).toString("base64");
+            await writeFile(path, JSON.stringify(saved));
+            await connectSync(state, input, "encrypted");
+            const before = await snapshot(join(root, ".harness-align"));
+            await assert.rejects(previewSync(root, state, input.token), /newer than supported version 3/u);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+            assert.equal(remote.controls.patchCount, 0);
+        }
+        finally { mocked.mock.restore(); }
+    });
+});
+
 test("sync snapshots preserve binary assets and empty layers while rejecting unsafe paths", async () =>
 {
     await withProject(async (root) =>
@@ -2540,7 +2922,7 @@ test("config and metadata validation reject unsafe input", async () =>
         ] }), "utf8");
         await assert.rejects(buildOutputs(root), /Windows reserved device name/u);
         await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, version: 2 }), "utf8");
-        await assert.rejects(buildOutputs(root), /version must be integer 1/u);
+        await assert.rejects(buildOutputs(root), /legacy Profile format version 2/u);
         await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, profiles: ["legacy"] }), "utf8");
         await assert.rejects(buildOutputs(root), /unknown field "profiles"/u);
         await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify({ ...config, harnesses: [{ ...config.harnesses[1], extra: true }] }), "utf8");
@@ -3080,14 +3462,14 @@ test("skill_sources config omit, write, unknown field, duplicates, version, and 
     {
         const loaded = await loadConfig(root);
         assert.deepEqual(loaded.skillSources, []);
-        assert.equal(loaded.version, 1);
+        assert.equal(loaded.version, CONFIG_VERSION);
         const withSources = await saveConfig(root, {
             ...loaded,
             skillSources: [{ owner: "acme", name: "skills", branch: "main" }],
         });
         assert.deepEqual(withSources.skillSources, [{ owner: "acme", name: "skills", branch: "main" }]);
         const written = JSON.parse(await readFile(join(root, ".harness-align", "config.json"), "utf8")) as { skill_sources?: unknown; version: number };
-        assert.equal(written.version, 1);
+        assert.equal(written.version, CONFIG_VERSION);
         assert.deepEqual(written.skill_sources, [{ owner: "acme", name: "skills", branch: "main" }]);
         await assert.rejects(Promise.resolve().then(() => validateConfig({
             ...config,
@@ -3100,7 +3482,7 @@ test("skill_sources config omit, write, unknown field, duplicates, version, and 
                 { owner: "Acme", name: "Skills", branch: "dev" },
             ],
         })), /owner\/name must be unique/u);
-        await assert.rejects(Promise.resolve().then(() => validateConfig({ ...config, version: 2 })), /version must be integer 1/u);
+        await assert.rejects(Promise.resolve().then(() => validateConfig({ ...config, version: 2 })), /legacy Profile format version 2/u);
         await assert.rejects(Promise.resolve().then(() => validateConfig({
             ...config,
             harnesses: [{ ...config.harnesses[0], config_path: ".agents/skills" }],
@@ -3597,7 +3979,8 @@ test("ensureUserWorkspace creates a default user config once", async () =>
     {
         const root = await ensureUserWorkspace(home);
         assert.equal(root, resolve(home));
-        const created = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string; harnesses: unknown[] };
+        const created = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { version: number; name: string; harnesses: unknown[] };
+        assert.equal(created.version, CONFIG_VERSION);
         assert.equal(created.name, "AGENTS");
         assert.deepEqual(created.harnesses, []);
         assert.equal(CONFIG_SCHEMA.safeParse(await loadConfig(home)).success, true);

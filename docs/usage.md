@@ -34,6 +34,8 @@
 
 应用更新默认使用 Windows 系统代理. 启动时如果设置了 `HTTP_PROXY` 或 `HTTPS_PROXY`, 更新请求优先使用该代理, 并遵守 `NO_PROXY`.
 
+应用版本与配置格式版本分别管理. 当前配置格式是 v3, 现行 Layer 格式 v1 会在完整校验后自动升级并保留原始配置备份. 待确认 GitHub 上传先恢复, 再升级; 升级或延迟原因显示在 Console, 不自动生成或部署. 兼容范围和回退方法见[配置版本与自动升级](configuration.md#配置版本与自动升级).
+
 ## 编辑和保存
 
 侧栏提供 Home, Rules, Layers, Agents 和 Skills, 底部是 Generated, Console 和 Settings. 窄窗口下侧栏会收起为图标. 文件列表可以折叠或调整宽度, Layers, Rules 和 Agents 的列表默认占 28%, 可在 20% 到 45% 之间调整. 在 Rules, Layers 和 Agents 中切换条目时, 右侧编辑区会保持滚动位置.

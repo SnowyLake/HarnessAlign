@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
     addHarness,
     addLayer,
@@ -27,9 +27,11 @@ import {
     saveSharedRule,
     saveSkillContent,
     updateHarness,
+    upgradeWorkspaceConfig,
 } from "../../engine/Edit.js";
 import { assertContained, ensureRegularSource, lstatIfExists } from "../../engine/FsSafe.js";
 import { generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
+import { loadConfigSource } from "../../engine/Load.js";
 import { HalignError, valueText } from "../../engine/Model.js";
 import { inspectHarnessRoots, previewSetup, reportSetup, setup } from "../../engine/Setup.js";
 import type { AppApi } from "../../shared/contracts/AppApi.js";
@@ -37,11 +39,21 @@ import { assertSkillName, importUserSkills, listImportableUserSkills, loadSkills
 import type { LayerSelection, WorkspaceItemTarget } from "../../shared/models/Workspace.js";
 import * as skillRemote from "./SkillRemoteService.js";
 import { appendLog } from "./ConsoleService.js";
+import { getSyncStatus } from "./GitHubSyncService.js";
 
 /** Tail of the single-user workspace queue, including reads that must see complete writes. */
 let workspaceQueue: Promise<unknown> = Promise.resolve();
 let hasUnsavedDrafts = true;
 let isUpdateExclusive = false;
+let syncStateDirectory: string | undefined;
+let upgradeDelayReported = false;
+
+/** Receive Main's trusted userData directory without exposing it through IPC or importing Electron. */
+export function setWorkspaceSyncDirectory(directory?: string): void
+{
+    syncStateDirectory = directory === undefined ? undefined : resolve(directory);
+    upgradeDelayReported = false;
+}
 
 /** Only the latest Main-owned deployment preview may be applied. */
 let setupReview: { id: string; root: string; revision: string; selection: LayerSelection[] | undefined } | undefined;
@@ -90,6 +102,37 @@ export function withWorkspace<T>(work: (root: string) => Promise<T>, operation =
         try
         {
             const root = await ensureUserWorkspace();
+            if ((await loadConfigSource(root)).upgradedText !== undefined)
+            {
+                let upgradeDelay = "";
+                if (syncStateDirectory)
+                {
+                    try
+                    {
+                        if ((await getSyncStatus(syncStateDirectory)).hasPendingUpload) upgradeDelay = "Recover the pending GitHub upload before automatically upgrading configuration format 1 to 3.";
+                    }
+                    catch (error)
+                    {
+                        upgradeDelay = "Automatic upgrade deferred: GitHub recovery state could not be read. Preserve it and repair it before retrying.\n"
+                            + (error instanceof Error ? error.message : String(error));
+                    }
+                }
+                if (upgradeDelay)
+                {
+                    if (!upgradeDelayReported) appendLog({ level: "info", title: "Configuration upgrade deferred", details: upgradeDelay });
+                    upgradeDelayReported = true;
+                }
+                else
+                {
+                    const backup = await upgradeWorkspaceConfig(root);
+                    if (backup) appendLog({
+                        level: "success", title: "Configuration upgraded: 1 -> 3",
+                        details: `The configuration was validated and upgraded. Original configuration: ${basename(backup)}\nGenerate and Setup remain manual.`,
+                    });
+                    upgradeDelayReported = false;
+                }
+            }
+            else upgradeDelayReported = false;
             initializedAt = performance.now();
             const result = await work(root);
             outcome = "completed";
