@@ -1161,6 +1161,42 @@ test("application downloads drain workspace work, exclude new writes, protect ne
     });
 });
 
+test("configuration loading failures leave application updates available and preserve the original configuration", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const previousHome = process.env.USERPROFILE;
+        const previousState = useAppStore.getState();
+        process.env.USERPROFILE = root;
+        try
+        {
+            previousState.setWorkspace(undefined);
+            const path = join(root, ".harness-align/config.json");
+            for (const original of [Buffer.from(`${JSON.stringify({ ...config, version: CONFIG_VERSION + 1 }, null, 4)}\r\n`), Buffer.from("invalid JSON\r\n")])
+            {
+                await writeFile(path, original);
+                await assert.rejects(workspaceService.load(), /config\.json: (?:version \d+ is newer than supported version|invalid JSON or UTF-8)/u);
+                assert.equal(useAppStore.getState().workspace, undefined);
+                setUpdateDraftState(workspaceChangeCount(useAppStore.getState()) > 0);
+                let didUpdate = false;
+                await withWorkspaceForUpdate(async () => { assertUpdateDraftsSaved(); didUpdate = true; });
+                assert.equal(didUpdate, true);
+                assert.deepEqual(await readFile(path), original);
+            }
+            previousState.setEditorDraft("config", { selection: { kind: "config" }, baseline: { name: ["AGENTS"] }, current: { name: ["Unsaved"] } });
+            setUpdateDraftState(workspaceChangeCount(useAppStore.getState()) > 0);
+            await assert.rejects(withWorkspaceForUpdate(async () => assert.fail("An unsaved draft must still block installation")), /save all/u);
+        }
+        finally
+        {
+            useAppStore.setState(previousState);
+            setUpdateDraftState(true);
+            if (previousHome === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousHome;
+        }
+    });
+});
+
 test("opened source guards reject external edits, deletion, creation races, and rename conflicts without losing drafts", async () =>
 {
     await withProject(async (root) =>

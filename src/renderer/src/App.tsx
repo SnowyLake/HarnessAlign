@@ -76,7 +76,7 @@ export function App()
         {
             if (!isCancelled)
             {
-                setLoadError("See Console for details.");
+                setLoadError("See Console for details. Open Settings to check for application updates.");
                 showError(error, "Workspace load failed");
             }
         });
@@ -103,7 +103,7 @@ export function App()
         const reportDrafts = (): void =>
         {
             const state = useAppStore.getState();
-            void window.appApi.appUpdate.setDraftState(!state.workspace || workspaceChangeCount(state) > 0).catch((error: unknown) => showError(error, "Draft protection unavailable"));
+            void window.appApi.appUpdate.setDraftState(workspaceChangeCount(state) > 0).catch((error: unknown) => showError(error, "Draft protection unavailable"));
         };
         reportDrafts();
         return useAppStore.subscribe((state, previous) =>
@@ -249,10 +249,13 @@ export function App()
             <AntApp className="app-root">
                 <FeedbackBridge />
                 <AppShell onSave={handleSave} onReload={handleReload} onGenerate={handleGenerate} onSetup={handleSetup}>
-                    {workspace || view === "console" ? page : (
+                    {workspace || view === "console" || view === "settings" ? page : (
                         <div className="workspace-load-state">
                             {loadError ? <Result status="error" title="Unable to load workspace" subTitle={loadError}
-                                extra={<Button type="primary" onClick={() => setLoadAttempt((current) => current + 1)}>Retry</Button>} /> : <Spin size="large" aria-label="Loading workspace" />}
+                                extra={[
+                                    <Button key="settings" type="primary" onClick={() => useAppStore.getState().setView("settings")}>Open Settings</Button>,
+                                    <Button key="retry" disabled={isBusy} onClick={() => setLoadAttempt((current) => current + 1)}>Retry</Button>,
+                                ]} /> : <Spin size="large" aria-label="Loading workspace" />}
                         </div>
                     )}
                 </AppShell>

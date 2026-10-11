@@ -82,7 +82,7 @@ export function AppUpdateCard()
     function handleDownload(): void
     {
         const state = useAppStore.getState();
-        if (!state.workspace || state.isBusy || workspaceChangeCount(state) > 0 || isBusy.current) return;
+        if (state.isBusy || workspaceChangeCount(state) > 0 || isBusy.current) return;
         state.setIsBusy(true);
         runUpdateAction("download", async () =>
         {
