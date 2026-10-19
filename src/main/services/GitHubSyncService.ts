@@ -2,6 +2,7 @@
  * Manual GitHub snapshot sync for Main, using GitHub's Git Data API rather than a local Git clone.
  * Electron credential encryption stays at the IPC boundary so this service can be tested without Electron.
  * Preview diffs against the persisted baseline and content-addressed blobs; it does not re-download an unchanged commit.
+ * The startup check reuses that diff and does not recover, upgrade, publish, or retain an applicable preview.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -15,7 +16,8 @@ import {
     assertSyncPath, emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash,
     SYNC_MAX_ENTRIES, SYNC_MAX_FILE_BYTES, SYNC_MAX_TOTAL_BYTES, type SyncMerge, type SyncSnapshot,
 } from "../../engine/Sync.js";
-import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncDiscardInput, SyncFileView, SyncPreview, SyncResult, SyncStatus } from "../../shared/models/Sync.js";
+import { syncPreviewHasWork } from "../../shared/models/Sync.js";
+import type { SyncApplyInput, SyncCheckResult, SyncConnectionInput, SyncDetail, SyncDiscardInput, SyncFileView, SyncPreview, SyncResult, SyncStatus } from "../../shared/models/Sync.js";
 import { fetchRemote, githubRateLimitHint, readResponseBytes } from "./RemoteFetch.js";
 import { hydrateSyncSkills } from "./SkillRemoteService.js";
 
@@ -472,11 +474,9 @@ async function recoverUpload(root: string, directory: string, state: SyncState, 
         : "The earlier upload is not on the current branch. Review changes before retrying.";
 }
 
-/** Prepare a fresh preview without publishing changes or overwriting unresolved local edits. */
-export async function previewSync(root: string, directory: string, token: string): Promise<SyncPreview>
+/** Read the remote archive shared by interactive preview and the startup check. */
+async function readSyncRemote(state: SyncState, token: string): Promise<RemoteSnapshot>
 {
-    retainedPreview = undefined;
-    const state = await readState(directory);
     if (!state.connection) throw new HalignError("GitHub Sync is not connected");
     const key = connectionKey(state.connection);
     const known = state.base?.connectionKey === key ? state.base : null;
@@ -484,23 +484,57 @@ export async function previewSync(root: string, directory: string, token: string
     await checkRepository(state.connection, token);
     const remote = await readRemote(state.connection, token, known ?? undefined);
     if (known && remote.empty) throw new HalignError(`${REMOTE_DIRECTORY}: the previously synced archive is missing; restore it before syncing`);
+    return remote;
+}
+
+/** True when the remote config.json bytes are still format 1 and would upload as format 3. */
+function remoteConfigNeedsUpgrade(remote: RemoteSnapshot): boolean
+{
+    return remote.snapshot.files["config.json"] !== upgradeSyncConfig(remote.snapshot).files["config.json"];
+}
+
+/** Build the review counts from snapshots already loaded. Does not recover, upgrade, or retain the preview. */
+function buildSyncPreview(state: SyncState, remote: RemoteSnapshot, local: SyncSnapshot, notice: string): { preview: SyncPreview; base: NonNullable<SyncState["base"]> | null }
+{
+    const base = state.connection && state.base?.connectionKey === connectionKey(state.connection) ? state.base : null;
+    const merged = mergeConfigSnapshots(portableSyncSnapshot(base?.snapshot ?? emptySyncSnapshot()), portableSyncSnapshot(local), portableSyncSnapshot(remote.snapshot));
+    const remoteUpgrade = remoteConfigNeedsUpgrade(remote);
+    const configChange = merged.changes.find((change) => change.key === "config.json");
+    return {
+        base, preview: {
+            id: randomUUID(), head: remote.head, firstSync: base === null, remoteEmpty: remote.empty,
+            uploadCount: merged.changes.filter((change) => change.direction === "upload" || change.direction === "conflict").length
+                + (remoteUpgrade && configChange?.direction === "download" ? 1 : 0),
+            downloadCount: merged.changes.filter((change) => change.direction === "download" || change.direction === "conflict").length,
+            changes: merged.changes, notice,
+        },
+    };
+}
+
+/** Compare a connected archive without recovering uploads, upgrading config, or keeping an applicable preview. */
+export async function checkSync(root: string, directory: string, token: string): Promise<SyncCheckResult>
+{
+    const state = await readState(directory);
+    if (!state.connection) return { pending: false };
+    const remote = await readSyncRemote(state, token);
+    const { preview } = buildSyncPreview(state, remote, await readSyncSnapshot(root), "");
+    return { pending: syncPreviewHasWork(preview, state.pending !== null) };
+}
+
+/** Prepare a fresh preview without publishing changes or overwriting unresolved local edits. */
+export async function previewSync(root: string, directory: string, token: string): Promise<SyncPreview>
+{
+    retainedPreview = undefined;
+    const state = await readState(directory);
+    if (!state.connection) throw new HalignError("GitHub Sync is not connected");
+    const remote = await readSyncRemote(state, token);
     const recoveryNotice = await recoverUpload(root, directory, state, token, remote);
     const backup = await upgradeWorkspaceConfig(root);
     const local = await readSyncSnapshot(root);
-    const base = state.base?.connectionKey === key ? state.base : null;
-    const merged = mergeConfigSnapshots(portableSyncSnapshot(base?.snapshot ?? emptySyncSnapshot()), portableSyncSnapshot(local), portableSyncSnapshot(remote.snapshot));
-    const remoteUpgrade = remote.snapshot.files["config.json"] !== upgradeSyncConfig(remote.snapshot).files["config.json"];
     const notice = [recoveryNotice, backup ? "Local configuration upgraded from format 1 to 3; the original configuration backup was retained." : "",
-        remoteUpgrade ? "The remote configuration uses format 1. Applying sync upgrades it to format 3; older applications cannot read format 3." : ""].filter(Boolean).join("\n");
-    const configChange = merged.changes.find((change) => change.key === "config.json");
-    const preview: SyncPreview = {
-        id: randomUUID(), head: remote.head, firstSync: base === null, remoteEmpty: remote.empty,
-        uploadCount: merged.changes.filter((change) => change.direction === "upload" || change.direction === "conflict").length
-            + (remoteUpgrade && configChange?.direction === "download" ? 1 : 0),
-        downloadCount: merged.changes.filter((change) => change.direction === "download" || change.direction === "conflict").length,
-        changes: merged.changes, notice,
-    };
-    retainedPreview = { public: preview, connectionKey: key, baseHead: base?.head ?? null, local, remote, base: base?.snapshot ?? emptySyncSnapshot() };
+        remoteConfigNeedsUpgrade(remote) ? "The remote configuration uses format 1. Applying sync upgrades it to format 3; older applications cannot read format 3." : ""].filter(Boolean).join("\n");
+    const { preview, base } = buildSyncPreview(state, remote, local, notice);
+    retainedPreview = { public: preview, connectionKey: connectionKey(state.connection), baseHead: base?.head ?? null, local, remote, base: base?.snapshot ?? emptySyncSnapshot() };
     return preview;
 }
 

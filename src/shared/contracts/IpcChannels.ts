@@ -14,6 +14,7 @@ export const IPC_CHANNELS = {
     syncConnect: "sync:connect",
     syncDisconnect: "sync:disconnect",
     syncPreview: "sync:preview",
+    syncCheck: "sync:check",
     syncInspect: "sync:inspect",
     syncApply: "sync:apply",
     syncDiscard: "sync:discard",

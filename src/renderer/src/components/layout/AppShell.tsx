@@ -64,6 +64,7 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
     const isBusy = useAppStore((state) => state.isBusy);
     const hasAppUpdate = useAppStore((state) => state.appUpdateStatus?.availableVersion != null);
     const hasSkillUpdate = useAppStore((state) => state.skillUpdates.some(isSkillUpdateAvailable));
+    const hasSyncDrift = useAppStore((state) => state.hasSyncDrift);
     const hasSourceDrafts = useAppStore((state) => Object.keys(state.editorDrafts).length > 0);
     const setSyncDialog = useAppStore((state) => state.setSyncDialog);
     const dirtyCount = useAppStore(workspaceChangeCount);
@@ -146,8 +147,9 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
                                 aria-label="Reload local files" onClick={handleReload}>Reload</Button>
                     </Tooltip>
                     <Tooltip title={dirtyCount > 0 ? "Save all changes before syncing" : "Preview and sync configuration"}>
-                        <Button icon={<SyncOutlined />} disabled={!workspace || isBusy || dirtyCount > 0}
-                                aria-label="Sync configuration" onClick={() => setSyncDialog("review")}>Sync</Button>
+                        <Button icon={<Badge dot={hasSyncDrift} title="Configuration sync available" styles={{ root: { lineHeight: 1 } }}><SyncOutlined style={{ lineHeight: 1 }} /></Badge>}
+                                disabled={!workspace || isBusy || dirtyCount > 0}
+                                aria-label={hasSyncDrift ? "Sync configuration, changes available" : "Sync configuration"} onClick={() => setSyncDialog("review")}>Sync</Button>
                     </Tooltip>
                     <Space.Compact>
                         <Tooltip title={hasSourceDrafts ? "Save source changes before generating" : "Generate"}>
