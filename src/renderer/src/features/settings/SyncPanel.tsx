@@ -5,6 +5,7 @@ import { Alert, Button, Card, Col, Form, Input, Modal, Row, Select, Space, Spin,
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import type { SyncApplyInput, SyncChange, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileView } from "@shared/models/Sync";
+import { noteSyncPreview } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 import { showError, showSuccess } from "@/components/common/Feedback";
 import { DiffText } from "@/components/common/DiffText";
@@ -130,6 +131,7 @@ export function SyncPanel()
         if (workspaceChangeCount(useAppStore.getState())) throw new Error("Save or discard workspace drafts before syncing.");
         setPreview(undefined);
         const next = await window.appApi.sync.preview();
+        noteSyncPreview(next);
         if (next.notice) await reloadSyncedWorkspace();
         setPreview(next);
         setChoices({});
@@ -145,6 +147,7 @@ export function SyncPanel()
         {
             const result = await window.appApi.sync.apply({ previewId: preview.id, mode, choices });
             showSuccess("GitHub Sync complete", result.message);
+            noteSyncPreview(undefined);
             await reloadSyncedWorkspace();
             setStatus(result.status);
             setDialog(undefined);
@@ -192,6 +195,7 @@ export function SyncPanel()
                                     <Button danger disabled={isBusy} onClick={() => void run(async () =>
                                     {
                                         setStatus(await window.appApi.sync.disconnect());
+                                        noteSyncPreview(undefined);
                                         showSuccess("GitHub disconnected");
                                         setPreview(undefined);
                                         setIsConnecting(false);
@@ -206,6 +210,7 @@ export function SyncPanel()
                                 try
                                 {
                                     setStatus(await window.appApi.sync.connect(values));
+                                    noteSyncPreview(undefined);
                                     showSuccess("GitHub connected", `${values.owner}/${values.repository} (${values.branch})`);
                                     setPreview(undefined);
                                     setIsConnecting(false);

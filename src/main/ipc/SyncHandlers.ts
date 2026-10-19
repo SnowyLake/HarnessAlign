@@ -8,7 +8,7 @@ import { z } from "zod";
 import { HalignError } from "../../engine/Model.js";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import { SYNC_APPLY_SCHEMA, SYNC_CONNECTION_SCHEMA, SYNC_DISCARD_SCHEMA } from "../../shared/models/Schemas.js";
-import { applySync, connectSync, discardSync, disconnectSync, getSyncEncryptedToken, getSyncStatus, inspectSync, previewSync } from "../services/GitHubSyncService.js";
+import { applySync, checkSync, connectSync, discardSync, disconnectSync, getSyncEncryptedToken, getSyncStatus, inspectSync, previewSync } from "../services/GitHubSyncService.js";
 import { withWorkspace } from "../services/WorkspaceService.js";
 import { runIpc } from "../utils/Ipc.js";
 
@@ -54,6 +54,12 @@ export function registerSyncHandlers(): void
             const directory = app.getPath("userData");
             return previewSync(root, directory, await syncToken(directory));
         }, "Preview sync");
+    }));
+    ipcMain.handle(IPC_CHANNELS.syncCheck, (event) => runIpc(event, async () =>
+    {
+        const directory = app.getPath("userData");
+        if (!(await getSyncStatus(directory)).connected) return { pending: false };
+        return withWorkspace(async (root) => checkSync(root, directory, await syncToken(directory)), "Check sync");
     }));
     ipcMain.handle(IPC_CHANNELS.syncInspect, (event, previewId: unknown, key: unknown) => runIpc(event, async () =>
     {

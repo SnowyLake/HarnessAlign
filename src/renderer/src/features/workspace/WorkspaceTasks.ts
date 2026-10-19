@@ -6,6 +6,7 @@
 import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
 import { fileName, hasLayerChanges, isSkillUpdateAvailable, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type FormSnapshot, type Selection } from "@/stores/AppStore";
+import { syncPreviewHasWork, type SyncPreview } from "@shared/models/Sync";
 import type { AgentFormat, Config, HarnessConfig, RuleInput, Workspace } from "@shared/models/Workspace";
 
 /** Result of persisting one editor snapshot through the existing workspace API. */
@@ -331,6 +332,38 @@ export async function reloadWorkspace(): Promise<void>
 {
     const workspace = await window.appApi.workspace.load();
     useAppStore.getState().resetWorkspace(workspace);
+}
+
+/** Record the latest reviewed preview, or clear the Sync dot when the preview is gone. */
+export function noteSyncPreview(preview: SyncPreview | undefined): void
+{
+    useAppStore.getState().setHasSyncDrift(preview ? syncPreviewHasWork(preview) : false);
+}
+
+/** Check GitHub sync once at startup without uploading, applying, or locking Renderer editing. */
+export async function checkWorkspaceSync(isAutomatic = false): Promise<void>
+{
+    const state = useAppStore.getState();
+    const status = state.syncStatus;
+    if (!state.workspace || !status || state.isCheckingSync || (isAutomatic && (state.hasStartedSyncCheck || state.isBusy))) return;
+    state.setIsCheckingSync(true);
+    try
+    {
+        if (!status.connected) return;
+        const result = await window.appApi.sync.check();
+        const current = useAppStore.getState();
+        const pending = current.syncStatus?.connected === true && result.pending;
+        current.setHasSyncDrift(pending);
+        if (!isAutomatic || current.syncStatus?.connected !== true) return;
+        const title = pending ? "Sync changes available" : "Sync is up to date";
+        writeLog(pending ? "info" : "success", title, "Read-only check. Open Sync to review or apply changes.");
+    }
+    catch (error)
+    {
+        useAppStore.getState().setHasSyncDrift(false);
+        if (isAutomatic) writeLog("error", "Sync check failed", errorMessage(error));
+    }
+    finally { state.setIsCheckingSync(false); }
 }
 
 /** Check Skills once at startup or on demand without locking Renderer editing. */

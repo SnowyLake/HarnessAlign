@@ -35,7 +35,7 @@ export function WorkflowStatus()
                              </div>)}</div>
                          </details> : null}
                      </section>)}
-                     {sync?.connected ? <div className="workflow-footnote">Remote checked when opening Sync</div> : null}
+                     {sync?.connected ? <div className="workflow-footnote">Remote is checked once after startup and again when opening Sync</div> : null}
                  </div>}>
             <button type="button" className="workflow-status" aria-label="Workspace status details" aria-expanded={open}>
                 <span className="workflow-stages" role="status">

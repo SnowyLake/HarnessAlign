@@ -83,3 +83,15 @@ export interface SyncResult
     status: SyncStatus;
     message: string;
 }
+
+/** Read-only startup result. `pending` means the Sync button should show work is waiting. */
+export interface SyncCheckResult
+{
+    pending: boolean;
+}
+
+/** Report whether a preview still needs review, initialization, or upload recovery. */
+export function syncPreviewHasWork(preview: Pick<SyncPreview, "remoteEmpty" | "uploadCount" | "downloadCount">, hasPendingUpload = false): boolean
+{
+    return hasPendingUpload || preview.remoteEmpty || preview.uploadCount > 0 || preview.downloadCount > 0;
+}
