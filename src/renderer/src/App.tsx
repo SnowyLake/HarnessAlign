@@ -10,7 +10,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { ConsolePage } from "@/features/console/ConsolePage";
 import { applyTheme, SettingsPage } from "@/features/settings/SettingsPage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
-import { checkWorkspaceSkillUpdates, refreshWorkspace, reloadWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
+import { checkWorkspaceSkillUpdates, checkWorkspaceSync, refreshWorkspace, reloadWorkspace, runCommand, saveWorkspaceChanges } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 import type { AppUpdateStatus } from "@shared/models/AppUpdate";
 
@@ -23,6 +23,8 @@ export function App()
     const workspaceRevision = useAppStore((state) => state.workspaceRevision);
     const isBusy = useAppStore((state) => state.isBusy);
     const hasStartedSkillUpdateCheck = useAppStore((state) => state.hasStartedSkillUpdateCheck);
+    const hasStartedSyncCheck = useAppStore((state) => state.hasStartedSyncCheck);
+    const syncStatus = useAppStore((state) => state.syncStatus);
     const hasWorkspace = Boolean(workspace);
     const [loadError, setLoadError] = useState<string>();
     const [loadAttempt, setLoadAttempt] = useState(0);
@@ -96,6 +98,11 @@ export function App()
     {
         if (hasWorkspace && !isBusy && !hasStartedSkillUpdateCheck) void checkWorkspaceSkillUpdates(true);
     }, [hasWorkspace, isBusy, hasStartedSkillUpdateCheck]);
+
+    useEffect(() =>
+    {
+        if (hasWorkspace && syncStatus && !isBusy && !hasStartedSyncCheck) void checkWorkspaceSync(true);
+    }, [hasWorkspace, syncStatus, isBusy, hasStartedSyncCheck]);
 
     useEffect(() =>
     {

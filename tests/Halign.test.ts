@@ -34,7 +34,7 @@ import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
 import type { AppUpdateStatus } from "../src/shared/models/AppUpdate.js";
 import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent, readSkillUpdatePreview } from "../src/main/services/SkillRemoteService.js";
-import { applySync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
+import { applySync, checkSync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
 import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA } from "../src/shared/models/Schemas.js";
@@ -631,6 +631,64 @@ test("sync status compares saved portable content with the baseline without netw
         assert.equal(unavailable.connected, true);
         assert.equal(unavailable.localState, "unknown");
         assert.ok(unavailable.localError);
+    });
+});
+
+test("startup sync check reuses the preview diff and does not publish, recover, or rewrite sources", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const remote = createSyncRemote();
+        const mocked = t.mock.method(globalThis, "fetch", remote.request);
+        const state = join(root, "app-state");
+        const statePath = join(state, "github-sync.json");
+        const input = { owner: "test", repository: "sync", branch: "main", token: "test-token" };
+        try
+        {
+            assert.equal((await checkSync(root, state, input.token)).pending, false);
+            assert.equal(mocked.mock.callCount(), 0);
+            await connectSync(state, input, "encrypted");
+            const connectedRequests = mocked.mock.callCount();
+            const beforeWorkspace = await snapshot(join(root, ".harness-align"));
+            const beforeState = await readFile(statePath);
+            assert.equal((await checkSync(root, state, input.token)).pending, true);
+            assert.ok(mocked.mock.callCount() > connectedRequests);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), beforeWorkspace);
+            assert.deepEqual(await readFile(statePath), beforeState);
+            assert.equal(remote.controls.patchCount, 0);
+
+            const preview = await previewSync(root, state, input.token);
+            await applySync(root, state, input.token, { previewId: preview.id, mode: "initialize", choices: {} });
+            const syncedWorkspace = await snapshot(join(root, ".harness-align"));
+            const syncedState = await readFile(statePath);
+            const syncedRequests = mocked.mock.callCount();
+            assert.equal((await checkSync(root, state, input.token)).pending, false);
+            assert.ok(mocked.mock.callCount() > syncedRequests);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), syncedWorkspace);
+            assert.deepEqual(await readFile(statePath), syncedState);
+
+            const rulePath = join(root, ".harness-align/rules/base.md");
+            await writeFile(rulePath, Buffer.concat([await readFile(rulePath), Buffer.from("\nChanged\n")]));
+            const editedWorkspace = await snapshot(join(root, ".harness-align"));
+            const editedState = await readFile(statePath);
+            assert.equal((await checkSync(root, state, input.token)).pending, true);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), editedWorkspace);
+            assert.deepEqual(await readFile(statePath), editedState);
+            assert.equal(remote.controls.patchCount, 1);
+
+            const saved = JSON.parse(editedState.toString("utf8")) as { base: { connectionKey: string; head: string; snapshot: unknown } };
+            const withPending = { ...JSON.parse(editedState.toString("utf8")), pending: {
+                connectionKey: saved.base.connectionKey, head: saved.base.head, parent: saved.base.head, before: saved.base.snapshot, snapshot: saved.base.snapshot,
+            } };
+            await writeFile(statePath, JSON.stringify(withPending));
+            const pendingState = await readFile(statePath);
+            const pendingWorkspace = await snapshot(join(root, ".harness-align"));
+            assert.equal((await checkSync(root, state, input.token)).pending, true);
+            assert.deepEqual(await readFile(statePath), pendingState);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), pendingWorkspace);
+            assert.equal(remote.controls.patchCount, 1);
+        }
+        finally { mocked.mock.restore(); }
     });
 });
 
@@ -2728,12 +2786,15 @@ async function loadRendererTasks(): Promise<{
     persistEditorSnapshot(workspace: Workspace, selection: Selection, snapshot: FormSnapshot): Promise<unknown>;
     persistLayerRename(from: string, to: string): Promise<void>;
     checkWorkspaceSkillUpdates(isAutomatic?: boolean): Promise<void>;
+    checkWorkspaceSync(isAutomatic?: boolean): Promise<void>;
+    noteSyncPreview(preview: import("../src/shared/models/Sync.js").SyncPreview | undefined): void;
 }>
 {
     const source = new URL("../../src/renderer/src/features/workspace/WorkspaceTasks.ts", import.meta.url).href;
     const dependencies = new Map([
         ["@/lib/Utils", new URL("../src/renderer/src/lib/Utils.js", import.meta.url).href],
         ["@/stores/AppStore", new URL("../src/renderer/src/stores/AppStore.js", import.meta.url).href],
+        ["@shared/models/Sync", new URL("../src/shared/models/Sync.js", import.meta.url).href],
         ["@/components/common/Feedback", "data:text/javascript,export function showError(){};export function showSuccess(){};export function writeLog(){}"],
     ]);
     const hooks = registerHooks({ resolve: (specifier, context, nextResolve) =>
@@ -4971,6 +5032,75 @@ test("Skill checks run once at startup and retain only actionable results for un
             if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
             else Reflect.deleteProperty(globalThis, "window");
         }
+    });
+});
+
+test("startup sync check runs once after status is known and clears the dot when a later preview is clean", async () =>
+{
+    await withProject(async (root) =>
+    {
+    const initial = useAppStore.getState();
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const disconnected = { connected: false, owner: "", repository: "", branch: "", lastSyncedAt: null, hasPendingUpload: false };
+    const connected = { ...disconnected, connected: true, owner: "test", repository: "sync", branch: "main" };
+    const loaded = await loadWorkspace(root);
+    const workspace: Workspace = { ...loaded, generatedFiles: [], generationStatus: { state: "missing", changes: [] }, deploymentStatus: { state: "pending", changes: [] }, harnessRoots: [] };
+    try
+    {
+        let checkCalls = 0;
+        let pending = true;
+        let checkError: Error | undefined;
+        Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { sync: {
+            check: () =>
+            {
+                checkCalls += 1;
+                if (checkError) return Promise.reject(checkError);
+                return Promise.resolve({ pending });
+            },
+        } } } });
+        useAppStore.setState({ workspace, isBusy: true, hasStartedSyncCheck: false, isCheckingSync: false, hasSyncDrift: false, syncStatus: undefined });
+        const tasks = await loadRendererTasks();
+        await tasks.checkWorkspaceSync(true);
+        assert.equal(checkCalls, 0);
+        useAppStore.setState({ isBusy: false, syncStatus: disconnected });
+        await tasks.checkWorkspaceSync(true);
+        assert.equal(checkCalls, 0);
+        assert.equal(useAppStore.getState().hasSyncDrift, false);
+        assert.equal(useAppStore.getState().hasStartedSyncCheck, true);
+
+        useAppStore.setState({ hasStartedSyncCheck: false, isCheckingSync: false, syncStatus: connected, hasSyncDrift: false });
+        const startup = tasks.checkWorkspaceSync(true);
+        assert.equal(useAppStore.getState().isCheckingSync, true);
+        assert.equal(useAppStore.getState().isBusy, false);
+        await tasks.checkWorkspaceSync(true);
+        await startup;
+        assert.equal(checkCalls, 1);
+        assert.equal(useAppStore.getState().hasSyncDrift, true);
+        await tasks.checkWorkspaceSync(true);
+        assert.equal(checkCalls, 1);
+
+        const clean = { id: "preview", head: "a".repeat(40), firstSync: false, remoteEmpty: false, uploadCount: 0, downloadCount: 0, changes: [], notice: "" };
+        tasks.noteSyncPreview(clean);
+        assert.equal(useAppStore.getState().hasSyncDrift, false);
+        tasks.noteSyncPreview({ ...clean, uploadCount: 1, remoteEmpty: true });
+        assert.equal(useAppStore.getState().hasSyncDrift, true);
+        tasks.noteSyncPreview(undefined);
+        assert.equal(useAppStore.getState().hasSyncDrift, false);
+
+        useAppStore.setState({ hasStartedSyncCheck: false, isCheckingSync: false, syncStatus: connected, hasSyncDrift: true });
+        checkError = new Error("HTTP 401");
+        await tasks.checkWorkspaceSync(true);
+        assert.equal(checkCalls, 2);
+        assert.equal(useAppStore.getState().hasSyncDrift, false);
+        assert.equal(useAppStore.getState().isCheckingSync, false);
+        assert.equal(useAppStore.getState().hasStartedSyncCheck, true);
+    }
+    finally
+    {
+        useAppStore.setState(initial, true);
+        if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+        else Reflect.deleteProperty(globalThis, "window");
+    }
     });
 });
 

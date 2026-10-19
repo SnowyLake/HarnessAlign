@@ -6,7 +6,7 @@
 import type { AppUpdateStatus } from "../models/AppUpdate.js";
 import type { AppSettings } from "../models/AppSettings.js";
 import type { LogChange, LogInput, LogSnapshot } from "../models/Console.js";
-import type { SyncApplyInput, SyncConnectionInput, SyncDetail, SyncDiscardInput, SyncPreview, SyncResult, SyncStatus } from "../models/Sync.js";
+import type { SyncApplyInput, SyncCheckResult, SyncConnectionInput, SyncDetail, SyncDiscardInput, SyncPreview, SyncResult, SyncStatus } from "../models/Sync.js";
 import type {
     Agent,
     Config,
@@ -39,6 +39,7 @@ export interface AppApi
         connect(input: SyncConnectionInput): Promise<SyncStatus>;
         disconnect(): Promise<SyncStatus>;
         preview(): Promise<SyncPreview>;
+        check(): Promise<SyncCheckResult>;
         inspect(previewId: string, key: string): Promise<SyncDetail>;
         apply(input: SyncApplyInput): Promise<SyncResult>;
         discard(input: SyncDiscardInput): Promise<SyncResult>;

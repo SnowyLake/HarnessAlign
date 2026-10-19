@@ -215,6 +215,9 @@ interface AppState
     skillUpdates: SkillUpdate[];
     isCheckingSkillUpdates: boolean;
     hasStartedSkillUpdateCheck: boolean;
+    isCheckingSync: boolean;
+    hasStartedSyncCheck: boolean;
+    hasSyncDrift: boolean;
     syncDialog: "review" | "connection" | undefined;
     selection: Selection;
     layerSelection: LayerSelection[];
@@ -233,6 +236,8 @@ interface AppState
     setAppUpdateStatus: (status: AppUpdateStatus) => void;
     setSkillUpdates: (updates: SkillUpdate[], checkedWorkspace?: Workspace) => void;
     setIsCheckingSkillUpdates: (isChecking: boolean) => void;
+    setIsCheckingSync: (isChecking: boolean) => void;
+    setHasSyncDrift: (pending: boolean) => void;
     setSyncDialog: (dialog: "review" | "connection" | undefined) => void;
     setSelection: (selection: Selection) => void;
     setLayerSelection: (selection: LayerSelection[]) => void;
@@ -264,6 +269,9 @@ export const useAppStore = create<AppState>((set) => ({
     skillUpdates: [],
     isCheckingSkillUpdates: false,
     hasStartedSkillUpdateCheck: false,
+    isCheckingSync: false,
+    hasStartedSyncCheck: false,
+    hasSyncDrift: false,
     syncDialog: undefined,
     selection: { kind: "config" },
     layerSelection: [],
@@ -333,6 +341,11 @@ export const useAppStore = create<AppState>((set) => ({
         isCheckingSkillUpdates,
         hasStartedSkillUpdateCheck: state.hasStartedSkillUpdateCheck || isCheckingSkillUpdates,
     })),
+    setIsCheckingSync: (isCheckingSync) => set((state) => ({
+        isCheckingSync,
+        hasStartedSyncCheck: state.hasStartedSyncCheck || isCheckingSync,
+    })),
+    setHasSyncDrift: (hasSyncDrift) => set({ hasSyncDrift }),
     setSyncDialog: (syncDialog) => set({ syncDialog }),
     setEditorDraft: (key, draft) => set((state) =>
     {

@@ -49,7 +49,7 @@
 - Edits 显示 Saved 或未保存数量, 包括全部编辑草稿和 Layer 选择. 有未保存内容时, 下游显示 Save first, 保存后再判断是否需要 Generate, Setup 或 Sync.
 - Generated 的 Current 表示输出与已保存源一致; Generate needed 表示需要重新生成.
 - Setup 对比实际部署目标, 包括 Shared Rules 和 Skills. Deploy needed 表示需要部署, Review changes 表示存在外部修改或额外路径, Skipped targets 表示部分 Harness 目录缺失. 没有 Skills 时跳过 Skills 不算待办. Setup 会重新生成, 可以直接完成生成和部署.
-- Sync 的 Locally synced 仅表示本地内容与上次同步基线一致; Sync needed 表示本地有待同步修改. 远端只在打开 Sync 时检查, 最新预览中的待处理改动或冲突也会显示在顶部. Not connected 表示尚未启用可选的 GitHub 同步.
+- Sync 的 Locally synced 仅表示本地内容与上次同步基线一致; Sync needed 表示本地有待同步修改. 工作区加载成功且已经连接 GitHub 时, 应用在后台只读检查一次远端差异, 不把界面锁成忙碌, 并与其他工作区操作共用队列. 有待上传, 待下载, 待初始化或待恢复的内容时, 顶部 Sync 按钮显示红点. 未连接时不访问网络. 检查失败只记在 Console, 不显示红点. 点击 Sync 仍打开原来的预览, 最新预览中的待处理改动或冲突也会显示在顶部状态. 成功同步, 或这次预览已经没有待处理内容时, 红点消失. Not connected 表示尚未启用可选的 GitHub 同步.
 
 状态在加载及应用内操作后更新, 外部修改后使用 Reload 重新检查. 检查失败显示 Error 或 Check needed, 不视为已完成. 窄窗口会把状态区放到工具栏第二行.
 
@@ -155,7 +155,7 @@ Rules, Agents 与 Skills 使用统一的紧凑搜索栏, 搜索在左, 筛选在
 
 ## 查看日志与排查问题
 
-Console 保留保存, 生成, 部署等操作结果和完整错误信息. 启动完成, 操作开始, 主题切换和已经显示在界面中的列表或同步预览不再重复记录; Skills 发现完成仅记录数量.
+Console 保留保存, 生成, 部署等操作结果和完整错误信息. 启动完成, 操作开始, 主题切换和已经显示在界面中的列表或同步预览不再重复记录; Skills 发现完成仅记录数量. 启动时的 Skills 更新检查和只读同步检查各记一次结果, 失败也记在 Console.
 
 Console 的 `Load timing`, `Save Rule timing`, `Discover Skills timing` 等记录分别列出 Queue 排队, Initialize 初始化和操作耗时, 失败操作也保留计时. Skills 下载另列压缩字节数和耗时, 解压另列文件数和耗时, 缓存命中会显示复用记录. 排队很长时先查看前一操作; 下载很长时检查网络, 解压很长时检查仓库大小和文件数. 这些指标只保留在本次会话中.
 
