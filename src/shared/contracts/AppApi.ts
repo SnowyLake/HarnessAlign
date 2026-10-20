@@ -16,6 +16,7 @@ import type {
     RemoteSkill,
     RuleInput,
     SkillUpdate,
+    SkillUpdateFilePreview,
     SkillUpdatePreview,
     UserSkill,
     Workspace,
@@ -88,6 +89,7 @@ export interface AppApi
         installSkills(ids: string[]): Promise<string>;
         checkSkillUpdates(): Promise<SkillUpdate[]>;
         readSkillUpdatePreview(previewId: string): Promise<SkillUpdatePreview>;
+        readSkillUpdateFile(previewId: string, path: string): Promise<SkillUpdateFilePreview>;
         applySkillUpdates(previewIds: string[]): Promise<string>;
         readSkillContent(id: string): Promise<string>;
         saveSkillContent(id: string, content: string, expectedContent: string): Promise<void>;
