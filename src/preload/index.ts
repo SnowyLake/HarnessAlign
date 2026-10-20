@@ -98,6 +98,7 @@ const appApi: AppApi = {
         installSkills: (ids) => ipcRenderer.invoke(IPC_CHANNELS.workspaceInstallSkills, ids),
         checkSkillUpdates: () => ipcRenderer.invoke(IPC_CHANNELS.workspaceCheckSkillUpdates),
         readSkillUpdatePreview: (previewId) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSkillUpdatePreview, previewId),
+        readSkillUpdateFile: (previewId, path) => ipcRenderer.invoke(IPC_CHANNELS.workspaceReadSkillUpdateFile, previewId, path),
         applySkillUpdates: (previewIds) => ipcRenderer.invoke(IPC_CHANNELS.workspaceApplySkillUpdates, previewIds),
         readSkillContent: (id) => ipcRenderer.invoke(IPC_CHANNELS.workspaceReadSkillContent, id),
         saveSkillContent: (id, content, expectedContent) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSaveSkillContent, id, content, expectedContent),

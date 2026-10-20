@@ -170,6 +170,11 @@ export function registerWorkspaceHandlers(): void
         return workspaceService.readSkillUpdatePreview(z.uuid().parse(previewId));
     }));
 
+    ipcMain.handle(IPC_CHANNELS.workspaceReadSkillUpdateFile, (event, previewId: unknown, path: unknown) => runIpc(event, async () =>
+    {
+        return workspaceService.readSkillUpdateFile(z.uuid().parse(previewId), z.string().min(1).max(4096).parse(path));
+    }));
+
     ipcMain.handle(IPC_CHANNELS.workspaceReadSkillContent, (event, id: unknown) => runIpc(event, async () =>
     {
         return workspaceService.readSkillContent(z.string().parse(id));

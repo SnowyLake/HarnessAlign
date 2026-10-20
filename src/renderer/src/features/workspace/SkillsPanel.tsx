@@ -17,13 +17,13 @@ import {
     UndoOutlined,
     WarningOutlined,
 } from "@ant-design/icons";
-import type { ProjectSkill, RemoteSkill, SkillOrigin, SkillUpdatePreview, UserSkill, Workspace } from "@shared/models/Workspace";
+import type { ProjectSkill, RemoteSkill, SkillFilePreview, SkillOrigin, SkillUpdateFilePreview, SkillUpdatePreview, UserSkill, Workspace } from "@shared/models/Workspace";
 import { Alert, Avatar, Button, Card, Checkbox, Col, Drawer, Dropdown, Empty, Flex, Form, Input, Listy, Modal, Row, Segmented, Select, Space, Splitter, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { showError, showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
 import { DiffText } from "@/components/common/DiffText";
-import { diffLines } from "@/lib/TextDiff";
+import { diffLines, type DiffLine } from "@/lib/TextDiff";
 import { checkWorkspaceSkillUpdates, persistEditorSnapshot, refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { TreeButton } from "@/features/workspace/WorkspaceTree";
 import { isSkillUpdateAvailable, selectableRemoteSkillIds } from "@/lib/Utils";
@@ -407,6 +407,48 @@ function DiscoveredSkillPane({ skill, isInstalled, canInstall, isBusy, onInstall
     );
 }
 
+/** Render one side of a Skill file comparison, including binary, absent, and empty files. */
+function SkillFileContent({ label, value, lines }: { label: string; value: SkillFilePreview | null; lines: DiffLine[] | undefined })
+{
+    return <Card size="small" title={label}>
+        {!value ? <Typography.Text type="secondary">Absent / deleted</Typography.Text>
+            : value.text === null ? <Typography.Text>Binary file ({value.bytes.toLocaleString()} bytes)</Typography.Text>
+            : value.text === "" ? <Typography.Text type="secondary">(empty file)</Typography.Text>
+            : <DiffText lines={lines ?? value.text.split("\n").map((text) => ({ text, kind: "same" }))} label={`${label} file differences`} />}
+    </Card>;
+}
+
+/** Load a single requested file and ignore responses after the comparison is closed. */
+function SkillUpdateFileDialog({ previewId, id, path, onClose }: { previewId: string; id: string; path: string; onClose: () => void })
+{
+    const [file, setFile] = useState<SkillUpdateFilePreview>();
+    const [error, setError] = useState<string>();
+    useEffect(() =>
+    {
+        let cancelled = false;
+        void window.appApi.workspace.readSkillUpdateFile(previewId, path).then((result) =>
+        {
+            if (!cancelled) setFile(result);
+        }).catch((reason: unknown) =>
+        {
+            if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+        });
+        return () => { cancelled = true; };
+    }, [previewId, path]);
+    const diff = file && file.oldFile?.text !== null && file.newFile?.text !== null ? diffLines(file.oldFile?.text ?? null, file.newFile?.text ?? null) : undefined;
+    return <Modal open title={`Compare: ${id}/${path}`} width={1000} centered loading={!file && !error}
+        styles={{ body: { maxHeight: "65vh", overflowY: "auto" } }} footer={<Button onClick={onClose}>Back to file list</Button>} onCancel={onClose}>
+        {error ? <Alert type="error" title="File preview failed" description={error} showIcon /> : file ? <Space orientation="vertical" style={{ width: "100%" }}>
+            <Row gutter={[12, 12]}>
+                <Col xs={24} md={12}><SkillFileContent label="Installed" value={file.oldFile} lines={diff?.local} /></Col>
+                <Col xs={24} md={12}><SkillFileContent label="Reviewed" value={file.newFile} lines={diff?.remote} /></Col>
+            </Row>
+            {file.oldFile?.truncated || file.newFile?.truncated || diff?.limited
+                ? <Alert type="info" title="Text preview is bounded; applying updates replaces the entire Skill." /> : null}
+        </Space> : null}
+    </Modal>;
+}
+
 /** Render the complete Ant Design Skills management page. */
 export function SkillsPanel()
 {
@@ -422,6 +464,7 @@ export function SkillsPanel()
     const setUpdates = useAppStore((state) => state.setSkillUpdates);
     const isCheckingSkillUpdates = useAppStore((state) => state.isCheckingSkillUpdates);
     const [updateDetails, setUpdateDetails] = useState<SkillUpdatePreview[]>([]);
+    const [updateFile, setUpdateFile] = useState<{ previewId: string; id: string; path: string }>();
     const [userSkills, setUserSkills] = useState<UserSkill[]>([]);
     const [selectedRemoteIdentity, setSelectedRemoteIdentity] = useState<string>();
     const [selectedImport, setSelectedImport] = useState<string[]>([]);
@@ -438,6 +481,7 @@ export function SkillsPanel()
         setHasDiscovered(false);
         setSelectedRemoteIdentity(undefined);
         setUpdateDetails([]);
+        setUpdateFile(undefined);
     }, [sourceKey]);
 
     useEffect(() =>
@@ -514,6 +558,7 @@ export function SkillsPanel()
     const handleApplyUpdates = (ids: string[]): void =>
     {
         if (ids.length === 0) return;
+        setUpdateFile(undefined);
         void runCommand(async () =>
         {
             const previewIds = ids.map((id) => updates.find((update) => update.id === id)?.previewId);
@@ -674,24 +719,24 @@ export function SkillsPanel()
                 </Splitter.Panel>
             </Splitter>
 
-            <Modal open={updateDetails.length > 0} title="Review Skill updates" width={1000} okText="Apply reviewed versions" confirmLoading={isBusy}
-                onOk={handleConfirmUpdates} onCancel={() => setUpdateDetails([])} destroyOnHidden>
+            <Modal open={updateDetails.length > 0} title="Review Skill updates" width={1000} centered okText="Apply reviewed versions" confirmLoading={isBusy}
+                styles={{ body: { maxHeight: "60vh", overflowY: "auto" } }}
+                onOk={handleConfirmUpdates} onCancel={() => { setUpdateDetails([]); setUpdateFile(undefined); }} destroyOnHidden>
                 <Space orientation="vertical" style={{ width: "100%" }}>
-                    {updateDetails.map((detail) =>
-                    {
-                        const diff = diffLines(detail.oldText, detail.newText);
-                        return <Card key={detail.previewId} title={detail.id} size="small" style={{ width: "100%" }}>
+                    {updateDetails.map((detail) => <Card key={detail.previewId} title={detail.id} size="small" style={{ width: "100%" }}>
                             <Typography.Paragraph>Commit: <Typography.Text code>{detail.oldCommit ?? "Legacy source (no pinned commit)"}</Typography.Text> → <Typography.Text code>{detail.newCommit}</Typography.Text></Typography.Paragraph>
-                            <Table size="small" rowKey="path" dataSource={detail.files} pagination={{ pageSize: 8, showSizeChanger: false }} columns={[{ title: "File", dataIndex: "path" }, { title: "Change", dataIndex: "status" }]} />
-                            <Row gutter={[12, 12]}>
-                                <Col xs={24} md={12}><Typography.Text strong>Installed SKILL.md</Typography.Text><DiffText lines={diff.local} label="Installed SKILL.md differences" /></Col>
-                                <Col xs={24} md={12}><Typography.Text strong>Reviewed SKILL.md</Typography.Text><DiffText lines={diff.remote} label="Reviewed SKILL.md differences" /></Col>
-                            </Row>
-                            {detail.truncated || diff.limited ? <Alert type="info" title="Text preview is bounded; file changes and the selected commit apply to the entire Skill." /> : null}
-                        </Card>;
-                    })}
+                            <Table size="small" rowKey="path" dataSource={detail.files.filter((file) => file.status !== "unchanged")}
+                                pagination={{ pageSize: 8, showSizeChanger: false, hideOnSinglePage: true }} columns={[
+                                    { title: "File", dataIndex: "path", render: (path: string) => <Button type="link" size="small"
+                                        style={{ height: "auto", padding: 0, whiteSpace: "normal", overflowWrap: "anywhere", textAlign: "left" }}
+                                        onClick={() => setUpdateFile({ previewId: detail.previewId, id: detail.id, path })}>{path}</Button> },
+                                    { title: "Change", dataIndex: "status", width: 120 },
+                                ]} />
+                        </Card>)}
                 </Space>
             </Modal>
+            {updateFile && updateDetails.some((detail) => detail.previewId === updateFile.previewId) ? <SkillUpdateFileDialog
+                key={`${updateFile.previewId}:${updateFile.path}`} {...updateFile} onClose={() => setUpdateFile(undefined)} /> : null}
 
             <Modal
                 open={isRegistrationOpen}

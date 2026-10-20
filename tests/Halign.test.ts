@@ -33,7 +33,7 @@ import { appendLog, clearLogs, logMainError, readLogs, redactedLogText, subscrib
 import { LOG_INPUT_SCHEMA } from "../src/shared/models/Schemas.js";
 import type { LogChange } from "../src/shared/models/Console.js";
 import type { AppUpdateStatus } from "../src/shared/models/AppUpdate.js";
-import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent, readSkillUpdatePreview } from "../src/main/services/SkillRemoteService.js";
+import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent, readSkillUpdateFile, readSkillUpdatePreview } from "../src/main/services/SkillRemoteService.js";
 import { applySync, checkSync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
@@ -347,13 +347,17 @@ test("GitHub rate-limit hints use validated retry headers and distinguish permis
     assert.match(unsafe, /wait 60s/u);
 });
 
-test("Skill update review shows old/new commits, all file changes and bounded Markdown without writing", async (t) =>
+test("Skill update review lists changes and reads bounded per-file comparisons without writing", async (t) =>
 {
     await withProject(async (root) =>
     {
         const { zipSync } = await import("fflate");
-        const old = zipSync({ "repo/demo/SKILL.md": Buffer.from("# Old\n"), "repo/demo/deleted.md": Buffer.from("Removed"), "repo/demo/same.md": Buffer.from("Same") });
-        const next = zipSync({ "repo/demo/SKILL.md": Buffer.from(`# New\n${"x".repeat(17_000)}`), "repo/demo/added.md": Buffer.from("Added"), "repo/demo/same.md": Buffer.from("Same") });
+        const largeText = `${"x".repeat(2 * 1024 * 1024 - 1)}中`;
+        const old = zipSync({ "repo/demo/SKILL.md": Buffer.from("# Old\n"), "repo/demo/deleted.md": Buffer.from("Removed"), "repo/demo/same.md": Buffer.from("Same"),
+            "repo/demo/scripts/run.ts": Buffer.from("old script"), "repo/demo/binary.dat": Buffer.from([0, 1, 2]), "repo/demo/large.txt": Buffer.from(largeText) });
+        const next = zipSync({ "repo/demo/SKILL.md": Buffer.from(`# New\n${"x".repeat(17_000)}`), "repo/demo/added.md": Buffer.from("Added"), "repo/demo/same.md": Buffer.from("Same"),
+            "repo/demo/scripts/run.ts": Buffer.from("new script"), "repo/demo/binary.dat": Buffer.from([0xff]), "repo/demo/empty.txt": Buffer.alloc(0),
+            "repo/demo/large.txt": Buffer.from(`${largeText}\nnew`) });
         let branch = "d".repeat(40);
         t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) => String(input).includes("/commits/") ? Response.json({ sha: branch }) : new Response(Buffer.from(String(input).includes("d".repeat(40)) ? old : next)));
         await addSkillSource(root, { url: "https://github.com/update-preview/repo" });
@@ -365,13 +369,38 @@ test("Skill update review shows old/new commits, all file changes and bounded Ma
         const detail = await readSkillUpdatePreview(root, review.previewId!);
         assert.equal(detail.oldCommit, "d".repeat(40));
         assert.equal(detail.newCommit, "e".repeat(40));
-        assert.deepEqual(detail.files.map(({ path, status }) => [path, status]), [["SKILL.md", "modified"], ["added.md", "added"], ["deleted.md", "deleted"], ["same.md", "unchanged"]]);
-        assert.equal(detail.oldText, "# Old\n");
-        assert.equal(detail.newText.length, 16_000);
-        assert.equal(detail.truncated, true);
+        assert.deepEqual(detail.files.map(({ path, status }) => [path, status]), [["SKILL.md", "modified"], ["added.md", "added"], ["binary.dat", "modified"],
+            ["deleted.md", "deleted"], ["empty.txt", "added"], ["large.txt", "modified"], ["same.md", "unchanged"], ["scripts/run.ts", "modified"]]);
+        const markdown = await readSkillUpdateFile(root, review.previewId!, "SKILL.md");
+        assert.equal(markdown.oldFile?.text, "# Old\n");
+        assert.equal(markdown.newFile?.text?.length, 16_000);
+        assert.equal(markdown.newFile?.truncated, true);
+        const script = await readSkillUpdateFile(root, review.previewId!, "scripts/run.ts");
+        assert.equal(script.oldFile?.text, "old script");
+        assert.equal(script.newFile?.text, "new script");
+        const added = await readSkillUpdateFile(root, review.previewId!, "added.md");
+        assert.equal(added.oldFile, null);
+        assert.equal(added.newFile?.text, "Added");
+        const deleted = await readSkillUpdateFile(root, review.previewId!, "deleted.md");
+        assert.equal(deleted.oldFile?.text, "Removed");
+        assert.equal(deleted.newFile, null);
+        const binary = await readSkillUpdateFile(root, review.previewId!, "binary.dat");
+        assert.deepEqual(binary.oldFile, { bytes: 3, text: null, truncated: false });
+        assert.deepEqual(binary.newFile, { bytes: 1, text: null, truncated: false });
+        assert.deepEqual((await readSkillUpdateFile(root, review.previewId!, "empty.txt")).newFile, { bytes: 0, text: "", truncated: false });
+        const large = await readSkillUpdateFile(root, review.previewId!, "large.txt");
+        assert.equal(large.oldFile?.text?.length, 16_000);
+        assert.equal(large.newFile?.text?.length, 16_000);
+        assert.equal(large.oldFile?.truncated, true);
+        assert.equal(large.newFile?.bytes, Buffer.byteLength(`${largeText}\nnew`));
+        for (const path of ["../config.json", "/SKILL.md", "scripts\\run.ts", "missing.md", ".hidden"])
+        {
+            await assert.rejects(readSkillUpdateFile(root, review.previewId!, path), /unsafe|relative|does not exist/u);
+        }
         assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
         await discoverSkills(root);
         await assert.rejects(readSkillUpdatePreview(root, review.previewId!), /preview expired/u);
+        await assert.rejects(readSkillUpdateFile(root, review.previewId!, "SKILL.md"), /preview expired/u);
     });
 });
 
@@ -720,7 +749,9 @@ test("Skills from one update check can be reviewed and applied individually with
         await readSkillUpdatePreview(root, a);
         await applySkillUpdates(root, [a]);
         await assert.rejects(readSkillUpdatePreview(root, a), /expired/u);
+        await assert.rejects(readSkillUpdateFile(root, a, "SKILL.md"), /expired/u);
         assert.equal((await readSkillUpdatePreview(root, b)).newCommit, reviewedCommit);
+        assert.equal((await readSkillUpdateFile(root, b, "SKILL.md")).newFile?.text, "# B reviewed\n");
         await applySkillUpdates(root, [b]);
         assert.equal(requests, checkedRequests);
         assert.equal(await readSkillContent(root, "b"), "# B reviewed\n");

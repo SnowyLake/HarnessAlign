@@ -267,6 +267,9 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     /** Inspect only the fixed remote version retained by the current update review. */
     readSkillUpdatePreview: (previewId) => withWorkspace((root) => skillRemote.readSkillUpdatePreview(root, previewId)),
 
+    /** Read one file from the installed Skill and its fixed update version. */
+    readSkillUpdateFile: (previewId, path) => withWorkspace((root) => skillRemote.readSkillUpdateFile(root, previewId, path)),
+
     /** Apply remote updates for selected installed skills. */
     applySkillUpdates: (previewIds) => withWorkspace((root) => skillRemote.applySkillUpdates(root, previewIds), "Apply Skill updates"),
 

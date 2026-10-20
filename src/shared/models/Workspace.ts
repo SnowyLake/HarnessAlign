@@ -83,7 +83,7 @@ export interface SkillUpdate
     error?: string;
 }
 
-/** Fixed-version update review with bounded Markdown text and file classifications. */
+/** Fixed-version update review with file classifications. */
 export interface SkillUpdatePreview
 {
     previewId: string;
@@ -91,9 +91,22 @@ export interface SkillUpdatePreview
     oldCommit: string | null;
     newCommit: string;
     files: Array<{ path: string; status: "added" | "modified" | "deleted" | "unchanged" }>;
-    oldText: string;
-    newText: string;
+}
+
+/** Bounded text or binary metadata for one side of a Skill file comparison. */
+export interface SkillFilePreview
+{
+    bytes: number;
+    text: string | null;
     truncated: boolean;
+}
+
+/** Installed and reviewed versions of one file, with null for an absent side. */
+export interface SkillUpdateFilePreview
+{
+    path: string;
+    oldFile: SkillFilePreview | null;
+    newFile: SkillFilePreview | null;
 }
 
 /** Skill discovered under the user profile skills directory. */
