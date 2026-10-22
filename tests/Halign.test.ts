@@ -3161,7 +3161,8 @@ test("root rules, ordered Layer selection, targets, Markdown, and renderers are 
         assert.ok(String(toml.developer_instructions).includes("Read evidence.\n"));
         assert.equal(toml.temperature, 0.25);
         assert.deepEqual(toml.tags, ["audit", "safe"]);
-        assert.deepEqual(toml.limits, { requests: 3 });
+        // parse() in smol-toml 1.9 returns null-prototype tables. Compare the values.
+        assert.deepEqual(JSON.parse(JSON.stringify(toml.limits)), { requests: 3 });
         const yaml = parseYaml(output(first, "cursor/agents/explorer.md").split("---\n")[1] ?? "");
         assert.equal(yaml.readonly, true);
         assert.equal(yaml.custom_number, 42);
