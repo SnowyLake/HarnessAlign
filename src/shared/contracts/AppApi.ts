@@ -79,6 +79,10 @@ export interface AppApi
         addHarness(harness: HarnessConfig): Promise<Config>;
         removeHarness(name: string): Promise<void>;
         updateHarness(from: string, harness: HarnessConfig): Promise<Config>;
+        addHarnessFile(harness: string): Promise<string | null>;
+        saveHarnessFile(harness: string, path: string, content: string, guard: SourceGuard): Promise<void>;
+        removeHarnessFile(harness: string, path: string): Promise<void>;
+        adoptHarnessFile(harness: string, path: string, guard?: SourceGuard): Promise<void>;
         openHarnessRoot(name: string): Promise<void>;
         openItemFolder(target: WorkspaceItemTarget): Promise<void>;
         addSkillSource(input: { url: string; branch?: string }): Promise<Config>;

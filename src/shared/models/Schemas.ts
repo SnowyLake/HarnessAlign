@@ -87,6 +87,26 @@ export const AGENT_SCHEMA = z.strictObject({
     harnesses: z.record(z.string(), z.record(z.string(), z.unknown())),
 });
 
+/** Request a native file picker for one saved harness without accepting a renderer-selected path. */
+export const ADD_HARNESS_FILE_SCHEMA = z.strictObject({
+    harness: z.string().min(1),
+});
+
+/** Replace one existing harness file with exact editor text. */
+export const SAVE_HARNESS_FILE_SCHEMA = z.strictObject({
+    harness: z.string().min(1),
+    path: z.string().min(1),
+    content: z.string().max(8 * 1024 * 1024),
+    guard: SOURCE_GUARD_SCHEMA,
+});
+
+/** Replace a harness file source from its target, with the opened revision when the editor has one. */
+export const ADOPT_HARNESS_FILE_SCHEMA = z.strictObject({
+    harness: z.string().min(1),
+    path: z.string().min(1),
+    guard: SOURCE_GUARD_SCHEMA.optional(),
+});
+
 /** Ordered layer choices for Generate and Setup. */
 export const LAYER_SELECTION_SCHEMA = z.array(z.strictObject({ name: z.string(), option: z.string() })).optional();
 

@@ -58,7 +58,7 @@
 
 生产路径始终是同一套引擎:
 
-1. `Load.ts` 读取并验证 `.harness-align/config.json`, 根 Rule, Layer, Agent, shared-rules. Skills 元数据由 `Skills.ts` 加载, 不进入 `AGENTS.md` 渲染.
+1. `Load.ts` 读取并验证 `.harness-align/config.json`, 根 Rule, Layer, Agent, shared-rules 和 `harness-files`. Skills 元数据由 `Skills.ts` 加载. `harness-files` 与 Skills 都不进入 `AGENTS.md` 渲染.
 2. `Render.ts` 按 Harness 渲染 `AGENTS.md` 与 TOML / YAML Subagent. `buildOutputs` 是只读的内存 `OutputMap`.
 3. `generate` 预检后原子写入 `.harness-align/generated/`, 删除旧 manifest 记录且本次不再生成的文件, 最后提交新 manifest.
 4. `setup` 先 `generate`, 再把结果部署到已存在的用户 Harness 根目录, 以及 `%USERPROFILE%\.agents\shared-rules` 与项目 Skills.
@@ -77,11 +77,11 @@
 - `src/engine/` 是唯一生产引擎, 按数据流拆分, 不拆分 package:
   - `Model.ts` — 领域类型, 常量, `HalignError`, 收窄 helper
   - `FsSafe.ts` — 路径 containment, reparse 拒绝, UTF-8 读, 原子写入
-  - `Load.ts` — 配置 / Rule / Layer / Agent / shared-rules / skill_sources 发现与验证
+  - `Load.ts` — 配置 / Rule / Layer / Agent / shared-rules / skill_sources / harness-files 发现与验证
   - `Render.ts` — Markdown 标题降级, TOC, 按 Harness 配置渲染 TOML / YAML Subagent
   - `Generate.ts` — `buildOutputs`, manifest, `generate`, `readGeneratedFiles`
   - `Skills.ts` — 项目 Skills 加载, 哈希, 安装, 导入与 zip 路径守卫; 不联网, 不依赖解压库
-  - `Setup.ts` — 部署到已存在的用户 Harness 根目录, shared-rules 与 skills; `resolveExistingHarnessRoot` 负责按已保存配置解析并校验可打开的 Harness 目录
+  - `Setup.ts` — 部署到已存在的用户 Harness 根目录, shared-rules, skills 与 harness-files 单文件; `resolveExistingHarnessRoot` 负责按已保存配置解析并校验可打开的 Harness 目录
   - `Edit.ts` — 校验后写回 `.harness-align` 源文件; 负责固定用户目录的初始化和迁移, 写回 API 供桌面应用与测试使用
   - `Sync.ts` — 有界配置源快照, 路径与内容校验, 三方合并; 不联网, 不部署, 同一个 Skill 的内容与来源记录整体合并
 - `src/main/` 是 Electron privileged backend: 窗口, IPC handlers, `SettingsService.ts` 模块函数, `WorkspaceService`, `SkillRemoteService`.
@@ -107,6 +107,7 @@
 
 - `npm run dev` 启动 Electron 开发窗口. 窗口打开 `%USERPROFILE%\.harness-align`, 可视化管理 config / harness / layer / rule / agent / shared-rules / skills, 并调用同一套 `generate` / `setup`.
 - 打开 Harness 文件夹只接受 `window.appApi.workspace.openHarnessRoot(name)`. Main 经 `runIpc` 校验 sender 和名称类型, 在 `withWorkspace` 队列中调用 `resolveExistingHarnessRoot`, 从已保存配置解析目标后再执行 `shell.openPath`. 不接受 Renderer 提供的任意路径, 不使用未保存草稿, 不创建缺失目录; 打开失败必须返回含目标路径的错误.
+- 添加额外文件只接受 `window.appApi.workspace.addHarnessFile(name)`. Main 在工作区队列中按已保存配置打开原生单文件选择器, 初始目录为已校验的 Harness 根目录. 取消返回 `null`; 选择后重新校验目录 containment 与路径安全, 经 `Edit.ts` 导入原始字节并返回相对路径. Renderer 不提交文件路径, 不能绕过校验导入目录外文件或覆盖已有同步源.
 - 新增 privileged capability 时必须同步更新 `src/shared` 契约, Main handler, Preload `window.appApi` 和 Renderer 调用. 禁止只改其中一层.
 - 应用更新的 `check` 和 `download` 不接收 Renderer 参数. Main 只使用打包时写入的 `app-update.yml`, 并在下载完成前拒绝安装.
 
@@ -122,6 +123,9 @@
 - `Load.ts` 为兼容既有手写源文件, 将缺失的 Rule 或 Layer Option `targets` 规范化为 `[]`; `Edit.ts` 和 Shared DTO 的写入 payload 必须携带显式 `targets` 数组, 写回时保留空数组.
 - `.harness-align/rules/shared/` 是独立部署的共享规则, 不参与 `AGENTS.md` 渲染, 不出现在生成 manifest 中.
 - `.harness-align/skills/` 保存项目 Skills 与 `index.json` provenance; 不参与 `AGENTS.md` 渲染, 不出现在生成 manifest 中.
+- `.harness-align/harness-files/<harness>/<relative>` 是额外文件的同步源. 目录本身即声明, 不写入 `config.json`, 不参与生成, 不进入 `generated/` 或生成 manifest. 相对路径位于对应 Harness 根目录下. 只接受无 BOM 的 UTF-8 文本, 保留原始字节, 单文件不超过 8 MiB, 并计入 32 MiB 同步总量. 拒绝绝对路径, `..`, 反斜杠, 空段, Windows 保留名, 符号链接, 与 `AGENTS.md` 或 `agents/` 冲突的路径, 以及占用 `.agents/shared-rules`, `.agents/skills` 或部署 lock 的路径. 未配置的 harness 目录使加载和同步校验失败. 删除最后一个文件后移除空父目录, 直到 `harness-files`, 不删除 `.harness-align`.
+- 目标已存在时, 添加必须显式导入其字节, 不能另写空同步源. 保存只写同步源. Adopt 把目标文件写回同步源; 目标缺失时删除同步源. Adopt 不更新 `.deployment.json`, 也不上传 GitHub. 通用 `deleteSource` 不接受这些路径.
+- Harness 改名移动 `harness-files/<from>` 到 `<to>`, 删除 Harness 时移除该目录, 与 Layer 一样走 `.edit-recovery.json`. 单文件删除不写编辑恢复记录.
 - `.harness-align/agents/` 中的 Subagent 共享 Markdown body. 各 Harness 块中的 metadata 没有字段白名单, 由对应格式的序列化器输出. Harness metadata 在公共 `name` 和 `description` 之后合并, 同名字段可以覆盖该 Harness 输出中的公共值. `name: null` 表示该 Harness 输出省略 `name`; 缺失 `name` 则继承公共名称.
 - 生成的 `AGENTS.md` 只允许配置的 `name` 产生一个一级标题.
 - Rule 中 fenced code 之外的一至五级 ATX 标题必须降一级, 六级标题保持不变.
@@ -131,7 +135,7 @@
 - 写回 `.harness-align` 源文件必须经 `src/engine/Edit.ts` 先校验再原子写入. 多文件更新不是单一磁盘事务.
 - Harness 级联更新, 本地 Skill 正文与 provenance, Layer 改名与删除先持久写入 `.edit-recovery.json`, 记录受影响的原始字节与移动路径. 初始化前恢复未提交操作, 后续外部修改必须保留现场并失败; 恢复记录不参与同步.
 - `ensureUserWorkspace` 自动补齐配置根目录的 `AGENTS.md` 编辑指引, 仅刷新带生成标记的既有文件, 保留无标记文件. 指引写入复用路径安全检查和原子写入, 不进入 Harness 输出, manifest, 部署或同步快照.
-- 同步替换源文件前写入 `.sync-backup.json` 和 `.sync-recovery.json`, 后者在工作区初始化之前恢复. 恢复只能处理属于中断操作的内容, 检测到外部后续编辑时保留恢复记录并失败. 同步快照只包含配置源白名单, 不包含生成文件, 本机恢复记录或同步凭据.
+- 同步替换源文件前写入 `.sync-backup.json` 和 `.sync-recovery.json`, 后者在工作区初始化之前恢复. 恢复只能处理属于中断操作的内容, 检测到外部后续编辑时保留恢复记录并失败. 同步快照只包含配置源白名单, 不包含生成文件, 已部署的 Harness 目录, 本机恢复记录或同步凭据. 不含 `harness-files` 时快照版本为 `1`, 含有这些路径时为 `2`. 新代码读取两个版本; 声明为版本 `1` 却包含 `harness-files` 的快照会拒绝; 声明为版本 `2` 但没有这些路径时规范化为 `1`. 远端 `harness-align/sync.json` 标记保持版本 `1`. 旧应用会在路径校验处拒绝 `harness-files`. 这些文件按整文件三方合并, 不与 Skill 分组, 内容按原样上传, 不脱敏.
 - 上传快照保留本地和来源不明的 Skill 文件; GitHub Skill 只上传来源记录. 本地预览守卫和恢复备份仍使用完整快照. 新下载记录固定 commit, 旧记录按分支恢复时必须匹配原内容哈希. 下载内容先在内存补齐并完整校验, 再经 `Edit.ts` 应用, 失败时保留工作区和待恢复同步. GitHub Skill 文件视为可重建缓存, 不做本地修改保护, 上传始终省略其内容; 本机内容哈希不匹配时按来源重新下载并替换.
 - GitHub 同步使用单个 commit 更新专用源目录, 保留仓库其他路径, 分支引用更新必须 `force: false`. 上传前保留待确认提交, 上传结果不确定时先查询提交归属, 本地应用成功后才推进共同基线. 同步连接, 凭据和基线保存在 Electron `userData`.
 - 正常同步和本地还原只接受有效远端存档. 首次使用且缺少 `harness-align/` 时, 只能通过显式 `initialize` 模式建立存档, Main 必须校验操作类型, Renderer 显示独立 Initialize archive 操作. 既有无效存档不可初始化覆盖; 已有相同连接基线或确认发布的待恢复存档后来消失时拒绝同步与自动恢复, 保留恢复记录.
@@ -142,6 +146,8 @@
 - `generate` 只更新 `%USERPROFILE%\.harness-align\generated`.
 - `setup` 只更新配置中声明且根目录已经存在的 Harness. 不因部署而创建缺失的 Harness 根目录. 桌面壳的 Setup 按钮遵守同一规则.
 - 对已启用 Harness, `setup` 替换其 `agents` 目录并更新根 `AGENTS.md`. 没有生成 Subagent 时仍把目标 `agents/` 替换为空目录.
+- 同一 Harness 的 `harness-files` 在 `agents/` 与 `AGENTS.md` 之后按文件部署到根目录下的相对路径. 不扫描或替换整个根目录, 不创建缺失的父目录. 源中已删除的文件只删除目标文件. 根目录缺失时跳过这些文件并保留部署基线. 父目录已不存在的删除只去掉基线范围, 不重建父目录. 源路径与基线仅大小写不同时只写一次.
+- 部署恢复只接受当前同步源, 磁盘基线和恢复记录基线中的额外文件目标, 不接受 Harness 根目录下的任意路径. `config_path` 为 `.agents` 时, shared-rules, skills 和 lock 仍按原范围恢复, 不记成额外文件. 基线版本保持 `1`. 已移除的额外文件不保留空 scope.
 - `setup` 用完整目录替换更新 `%USERPROFILE%\.agents\shared-rules`.
 - `setup` 按 skill id 覆盖部署 `%USERPROFILE%\.agents\skills\<id>\`, 删除归属 lock 记录但源中已移除的 Skill, 不删除未记录的无关兄弟目录, 也不复制 `index.json`.
 - `%USERPROFILE%\.agents\.harness-align.lock.json` 使用版本 `1` 和 `scopes` 内容哈希映射, 只接受 `.agents/shared-rules` 与合法 `.agents/skills/<id>` 范围. lock 缺失时不从旧基线或现有目录推断归属. lock 更新与受管理 Skill 删除进入同一部署预览和恢复流程, 不进入生成结果或同步快照; Harness `config_path` 不得占用此 lock 路径及其子路径.

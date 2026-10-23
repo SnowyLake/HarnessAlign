@@ -6,6 +6,7 @@
 - [升级应用](#升级应用)
 - [编辑和保存](#编辑和保存)
 - [管理助手与规则](#管理助手与规则)
+  - [额外文件](#额外文件)
 - [生成和部署](#生成和部署)
 - [查看日志与排查问题](#查看日志与排查问题)
 
@@ -91,6 +92,22 @@ Home 页标题为 Harness Align, 以双列卡片展示助手, 窄窗口下切换
 
 Save harness 只保存当前助手. 关闭编辑面板会保留草稿, 卡片用 Unsaved 标记未保存项. 新建草稿可以通过 Continue new harness 继续编辑. Discard changes 放弃当前草稿; 删除操作位于编辑面板内, 需要再次确认. 保存 Harness 后再执行 Generate 或 Setup.
 
+修改 Harness 名称或目录时, 已有额外文件必须仍满足路径和托管范围限制, 否则保留原配置并拒绝保存. 删除 Harness 会同时移除它的额外文件同步源及未保存草稿, 助手目录中的文件仍保留; 其他 Harness 的草稿不受影响.
+
+某个额外文件的目标与同步源不一致, 或目标文件缺失时, 卡片状态由 Ready 改为 Target changed. 点击它打开该助手的编辑面板. 助手目录缺失或不可用时, 卡片优先显示 Missing folder 或 Unsafe / unavailable.
+
+### 额外文件
+
+编辑已保存的 Harness 时, Additional files 列出要复制到该助手目录的额外文件, 例如 `config.toml`. 点击 Add file... 打开系统文件选择器, 默认定位到该助手已保存配置的目录. 选择目录内已有的文件并点击 Import, 应用自动记录相对路径并导入当前内容; 取消选择不会修改同步源. 不接受目录外的文件, 也不会重复导入已添加的文件.
+
+这些文件保存在 `.harness-align/harness-files/<harness>/`, 不参与 `AGENTS.md` 生成. 路径相对于助手目录, 父目录必须已经存在.
+
+首页 Harness 卡片的 Additional 统计显示该 Harness 已添加的额外文件数量, 没有文件时显示 0. Additional files 位于 Harness 表单下方, 与 Save harness 分开. 点击文件名编辑同步源, Save source 只保存该源, 不部署, 也不上传 GitHub. 列表仅显示需要注意的目标状态, 内容一致时不附加状态标签. 整份文件统一使用 CRLF 或 CR 时, 保存会保留这种换行.
+
+文件行右侧的删除按钮或编辑器中的 Remove 删除同步源; 助手目录里的副本保留到下一次 Setup, Setup 只删除该文件. 目标内容与同步源不同, 或目标缺失时, 编辑器提供 Adopt target content, 用助手目录中的文件替换同步源. 目标缺失时, Adopt 会删除同步源. 父目录不存在时状态为 Parent folder missing, Setup 不会补建目录. 助手目录是符号链接或 junction 时状态为 Folder unsafe, Setup 会停止. Adopt 会丢弃未保存的编辑. GitHub 要等之后的同步预览才会更新.
+
+文件按原样进入 GitHub 同步. 令牌和 API key 应放在环境变量中, 不要写进这些文件.
+
 ### Rules 与 Layers
 
 Rules 页通过 Root / Shared 切换规则类型. Root 规则参与生成各助手的 `AGENTS.md`, Shared 规则单独部署到用户共享规则目录. 切换时保留列表宽度和未保存草稿.
@@ -115,7 +132,7 @@ Generate 只更新 `%USERPROFILE%\.harness-align\generated`. 每个已声明 Har
 
 Generated 的 Open in explorer 打开生成文件在 `generated/` 中所在的文件夹. 操作基于已有磁盘文件, 不会保存编辑预览或打开部署后的助手副本.
 
-点击 Setup 会先打开 Review deployment, 按路径列出 added, modified, deleted, unchanged 和 skipped. External changes 列用 Modified, Extra 和 Untracked 分别表示部署后发生变动, 将被删除的额外路径和没有部署基线的已有内容, 点击类别查看完整原因. 预览不生成或部署文件. 确认后重新生成, 再按下表更新本机目录. 源内容, 目标内容或被跳过目录的状态在预览后变化时, 执行会拒绝过期预览, 请重新点击 Setup 审阅. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
+点击 Setup 会先打开 Review deployment, 按路径列出 added, modified, deleted, unchanged 和 skipped. External changes 列用 Modified, Extra 和 Untracked 分别表示部署后发生变动, 将被删除的额外路径和没有部署基线的已有内容, 点击类别查看完整原因. 预览不生成或部署文件. 额外文件的目标与同步源不同时, 该行提供 Adopt target content: 用助手目录里的当前文件替换同步源, 并刷新这份预览. Setup 仍从同步源写回助手目录. 确认后重新生成, 再按下表更新本机目录. 源内容, 目标内容或被跳过目录的状态在预览后变化时, 执行会拒绝过期预览, 请重新点击 Setup 审阅. 执行前请确认 Harness 中的路径指向你要更新的助手配置.
 
 External changes 标记上次成功部署后被修改或删除的目标, 将被删除的额外路径, 以及没有文件部署基线的既有内容. 新增源文件与目标手写文件同名时, 即使其所在目录已经部署过, 也需要勾选 Overwrite modified targets and delete extra paths shown above 才能覆盖. 取消会保留目标内容. 上次成功部署的哈希保存在本机 `.harness-align/.deployment.json`, 不进入生成结果或 GitHub 同步; 正常移除未被手改的旧输出不需要额外勾选.
 
@@ -123,6 +140,7 @@ External changes 标记上次成功部署后被修改或删除的目标, 将被�
 | --- | --- |
 | `%USERPROFILE%\<config_path>\AGENTS.md` | 替换为本次生成的规则 |
 | `%USERPROFILE%\<config_path>\agents\` | 整个目录替换为本次生成的 Subagent; 没有生成项时替换为空目录 |
+| `%USERPROFILE%\<config_path>\<额外文件>` | 按同步源中的相对路径复制单个文件; 源中删除后只删除该文件, 不删除父目录 |
 | `%USERPROFILE%\.agents\shared-rules\` | 整个目录替换为 `.harness-align/rules/shared/` 的内容 |
 | `%USERPROFILE%\.agents\skills\<id>\` | 按 Skill id 覆盖同名目录, 删除 lock 记录且源中已移除的 Skill, 保留无关 Skills, 不复制 `index.json` |
 | `%USERPROFILE%\.agents\.harness-align.lock.json` | 记录本应用部署的 Shared Rules 和 Skill 目录及内容哈希, 随部署更新 |

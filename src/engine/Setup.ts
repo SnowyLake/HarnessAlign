@@ -3,14 +3,15 @@
  * Missing harness roots are skipped. Opening a harness folder uses the same existing-root checks.
  */
 
-import { promises as fs } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { atomicWrite, ensureRegularSource, isTreeSubset, lstatIfExists, pathKey, resolveUserHome } from "./FsSafe.js";
 import { buildOutputs, generate } from "./Generate.js";
-import { loadConfig } from "./Load.js";
+import { assertHarnessFileScope, loadConfig, loadHarnessFiles } from "./Load.js";
 import { type Harness, type LayerSelection, type OutputMap, assertWindowsSafeName, codePointCompare, errorText, HalignError, isRecord, valueText } from "./Model.js";
 import { assertSkillName, copySkillTree, loadSkills } from "./Skills.js";
+import { SYNC_MAX_FILE_BYTES } from "./Sync.js";
 
 const AGENTS_LOCK = ".agents/.harness-align.lock.json";
 const MAX_DEPLOYMENT_RECORD_BYTES = 32 * 1024 * 1024;
@@ -252,6 +253,9 @@ export interface SetupChange
     path: string;
     status: "added" | "modified" | "deleted" | "unchanged" | "skipped";
     external?: string;
+    adoptable?: true;
+    harness?: string;
+    filePath?: string;
 }
 
 /** Exact snapshots from successful deployments, separate from generated output and sync archives. */
@@ -328,6 +332,39 @@ function deploymentRelative(value: unknown, label: string): string
     return value;
 }
 
+/** Match one user-relative scope to an additional harness file, preferring the longest config path. */
+function extraHarnessScope(scope: string, harnesses: readonly { name: string; configPath: string }[]): { name: string; configPath: string; filePath: string } | undefined
+{
+    const matches = harnesses.filter((harness) => scope === harness.configPath || scope.startsWith(`${harness.configPath}/`))
+        .sort((left, right) => right.configPath.length - left.configPath.length || codePointCompare(left.configPath, right.configPath));
+    const harness = matches[0];
+    if (!harness || scope === harness.configPath) return undefined;
+    const filePath = scope.slice(harness.configPath.length + 1);
+    try { assertHarnessFileScope(harness.configPath, filePath); }
+    catch { return undefined; }
+    return { name: harness.name, configPath: harness.configPath, filePath };
+}
+
+/** Read scope names from one recorded deployment baseline. */
+function recordedBaselineScopes(encoded: unknown, label: string): string[]
+{
+    if (encoded === null || encoded === undefined) return [];
+    let parsed: unknown;
+    try { parsed = JSON.parse(recoveryBytes(encoded, label).toString("utf8")); }
+    catch (error) { throw new HalignError(`${label}: invalid deployment baseline: ${errorText(error)}`); }
+    if (!isRecord(parsed) || !isRecord(parsed.scopes)) throw new HalignError(`${label}: expected a version 1 deployment baseline`);
+    return Object.keys(parsed.scopes);
+}
+
+/** Find a baseline tree, including a case-only spelling difference for the same path. */
+function baselineTree(scopes: Record<string, Record<string, string>>, scope: string): Record<string, string> | undefined
+{
+    if (Object.hasOwn(scopes, scope)) return scopes[scope];
+    const folded = scope.toLowerCase();
+    const key = Object.keys(scopes).find((candidate) => candidate.toLowerCase() === folded);
+    return key ? scopes[key] : undefined;
+}
+
 /** Parse recovery data only within currently declared harness and installed skill scopes. */
 async function deploymentJournal(root: string, home: string, value: unknown, label: string): Promise<DeploymentJournal>
 {
@@ -338,6 +375,13 @@ async function deploymentJournal(root: string, home: string, value: unknown, lab
     const owned = agentsLockBefore ? parseAgentsLock(Buffer.from(agentsLockBefore, "base64"), `${label} ownership lock`).scopes : {};
     const allowed = new Set([...config.harnesses.flatMap((harness) => [`${harness.configPath}/agents`, `${harness.configPath}/AGENTS.md`]), ".agents/shared-rules",
         ...(await loadSkills(root)).map((skill) => `.agents/skills/${skill.id}`), ...Object.keys(owned), ...(agentsLockBefore !== undefined ? [AGENTS_LOCK] : [])]);
+    const sourceScopes = (await loadHarnessFiles(root, config.harnesses)).flatMap((file) =>
+    {
+        const harness = config.harnesses.find((item) => item.name === file.harness);
+        return harness ? [`${harness.configPath}/${file.path}`] : [];
+    });
+    const fileFold = new Set([...sourceScopes, ...Object.keys((await readDeploymentBaseline(root)).scopes), ...recordedBaselineScopes(value.baselineBefore, label), ...recordedBaselineScopes(value.baselineAfter, label)]
+        .flatMap((scope) => extraHarnessScope(scope, config.harnesses) ? [scope.toLowerCase()] : []));
     const identities = new Set<string>();
     const entries: DeploymentEntry[] = [];
     for (const item of value.entries)
@@ -346,7 +390,7 @@ async function deploymentJournal(root: string, home: string, value: unknown, lab
         const target = deploymentRelative(item.target, label);
         const temporary = deploymentRelative(item.temporary, label);
         const backup = deploymentRelative(item.backup, label);
-        if (!allowed.has(target) || dirname(target) !== dirname(temporary) || dirname(target) !== dirname(backup)
+        if ((!allowed.has(target) && !fileFold.has(target.toLowerCase())) || dirname(target) !== dirname(temporary) || dirname(target) !== dirname(backup)
             || !/^\.harness-align-stage-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u.test(basename(temporary))
             || !/^\.harness-align-backup-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u.test(basename(backup))) throw new HalignError(`${label}: target ${target} or stage/backup paths are outside the declared deployment scopes`);
         for (const name of [target, temporary, backup])
@@ -359,10 +403,10 @@ async function deploymentJournal(root: string, home: string, value: unknown, lab
         if (progress !== "pending" && progress !== "prepared" && progress !== "backed-up" && progress !== "installed" && progress !== "restored") throw new HalignError(`${label}: invalid progress ${valueText(progress)}`);
         const before = deploymentTree(item.before, `${label} ${target} before`);
         const after = deploymentTree(item.after, `${label} ${target} after`);
-        const isFile = target.endsWith("/AGENTS.md") || target === AGENTS_LOCK;
+        const isFile = target.endsWith("/AGENTS.md") || target === AGENTS_LOCK || fileFold.has(target.toLowerCase());
         for (const [name, tree] of [["before", before], ["after", after]] as const)
         {
-            if (Object.keys(tree).length === 0 && (name === "before" || (target.startsWith(".agents/skills/") && Object.hasOwn(owned, target)))) continue;
+            if (Object.keys(tree).length === 0 && (name === "before" || (target.startsWith(".agents/skills/") && Object.hasOwn(owned, target)) || fileFold.has(target.toLowerCase()))) continue;
             if (isFile ? Object.keys(tree).length !== 1 || !/^[a-f0-9]{64}$/u.test(tree["."] ?? "") : tree["."] !== "directory") throw new HalignError(`${label}: ${target} ${name} must describe a ${isFile ? "regular file" : "directory"}`);
         }
         const cleanup: NonNullable<DeploymentEntry["cleanup"]> = {};
@@ -523,6 +567,15 @@ export interface SetupPreview
     changes: SetupChange[];
 }
 
+/** Hash a regular file, streaming past the sync file limit so a large target stays out of memory. */
+async function hashFileContents(path: string, size: number): Promise<string>
+{
+    if (size <= SYNC_MAX_FILE_BYTES) return createHash("sha256").update(await fs.readFile(path)).digest("hex");
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(path)) hash.update(chunk);
+    return hash.digest("hex");
+}
+
 /** Capture exact file contents and empty directories without following links. */
 async function snapshotTree(root: string, path: string, skipHidden = false): Promise<Record<string, string>>
 {
@@ -542,7 +595,7 @@ async function snapshotTree(root: string, path: string, skipHidden = false): Pro
                 if (!skipHidden || !child.startsWith(".")) await visit(join(current, child), name === "." ? child : `${name}/${child}`);
             }
         }
-        else if (stats.isFile()) tree[name] = createHash("sha256").update(await fs.readFile(current)).digest("hex");
+        else if (stats.isFile()) tree[name] = await hashFileContents(current, stats.size);
         else throw new HalignError(`${current}: expected a regular file or directory`);
     };
     await visit(path, ".");
@@ -638,6 +691,84 @@ export async function inspectHarnessRoots(rootPath: string, userProfile = proces
     }));
 }
 
+/** Comparison of one additional harness file with the copy in its harness folder. */
+export type HarnessFileTargetState = "match" | "changed" | "missing" | "parent-missing" | "folder-missing" | "unsafe";
+
+/** Read one harness-folder file without following a link, or null when that file is absent. */
+export async function readHarnessTargetFile(rootPath: string, harnessName: string, relativePath: string, userProfile = process.env.USERPROFILE): Promise<Buffer | null>
+{
+    const harness = (await loadConfig(resolve(rootPath))).harnesses.find((item) => item.name === harnessName);
+    if (!harness) throw new HalignError(`.harness-align/config.json: harness is not configured, got ${valueText(harnessName)}`);
+    assertHarnessFileScope(harness.configPath, relativePath);
+    const home = resolveUserHome(userProfile);
+    const harnessRoot = await assertNoReparseComponents(home, join(home, ...harness.configPath.split("/")), `${harness.name} target root`);
+    const rootStats = await lstatIfExists(harnessRoot);
+    if (!rootStats) throw new HalignError(`${harnessRoot}: harness folder does not exist`);
+    if (rootStats.isSymbolicLink()) throw deploymentReparseError(`${harness.name} target root`, harnessRoot);
+    if (!rootStats.isDirectory()) throw new HalignError(`${harnessRoot}: expected a directory`);
+    const target = join(harnessRoot, ...relativePath.split("/"));
+    await assertNoReparseComponents(home, target, `${harness.name} additional file`);
+    const stats = await lstatIfExists(target);
+    if (!stats) return null;
+    if (stats.isSymbolicLink()) throw deploymentReparseError(`${harness.name} additional file`, target);
+    if (!stats.isFile()) throw new HalignError(`${target}: expected a file`);
+    if (stats.size > SYNC_MAX_FILE_BYTES) throw new HalignError(`${target}: exceeds the 8 MiB file limit, got ${stats.size} bytes`);
+    return fs.readFile(target);
+}
+
+/** Compare saved additional files with harness-folder targets without reading an unsafe root. */
+export async function inspectHarnessFileTargets(rootPath: string, userProfile = process.env.USERPROFILE): Promise<Array<{ harness: string; path: string; targetState: HarnessFileTargetState }>>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const files = await loadHarnessFiles(root, config.harnesses);
+    const roots = await inspectHarnessRoots(root, userProfile);
+    const rootState = new Map(roots.map((item) => [item.name, item.state]));
+    const home = resolveUserHome(userProfile);
+    const states: Array<{ harness: string; path: string; targetState: HarnessFileTargetState }> = [];
+    for (const file of files)
+    {
+        const availability = rootState.get(file.harness);
+        if (availability === "unsafe")
+        {
+            states.push({ harness: file.harness, path: file.path, targetState: "unsafe" });
+            continue;
+        }
+        if (availability !== "ready")
+        {
+            states.push({ harness: file.harness, path: file.path, targetState: "folder-missing" });
+            continue;
+        }
+        const harness = config.harnesses.find((item) => item.name === file.harness)!;
+        const target = join(home, ...harness.configPath.split("/"), ...file.path.split("/"));
+        try { await assertNoReparseComponents(home, target, `${file.harness} additional file`); }
+        catch
+        {
+            states.push({ harness: file.harness, path: file.path, targetState: "changed" });
+            continue;
+        }
+        const parentStats = await lstatIfExists(dirname(target));
+        if (!parentStats || parentStats.isSymbolicLink() || !parentStats.isDirectory())
+        {
+            states.push({ harness: file.harness, path: file.path, targetState: "parent-missing" });
+            continue;
+        }
+        const stats = await lstatIfExists(target);
+        const expected = Buffer.from(file.content, "utf8");
+        if (!stats) states.push({ harness: file.harness, path: file.path, targetState: "missing" });
+        else if (stats.isSymbolicLink() || !stats.isFile() || stats.size > SYNC_MAX_FILE_BYTES || stats.size !== expected.length)
+        {
+            states.push({ harness: file.harness, path: file.path, targetState: "changed" });
+        }
+        else
+        {
+            const actual = await fs.readFile(target);
+            states.push({ harness: file.harness, path: file.path, targetState: actual.equals(expected) ? "match" : "changed" });
+        }
+    }
+    return states;
+}
+
 /** Format the setup success report for the desktop log. */
 export function reportSetup(result: SetupResult): string
 {
@@ -718,6 +849,73 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
         reports.push({ harness: target.harness, root: targetRoot, skipped: false, files });
     }
 
+    const skippedHarnesses = new Set(reports.filter((item) => item.skipped).map((item) => item.harness));
+    const harnessFiles = await loadHarnessFiles(root, config.harnesses);
+    const extraWrites: Array<{ scope: string; target: string; bytes: Buffer; harness: string; filePath: string }> = [];
+    const extraDeletes: Array<{ scope: string; target: string; harness: string; filePath: string }> = [];
+    const retired = new Set<string>();
+    const deleteKeys = new Set<string>();
+    for (const harness of config.harnesses)
+    {
+        const ownedFiles = harnessFiles.filter((file) => file.harness === harness.name);
+        const active = new Map<string, string>();
+        if (!skippedHarnesses.has(harness.name))
+        {
+            for (const file of ownedFiles)
+            {
+                const scope = `${harness.configPath}/${file.path}`;
+                const targetPath = join(deploymentRoot, ...scope.split("/"));
+                await assertNoReparseComponents(deploymentRoot, targetPath, `${harness.name} additional file`);
+                const parent = dirname(targetPath);
+                const parentStats = await lstatIfExists(parent);
+                if (!parentStats || parentStats.isSymbolicLink() || !parentStats.isDirectory()) throw new HalignError(`${parent}: parent folder must already exist for ${scope}`);
+                const targetStats = await lstatIfExists(targetPath);
+                if (targetStats?.isSymbolicLink()) throw deploymentReparseError(`${harness.name} additional file`, targetPath);
+                if (targetStats && !targetStats.isFile()) throw new HalignError(`${targetPath}: expected a file`);
+                extraWrites.push({ scope, target: targetPath, bytes: Buffer.from(file.content, "utf8"), harness: harness.name, filePath: file.path });
+                active.set(pathKey(targetPath), scope);
+            }
+            const report = reports.find((item) => item.harness === harness.name);
+            if (report) report.files.push(...ownedFiles.map((file) => file.path).sort(codePointCompare));
+        }
+        for (const scope of Object.keys(baseline.scopes))
+        {
+            const matched = extraHarnessScope(scope, config.harnesses);
+            if (!matched || matched.name !== harness.name || skippedHarnesses.has(harness.name)) continue;
+            const targetPath = join(deploymentRoot, ...scope.split("/"));
+            const activeScope = active.get(pathKey(targetPath));
+            if (activeScope)
+            {
+                if (scope !== activeScope) retired.add(scope.toLowerCase());
+                continue;
+            }
+            const parent = dirname(targetPath);
+            const parentStats = await lstatIfExists(parent);
+            if (!parentStats)
+            {
+                retired.add(scope.toLowerCase());
+                continue;
+            }
+            if (parentStats.isSymbolicLink() || !parentStats.isDirectory()) throw new HalignError(`${parent}: expected a directory`);
+            await assertNoReparseComponents(deploymentRoot, targetPath, `${harness.name} additional file`);
+            const targetStats = await lstatIfExists(targetPath);
+            if (!targetStats)
+            {
+                retired.add(scope.toLowerCase());
+                continue;
+            }
+            if (targetStats.isSymbolicLink()) throw deploymentReparseError(`${harness.name} additional file`, targetPath);
+            if (!targetStats.isFile()) throw new HalignError(`${targetPath}: expected a file`);
+            retired.add(scope.toLowerCase());
+            if (deleteKeys.has(pathKey(targetPath))) continue;
+            deleteKeys.add(pathKey(targetPath));
+            extraDeletes.push({ scope, target: targetPath, harness: harness.name, filePath: matched.filePath });
+        }
+    }
+    extraWrites.sort((left, right) => codePointCompare(left.scope, right.scope));
+    extraDeletes.sort((left, right) => codePointCompare(left.scope, right.scope));
+    const extraMeta = new Map([...extraWrites, ...extraDeletes].map((file) => [file.scope, { harness: file.harness, filePath: file.filePath }]));
+
     const sourceSharedRules = await assertNoReparseComponents(root, join(root, ".harness-align", "rules", "shared"), "shared rules source");
     await assertRegularDirectory(sourceSharedRules, "shared rules source");
     await assertNoReparseTree(sourceSharedRules, "shared rules source");
@@ -767,6 +965,8 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
             } },
             { target: installation.targetRules, populate: (path: string) => fs.writeFile(path, installation.rules, { flag: "wx" }) },
         ]),
+        ...extraWrites.map((file) => ({ target: file.target, populate: (path: string): Promise<void> => fs.writeFile(path, file.bytes, { flag: "wx" }) })),
+        ...extraDeletes.map((file) => ({ target: file.target, populate: async (): Promise<void> => {} })),
         { target: targetSharedRules, populate: (path: string) => fs.cp(sourceSharedRules, path, { recursive: true, force: false, errorOnExist: true }) },
         ...skillInstallations.map((skill) => ({ target: skill.target, populate: (path: string) => copySkillTree(skill.source, path) })),
         ...staleSkills.map((scope) => ({ target: join(deploymentRoot, scope), populate: async (): Promise<void> => {} })),
@@ -774,6 +974,8 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
 
     const desired = [
         ...installations.flatMap((installation) => [outputTree(installation.agents), { ".": createHash("sha256").update(installation.rules).digest("hex") }]),
+        ...extraWrites.map((file) => ({ ".": createHash("sha256").update(file.bytes).digest("hex") })),
+        ...extraDeletes.map(() => ({})),
         await snapshotTree(root, sourceSharedRules),
         ...await Promise.all(skillInstallations.map((skill) => snapshotTree(root, skill.source, true))),
         ...staleSkills.map(() => ({})),
@@ -788,14 +990,21 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
     replacements.push({ target: join(deploymentRoot, AGENTS_LOCK), populate: (path: string) => fs.writeFile(path, lockContent, { flag: "wx" }) });
     desired.push({ ".": createHash("sha256").update(lockContent).digest("hex") });
     const actual = await Promise.all(replacements.map((replacement) => snapshotTree(deploymentRoot, replacement.target)));
-    const sources = await Promise.all(["config.json", "rules", "layers", "agents", "skills"].map((scope) => snapshotTree(root, join(root, ".harness-align", scope))));
+    const sources = await Promise.all(["config.json", "rules", "layers", "agents", "skills", "harness-files"].map((scope) => snapshotTree(root, join(root, ".harness-align", scope))));
     const scopeNames = replacements.map((replacement) => relative(deploymentRoot, replacement.target).split(sep).join("/"));
     const changes = replacements.flatMap((replacement, index) =>
     {
         const scope = scopeNames[index]!;
         const previous = scope === AGENTS_LOCK ? actual[index]
-            : scope === ".agents/shared-rules" || scope.startsWith(".agents/skills/") ? agentsLock.baseline.scopes[scope] : baseline.scopes[scope];
-        return scopeChanges(`~/${scope}`, actual[index]!, desired[index]!, previous);
+            : scope === ".agents/shared-rules" || scope.startsWith(".agents/skills/") ? agentsLock.baseline.scopes[scope]
+                : extraMeta.has(scope) ? baselineTree(baseline.scopes, scope) : baseline.scopes[scope];
+        return scopeChanges(`~/${scope}`, actual[index]!, desired[index]!, previous).map((change) =>
+        {
+            const meta = extraMeta.get(scope);
+            if (!meta || change.path !== `~/${scope}`) return change;
+            if (change.status !== "added" && change.status !== "modified" && change.status !== "deleted") return change;
+            return { ...change, adoptable: true as const, harness: meta.harness, filePath: meta.filePath };
+        });
     });
     for (const target of reports.filter((item) => item.skipped)) changes.push({ path: `~/${relative(deploymentRoot, target.root).split(sep).join("/")}`, status: "skipped" });
     if (skillsSkipped) changes.push({ path: "~/.agents/skills", status: "skipped" });
@@ -813,7 +1022,26 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
             removedIds: staleSkills.map((scope) => scope.slice(".agents/skills/".length)),
         },
     };
-    const nextBaseline: DeploymentBaseline = { version: 1, scopes: Object.fromEntries(Object.entries({ ...baseline.scopes, ...Object.fromEntries(scopeNames.map((name, index) => [name, desired[index]!])) }).sort(([left], [right]) => codePointCompare(left, right))) };
+    const scopes: Record<string, Record<string, string>> = {};
+    for (const [key, tree] of Object.entries(baseline.scopes))
+    {
+        if (!retired.has(key.toLowerCase())) scopes[key] = tree;
+    }
+    for (const [index, name] of scopeNames.entries())
+    {
+        const tree = desired[index]!;
+        if (extraMeta.has(name) && Object.keys(tree).length === 0) continue;
+        if (extraMeta.has(name))
+        {
+            for (const key of Object.keys(scopes))
+            {
+                if (key.toLowerCase() === name.toLowerCase()) delete scopes[key];
+            }
+        }
+        else delete scopes[name];
+        scopes[name] = tree;
+    }
+    const nextBaseline: DeploymentBaseline = { version: 1, scopes: Object.fromEntries(Object.entries(scopes).sort(([left], [right]) => codePointCompare(left, right))) };
     return { result, replacements, revision, changes, desired, nextBaseline, agentsLockBefore: agentsLock.content?.toString("base64") ?? null };
 }
 

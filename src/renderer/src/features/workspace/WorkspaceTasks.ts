@@ -59,6 +59,8 @@ function editorSavePriority(selection: Selection): number
         case "harness":
         case "harness-new":
             return 60;
+        case "harness-file":
+            return 70;
         case "generated":
         case "generated-file":
             return 100;
@@ -82,6 +84,28 @@ function savedSelection(current: Selection, before: Selection, after: Selection)
         if (current.kind === "layer" && current.name === before.name) return after;
     }
     return selectionKey(current) === selectionKey(before) ? after : current;
+}
+
+/** Keep an open additional-file draft pointed at a harness after its name changes. */
+function retargetHarnessFileDrafts(from: string, to: string): void
+{
+    if (from === to) return;
+    const state = useAppStore.getState();
+    for (const [key, draft] of Object.entries(state.editorDrafts))
+    {
+        if (draft.selection.kind !== "harness-file" || draft.selection.harness !== from) continue;
+        const next: Selection = { kind: "harness-file", harness: to, path: draft.selection.path };
+        const fromSource = `.harness-align/harness-files/${from}/${draft.selection.path}`;
+        const toSource = `.harness-align/harness-files/${to}/${draft.selection.path}`;
+        const sourceRevisions = draft.sourceRevisions ? { ...draft.sourceRevisions } : undefined;
+        if (sourceRevisions && Object.hasOwn(sourceRevisions, fromSource))
+        {
+            sourceRevisions[toSource] = sourceRevisions[fromSource]!;
+            delete sourceRevisions[fromSource];
+        }
+        state.setEditorDraft(selectionKey(next), { ...draft, selection: next, ...(sourceRevisions ? { sourceRevisions } : {}) });
+        state.clearEditorDraft(key);
+    }
 }
 
 /** Persist one mounted or retained editor snapshot without refreshing the renderer workspace. */
@@ -122,6 +146,7 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             else
             {
                 await window.appApi.workspace.updateHarness(existing.name, harness);
+                if (existing.name !== harness.name) retargetHarnessFileDrafts(existing.name, harness.name);
             }
             return {
                 selection: { kind: "harness", name: harness.name },
@@ -237,6 +262,14 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
                 message: selection.kind === "agent-new" ? `Created ${fileName(path)}` : `Saved ${fileName(path)}`,
             };
         }
+        case "harness-file":
+        {
+            const file = workspace.harnessFiles.find((item) => item.harness === selection.harness && item.path === selection.path);
+            if (!file) throw new Error(`Harness file ${selection.path} no longer exists`);
+            const sourcePath = `.harness-align/harness-files/${selection.harness}/${selection.path}`;
+            await window.appApi.workspace.saveHarnessFile(selection.harness, selection.path, snapshotText(snapshot, "content"), guardFor(sourcePath));
+            return { selection, message: `Saved ${selection.path}` };
+        }
         case "generated":
         case "generated-file":
             throw new Error(`${selectionKey(selection)} is read-only`);
@@ -285,6 +318,17 @@ export async function saveWorkspaceChanges(): Promise<void>
             const state = useAppStore.getState();
             state.clearEditorDraft(entry.key);
             state.clearEditorDraft(selectionKey(result.selection));
+            if (entry.draft.selection.kind === "harness" && result.selection.kind === "harness" && entry.draft.selection.name !== result.selection.name)
+            {
+                for (const pendingEntry of pending)
+                {
+                    if (pendingEntry.draft.selection.kind !== "harness-file" || pendingEntry.draft.selection.harness !== entry.draft.selection.name) continue;
+                    const next = useAppStore.getState().editorDrafts[selectionKey({ kind: "harness-file", harness: result.selection.name, path: pendingEntry.draft.selection.path })];
+                    if (!next) continue;
+                    pendingEntry.key = selectionKey(next.selection);
+                    pendingEntry.draft = next;
+                }
+            }
             nextSelection = savedSelection(nextSelection, entry.draft.selection, result.selection);
             currentWorkspace = await window.appApi.workspace.load();
         }

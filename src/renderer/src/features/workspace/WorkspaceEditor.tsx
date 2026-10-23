@@ -10,6 +10,7 @@ import { Alert, Button, Card, Checkbox, Drawer, Empty, Flex, Form, Input, Modal,
 import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, type ReactNode, type RefObject } from "react";
 import { showError, showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
+import { HarnessFiles } from "@/features/workspace/HarnessFiles";
 import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { fileName, harnessEffects, ruleDisplayName, type HarnessEffect } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
@@ -322,8 +323,8 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                             }}
                         />
                     </Form.Item>
-                    <Form.Item label="Config path" htmlFor="harness-config-path" extra="Relative to your user home directory. Use / between folders.">
-                        <Input id="harness-config-path" name="configPath" placeholder=".config/opencode" defaultValue={draftText(editor.draft, "configPath", harness?.configPath ?? "")} />
+                    <Form.Item label="Config path" htmlFor="harness-config-path">
+                        <Input id="harness-config-path" name="configPath" prefix="~/" placeholder=".config/opencode" defaultValue={draftText(editor.draft, "configPath", harness?.configPath ?? "")} />
                     </Form.Item>
                     <Form.Item label="Agent file format" htmlFor="harness-agent-format">
                         <input type="hidden" name="agentFileFormat" value={agentFileFormat} />
@@ -339,7 +340,7 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                         />
                     </Form.Item>
                     {agentFileFormat === "toml" ? (
-                        <Form.Item label="Instructions field" htmlFor="harness-instructions" extra="TOML key that stores the shared agent instructions.">
+                        <Form.Item label="Instructions field" htmlFor="harness-instructions" tooltip="TOML key that stores the shared agent instructions.">
                             <Input id="harness-instructions" name="instructionsField" defaultValue={draftText(editor.draft, "instructionsField", harness?.instructionsField ?? "")} />
                         </Form.Item>
                     ) : null}
@@ -356,10 +357,11 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                     </Flex>
                 </Form>
             </form>
+            {original && harness ? <HarnessFiles workspace={workspace} harness={harness} /> : null}
             <DeleteModal
                 open={isDeleteOpen}
                 title={`Delete harness ${original}?`}
-                description="This removes the harness declaration from config.json and updates related targets."
+                description="This removes the harness declaration, its additional file sources and drafts, and updates related targets. Deployed files stay in the harness folder."
                 isBusy={isBusy}
                 onCancel={() => setIsDeleteOpen(false)}
                 onConfirm={() =>
@@ -368,7 +370,12 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                     editor.mutate(async () =>
                     {
                         await window.appApi.workspace.removeHarness(original);
-                        useAppStore.getState().clearEditorDraft(editorKey);
+                        const state = useAppStore.getState();
+                        state.clearEditorDraft(editorKey);
+                        for (const [key, draft] of Object.entries(state.editorDrafts))
+                        {
+                            if (draft.selection.kind === "harness-file" && draft.selection.harness === original) state.clearEditorDraft(key);
+                        }
                         await refreshWorkspace();
                         showSuccess("Harness deleted", `Deleted harness ${original}`);
                         onDone();
@@ -742,6 +749,7 @@ export function HarnessesPanel()
                 {
                     const rootState = workspace.harnessRoots.find((item) => item.name === harness.name)?.state;
                     const activeEffects = harnessEffects(workspace, harness.name, layerSelection).filter((effect) => effect.active);
+                    const targetChanged = workspace.harnessFiles.some((file) => file.harness === harness.name && (file.targetState === "changed" || file.targetState === "missing"));
                     return (
                         <Card key={harness.name} className="harness-card" classNames={{ body: "harness-card-body" }}>
                             <div className="harness-card-header">
@@ -749,10 +757,13 @@ export function HarnessesPanel()
                                 <div className="harness-card-heading">
                                     <Typography.Title level={3} className="harness-card-name">{harness.name}</Typography.Title>
                                 </div>
-                                <Tag className="harness-card-status" color={rootState === "ready" ? "success" : "warning"}
+                                {rootState === "ready" && targetChanged ? (
+                                    <Button color="gold" variant="filled" size="small" icon={<WarningOutlined />} disabled={isBusy}
+                                            aria-label={`Target changed for ${harness.name}`} onClick={() => openEditor({ kind: "harness", name: harness.name })}>Target changed</Button>
+                                ) : <Tag className="harness-card-status" color={rootState === "ready" ? "success" : "warning"}
                                      icon={rootState === "ready" ? <CheckCircleFilled /> : <WarningOutlined />}>
                                     {rootState === "ready" ? "Ready" : rootState === "missing" ? "Missing folder" : "Unsafe / unavailable"}
-                                </Tag>
+                                </Tag>}
                             </div>
                             <Button
                                 type="text"
@@ -770,6 +781,7 @@ export function HarnessesPanel()
                                 <div><dt>Rules</dt><dd>{activeEffects.filter((effect) => effect.kind === "Rule").length}</dd></div>
                                 <div><dt>Layers</dt><dd>{activeEffects.filter((effect) => effect.kind === "Layer option").length}</dd></div>
                                 <div><dt>Agents</dt><dd>{activeEffects.filter((effect) => effect.kind === "Agent").length}</dd></div>
+                                <div><dt>Additional</dt><dd>{workspace.harnessFiles.filter((file) => file.harness === harness.name).length}</dd></div>
                             </dl>
                             <div className="harness-card-footer">
                                 <Button type="link" className="harness-card-explain" disabled={isBusy} onClick={() => setExplainHarness(harness.name)}
@@ -868,10 +880,12 @@ export function WorkspaceEditor()
         editor = <AgentForm key={JSON.stringify(source)} workspace={workspace} selection={selection} metadataHarness={agentMetadataHarness} onMetadataHarnessChange={setAgentMetadataHarness} />;
     }
     else if (selection.kind === "generated-file") editor = <GeneratedFileView workspace={workspace} path={selection.path} />;
+    else if (selection.kind === "harness-file") editor = <MissingEditorEmpty title={fileName(selection.path)} description="Additional files are edited from the harness drawer." />;
 
     const isNew = selection.kind.endsWith("-new");
     const canSave = isNew || selection.kind === "rule" || selection.kind === "agent" || selection.kind === "layer-option";
-    const title = "path" in selection ? selection.kind === "generated-file" ? selection.path : fileName(selection.path)
+    const title = selection.kind === "harness-file" ? fileName(selection.path)
+        : "path" in selection ? selection.kind === "generated-file" ? selection.path : fileName(selection.path)
         : selection.kind === "layer" ? selection.name : isNew ? `New ${selection.kind.replace("-new", "").replace("-", " ")}` : "Generated files";
     return (
         <div className="workspace-editor">
@@ -885,7 +899,7 @@ export function WorkspaceEditor()
                     }}>Discard changes</Button> : null}
                     <Button icon={isNew ? <PlusOutlined /> : <SaveOutlined />} disabled={isBusy || !isNew && !hasDraft}
                             onClick={() => useAppStore.getState().requestEditorAction(selection, "save")}>{isNew ? "Create" : "Save file"}</Button>
-                </Space> : selection.kind !== "layer" ? <Typography.Text type="secondary">Read only</Typography.Text> : null}
+                </Space> : selection.kind !== "layer" && selection.kind !== "harness-file" ? <Typography.Text type="secondary">Read only</Typography.Text> : null}
             </Flex>
             <div className="workspace-scroll" ref={scrollRef}>
                 <div key={revision} className="workspace-editor-page">

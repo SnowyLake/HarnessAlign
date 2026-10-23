@@ -276,7 +276,8 @@ export function SyncPanel()
                                     { title: "Decision", align: "center", width: 190, render: (_, change) => change.direction === "conflict" ? (
                                         <Select<SyncChoice> aria-label={`Resolve ${change.key}`} placeholder="Choose a version" value={choices[change.key] ?? null} disabled={mode !== "merge"}
                                                             style={{ minWidth: 170 }} onChange={(value) => setChoices((current) => ({ ...current, [change.key]: value }))}
-                                                            options={[{ value: "local", label: "Keep local" }, { value: "remote", label: "Keep remote" }]} />
+                                                            options={[{ value: "local", label: change.key.startsWith("harness-files/") ? "Keep local source" : "Keep local" },
+                                                                      { value: "remote", label: "Keep remote" }]} />
                                     ) : <Typography.Text type="secondary">Automatic</Typography.Text> },
                                     { title: "Compare", align: "center", width: 140, render: (_, change) => (
                                         <Button type="link" onClick={() => void run(async () => setDetail({ key: change.key, content: await window.appApi.sync.inspect(preview.id, change.key) }))}>
@@ -299,7 +300,9 @@ export function SyncPanel()
             </Modal>
             <Modal open={Boolean(detail)} title={`Compare: ${detail?.key ?? ""}`} width={1000} footer={null} onCancel={() => setDetail(undefined)} destroyOnHidden>
                 <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-                    <Typography.Text type="secondary">- Local deletions and + Remote additions are highlighted. Conflict choices still apply to the entire source group.</Typography.Text>
+                    {!detail?.key.startsWith("harness-files/") ? (
+                        <Typography.Text type="secondary">- Local deletions and + Remote additions are highlighted. Conflict choices still apply to the entire source group.</Typography.Text>
+                    ) : null}
                     {detail?.content.files.length === 0 ? <Typography.Text>This change adds or removes an empty directory.</Typography.Text> : null}
                     {detail?.content.files.map((file) =>
                     {
@@ -307,10 +310,12 @@ export function SyncPanel()
                             ? diffLines(file.local?.text ?? null, file.remote?.text ?? null) : undefined;
                         return (
                         <div key={file.path} style={{ width: "100%" }}>
-                            <Typography.Paragraph code>{file.path}</Typography.Paragraph>
+                            {file.path !== detail.key ? <Typography.Paragraph code>{file.path}</Typography.Paragraph> : null}
                             <Row gutter={[12, 12]}>
-                                <Col xs={24} md={12}><SyncFileContent label="Local" value={file.local} {...diff ? { lines: diff.local } : {}} /></Col>
-                                <Col xs={24} md={12}><SyncFileContent label="Remote" value={file.remote} {...diff ? { lines: diff.remote } : {}} /></Col>
+                                <Col xs={24} md={12}><SyncFileContent label={file.path.startsWith("harness-files/") ? "Local source" : "Local"}
+                                                                     value={file.local} {...diff ? { lines: diff.local } : {}} /></Col>
+                                <Col xs={24} md={12}><SyncFileContent label={file.path.startsWith("harness-files/") ? "GitHub" : "Remote"}
+                                                                     value={file.remote} {...diff ? { lines: diff.remote } : {}} /></Col>
                             </Row>
                             {diff?.limited ? <Typography.Text type="secondary">Large preview: the changed section is highlighted as a whole.</Typography.Text> : null}
                         </div>

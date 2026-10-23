@@ -401,7 +401,8 @@ async function readRemote(connection: SyncConnection, token: string, baseline?: 
     if (!marker) throw new HalignError(`${REMOTE_DIRECTORY}/${REMOTE_MANIFEST}: missing sync format marker; use an empty sync directory or a repository created by Harness Align`);
     const manifest = z.object({ version: z.literal(1), directories: z.array(z.string()) }).parse(JSON.parse(marker.toString("utf8")));
     snapshot.directories.push(...manifest.directories);
-    const checked = parseSyncSnapshot(snapshot);
+    const hasHarnessFiles = [...Object.keys(snapshot.files), ...snapshot.directories].some((path) => path === "harness-files" || path.startsWith("harness-files/"));
+    const checked = parseSyncSnapshot({ ...snapshot, version: hasHarnessFiles ? 2 : 1 });
     await validateSyncSources(checked, true);
     const remote = { head, rootTree, snapshot: checked, blobs, empty: false };
     cachedRemote = { connectionKey: key, remote };
