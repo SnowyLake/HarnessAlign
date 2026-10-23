@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
     addHarness,
     addLayer,
@@ -26,6 +26,10 @@ import {
     saveRule,
     saveSharedRule,
     saveSkillContent,
+    addHarnessFile,
+    adoptHarnessFile,
+    removeHarnessFile,
+    saveHarnessFile,
     updateHarness,
     upgradeWorkspaceConfig,
 } from "../../engine/Edit.js";
@@ -33,7 +37,7 @@ import { assertContained, ensureRegularSource, lstatIfExists } from "../../engin
 import { generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
 import { loadConfigSource } from "../../engine/Load.js";
 import { HalignError, valueText } from "../../engine/Model.js";
-import { inspectHarnessRoots, previewSetup, reportSetup, setup } from "../../engine/Setup.js";
+import { inspectHarnessFileTargets, inspectHarnessRoots, previewSetup, reportSetup, resolveExistingHarnessRoot, setup } from "../../engine/Setup.js";
 import type { AppApi } from "../../shared/contracts/AppApi.js";
 import { assertSkillName, importUserSkills, listImportableUserSkills, loadSkills, readSkillContent, removeSkill } from "../../engine/Skills.js";
 import type { LayerSelection, WorkspaceItemTarget } from "../../shared/models/Workspace.js";
@@ -176,8 +180,20 @@ export async function resolveWorkspaceItemFolder(rootPath: string, target: Works
     return dirname(path);
 }
 
-/** Privileged workspace operations that wrap the engine. Folder opening stays in the IPC handler so this module stays Electron-free. */
-export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "openItemFolder"> = {
+/** Validate a native file selection and import its exact bytes while already holding the workspace queue. */
+export async function importSelectedHarnessFile(rootPath: string, harness: string, selectedPath: string, userProfile = process.env.USERPROFILE): Promise<string>
+{
+    if (!isAbsolute(selectedPath)) throw new HalignError(`Add harness file: expected an absolute selected file path, got ${valueText(selectedPath)}`);
+    const harnessRoot = await resolveExistingHarnessRoot(rootPath, harness, userProfile);
+    assertContained(harnessRoot, selectedPath, "Add harness file");
+    const path = relative(harnessRoot, selectedPath).split(sep).join("/");
+    setupReview = undefined;
+    await addHarnessFile(rootPath, harness, path, true, userProfile);
+    return path;
+}
+
+/** Privileged workspace operations that wrap the engine. Native dialogs and folder opening stay in the IPC handler so this module stays Electron-free. */
+export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "openItemFolder" | "addHarnessFile"> = {
     /** Load and validate the user `.harness-align` workspace. */
     load: () => withWorkspace(async (root) =>
     {
@@ -186,8 +202,11 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
             state: preview.changes.some((change) => change.status !== "unchanged" && change.status !== "skipped") ? "pending" as const : "current" as const,
             changes: preview.changes,
         })).catch((error: unknown) => ({ state: "error" as const, changes: [], error: error instanceof Error ? error.message : String(error) }));
+        const targetStates = workspace.harnessFiles.length === 0 ? [] : await inspectHarnessFileTargets(root);
+        const targetStateByFile = new Map(targetStates.map((item) => [`${item.harness}\0${item.path}`, item.targetState]));
         return {
             ...workspace,
+            harnessFiles: workspace.harnessFiles.map((file) => ({ ...file, targetState: targetStateByFile.get(`${file.harness}\0${file.path}`) ?? "folder-missing" })),
             deploymentStatus,
             generationStatus: await inspectGenerated(root, generatedFiles),
             harnessRoots: await inspectHarnessRoots(root),
@@ -242,6 +261,27 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
 
     /** Update a harness and cascade its name when necessary. */
     updateHarness: (from, harness) => withWorkspace((root) => updateHarness(root, from, harness), "Update Harness"),
+
+    /** Save exact text for one existing additional harness file. */
+    saveHarnessFile: (harness, path, content, guard) => withWorkspace(async (root) =>
+    {
+        setupReview = undefined;
+        await saveHarnessFile(root, harness, path, content, guard);
+    }, "Save harness file"),
+
+    /** Delete one additional harness file source. */
+    removeHarnessFile: (harness, path) => withWorkspace(async (root) =>
+    {
+        setupReview = undefined;
+        await removeHarnessFile(root, harness, path);
+    }, "Remove harness file"),
+
+    /** Copy a harness-folder file back into its sync source, or remove the source when the target is missing. */
+    adoptHarnessFile: (harness, path, guard) => withWorkspace(async (root) =>
+    {
+        setupReview = undefined;
+        await adoptHarnessFile(root, harness, path, guard);
+    }, "Adopt harness file"),
 
     /** Register a GitHub skill source URL. */
     addSkillSource: (input) => withWorkspace((root) => addSkillSource(root, input)),

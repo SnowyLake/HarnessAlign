@@ -7,6 +7,7 @@
 - [配置版本与自动升级](#配置版本与自动升级)
 - [Rules 与 Layer](#rules-与-layer)
 - [Subagent](#subagent)
+- [额外文件](#额外文件)
 - [名称和大小写](#名称和大小写)
 
 ## 配置目录
@@ -25,6 +26,9 @@
 │  └─ <layer>/
 │     └─ <option>.md
 ├─ agents/
+├─ harness-files/
+│  └─ <harness>/
+│     └─ <relative-path>
 ├─ skills/
 │  ├─ index.json
 │  └─ <skill-id>/
@@ -40,6 +44,7 @@
 | `rules/shared/` | 单独部署到 `%USERPROFILE%\.agents\shared-rules` 的共享规则 |
 | `layers/` | 可切换的规则选项, 不必全部加入当前生成序列 |
 | `agents/` | Subagent 共享正文和各 Harness 的 metadata |
+| `harness-files/<harness>/` | 部署到该 Harness 目录的额外文件, 见[额外文件](#额外文件) |
 | `skills/` | 已安装 Skills 和来源记录, 见 [Skills 管理](skills.md) |
 | `generated/` | 生成结果, 请通过应用重新生成, 不要手工修改 |
 
@@ -163,6 +168,18 @@ Subagent 源文件包含公共 `name`, `description`, `harnesses` 和 Markdown �
 每个 Harness 块中的 metadata 没有字段白名单, 会按该 Harness 的格式输出. 同名 metadata 可以覆盖输出中的公共 `name` 或 `description`. 将 `name` 设为 `null` 会从该 Harness 的生成结果中省略 `name`; 省略该键则继承公共名称. OpenCode 的 Agent 编辑页提供 Generate name field 开关, 默认开启; 关闭后写入 `name: null`. TOML Harness 的正文使用 `instructions_field`, 不要在 metadata 中重复声明该字段, 它也不能命名为 `name` 或 `description`.
 
 保存前, 应用会检查公共 `name` 是否与其他 Agent 忽略大小写后重名. 存在冲突时保留原文件.
+
+## 额外文件
+
+`harness-files/<harness>/<relative>` 中的每个文件都会在 Setup 时复制到该 Harness 目录下的相同相对路径. 例如 `harness-files/grok/config.toml` 部署到 `%USERPROFILE%\.grok\config.toml`. 有文件即表示参与同步, `config.json` 不增加字段, 配置版本保持 `3`.
+
+路径必须位于 Harness 目录内. 应用拒绝绝对路径, `..`, 反斜杠, 空目录段, Windows 保留名, 以及 `AGENTS.md` 和 `agents/` 下的路径, 避免覆盖生成结果. 也不能占用 `.agents/shared-rules`, `.agents/skills` 或部署 lock. 父目录必须已经存在, Setup 不会创建它. 父目录缺失时状态为 Parent folder missing, 预览会拒绝部署. Harness 根目录不存在时跳过该助手, 不创建根目录. 根目录是符号链接或 junction 时状态为 Folder unsafe, Setup 会停止, 而不是跳过该助手.
+
+文件必须是无 BOM 的 UTF-8 文本, 可以包含 CRLF, 引擎保存和部署都保留原始字节. 编辑器会保留整份文件统一的 CRLF 或 CR; 同一文件混用多种换行时, 保存会记成 LF. 单个文件不超过 8 MiB. 超过该大小的目标文件不会在打开工作区或 Adopt 时整文件读入. 令牌, API key 和其他秘密会按原样进入 GitHub 同步, 应放在环境变量或 `${VAR}` 中.
+
+删除同步源后, 助手目录中的副本保留到下一次 Setup. Setup 只删除该文件, 不删除父目录. Adopt target content 用助手目录里的当前文件替换同步源; 目标不存在时改为删除同步源. 这不会上传 GitHub, 也不会提前更新部署记录.
+
+未在 `config.json` 中声明的 `harness-files` 子目录会使配置无法加载. 删除最后一个文件后, 空目录会一并移除.
 
 ## 名称和大小写
 

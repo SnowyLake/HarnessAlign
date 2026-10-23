@@ -16,7 +16,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import {
-    assertUpdateDraftsSaved, resolveWorkspaceItemFolder, setUpdateDraftState, setWorkspaceSyncDirectory, withWorkspace, withWorkspaceForUpdate, workspaceService,
+    assertUpdateDraftsSaved, importSelectedHarnessFile, resolveWorkspaceItemFolder, setUpdateDraftState, setWorkspaceSyncDirectory, withWorkspace, withWorkspaceForUpdate, workspaceService,
 } from "../src/main/services/WorkspaceService.js";
 import {
     defaultLayerOption, filterSetupChanges, harnessEffects, isSkillUpdateAvailable, matchesWorkspaceSource, moveLayerSelection,
@@ -35,9 +35,9 @@ import type { LogChange } from "../src/shared/models/Console.js";
 import type { AppUpdateStatus } from "../src/shared/models/AppUpdate.js";
 import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills, installDiscoveredSkill, installSkills, readDiscoveredSkillContent, readSkillUpdateFile, readSkillUpdatePreview } from "../src/main/services/SkillRemoteService.js";
 import { applySync, checkSync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, previewSync } from "../src/main/services/GitHubSyncService.js";
-import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
+import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, SYNC_MAX_FILE_BYTES, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
 import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
-import { AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA } from "../src/shared/models/Schemas.js";
+import { ADD_HARNESS_FILE_SCHEMA, AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
 import { buildOutputs, generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
 import { githubRateLimitHint, readResponseBytes } from "../src/main/services/RemoteFetch.js";
@@ -48,12 +48,12 @@ import {
 import { loadConfig, parseConfigSource, validateConfig } from "../src/engine/Load.js";
 import { CONFIG_VERSION, HalignError } from "../src/engine/Model.js";
 import { downgradeMarkdownHeadings, renderMarkdownToc } from "../src/engine/Render.js";
-import { inspectHarnessRoots, previewSetup, recoverDeployment, reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
+import { inspectHarnessFileTargets, inspectHarnessRoots, previewSetup, readHarnessTargetFile, recoverDeployment, reportSetup, resolveExistingHarnessRoot, setup } from "../src/engine/Setup.js";
 import { assertSafeZipEntry, importUserSkills, listImportableUserSkills, listUserSkills, readSkillContent, removeSkill, hashSkillDirectory, installSkillFromDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource } from "../src/engine/Skills.js";
 import {
-    addHarness, addLayer, addLayerOption, addSkillSource, deleteSource, ensureUserWorkspace,
-    loadWorkspace, removeHarness, removeLayer, removeLayerOption, removeSkillSource,
-    renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveLayerOption, saveRule, saveSharedRule, saveSkillContent, updateHarness,
+    addHarness, addHarnessFile, addLayer, addLayerOption, addSkillSource, adoptHarnessFile, deleteSource, ensureUserWorkspace,
+    loadWorkspace, removeHarness, removeHarnessFile, removeLayer, removeLayerOption, removeSkillSource,
+    renameLayer, renameLayerOption, renameSource, saveAgent, saveConfig, saveHarnessFile, saveLayerOption, saveRule, saveSharedRule, saveSkillContent, updateHarness,
     applySyncSources, recoverSourceEdits, recoverSyncSources, upgradeSyncConfig, upgradeWorkspaceConfig, validateSyncSources,
 } from "../src/engine/Edit.js";
 
@@ -2261,7 +2261,7 @@ test("recovery refuses a published initialization whose archive was subsequently
     });
 });
 
-test("GitHub sync round-trips two devices, binary skills, empty layers, and independent edits", async (t) =>
+test("GitHub sync round-trips two devices, binary skills, harness files, empty layers, and independent edits", async (t) =>
 {
     await withProject(async (first) => withProject(async (second) =>
     {
@@ -2276,6 +2276,9 @@ test("GitHub sync round-trips two devices, binary skills, empty layers, and inde
             await mkdir(join(first, ".harness-align/skills/demo"), { recursive: true });
             await writeFile(join(first, ".harness-align/skills/demo/SKILL.md"), "# Demo\n");
             await writeFile(join(first, ".harness-align/skills/demo/icon.bin"), Buffer.from([0, 255, 128]));
+            const harnessFile = "harness-files/codex/config.toml";
+            await mkdir(join(first, ".harness-align/harness-files/codex"), { recursive: true });
+            await writeFile(join(first, ".harness-align", harnessFile), "model = 'local'\r\n");
             await connectSync(firstState, input, "encrypted-test-credential");
             const initial = await previewSync(first, firstState, input.token);
             assert.equal(initial.remoteEmpty, true);
@@ -2287,6 +2290,9 @@ test("GitHub sync round-trips two devices, binary skills, empty layers, and inde
             assert.equal(adoption.firstSync, true);
             await applySync(second, secondState, input.token, { previewId: adoption.id, mode: "remote", choices: {} });
             assert.equal(syncSnapshotHash(await readSyncSnapshot(second)), syncSnapshotHash(await readSyncSnapshot(first)));
+            assert.equal((await readSyncSnapshot(second)).version, 2);
+            assert.equal(await readFile(join(second, ".harness-align", harnessFile), "utf8"), "model = 'local'\r\n");
+            await writeFile(join(first, ".harness-align", harnessFile), "model = 'updated'\r\n");
             await writeRule(first, "base.md", 100, "# First device");
             const upload = await previewSync(first, firstState, input.token);
             await applySync(first, firstState, input.token, { previewId: upload.id, mode: "merge", choices: {} });
@@ -2296,10 +2302,18 @@ test("GitHub sync round-trips two devices, binary skills, empty layers, and inde
             assert.equal(mixed.changes.filter((change) => change.direction === "conflict").length, 0);
             assert.match(inspectSync(mixed.id, "rules/base.md").files[0]!.remote!.text!, /First device/u);
             await applySync(second, secondState, input.token, { previewId: mixed.id, mode: "merge", choices: {} });
+            assert.equal(await readFile(join(second, ".harness-align", harnessFile), "utf8"), "model = 'updated'\r\n");
             const download = await previewSync(first, firstState, input.token);
             await applySync(first, firstState, input.token, { previewId: download.id, mode: "merge", choices: {} });
             assert.equal(syncSnapshotHash(await readSyncSnapshot(first)), syncSnapshotHash(await readSyncSnapshot(second)));
             assert.equal((await getSyncStatus(firstState)).hasPendingUpload, false);
+            await removeHarnessFile(first, "codex", "config.toml");
+            const removed = await previewSync(first, firstState, input.token);
+            await applySync(first, firstState, input.token, { previewId: removed.id, mode: "merge", choices: {} });
+            const removal = await previewSync(second, secondState, input.token);
+            await applySync(second, secondState, input.token, { previewId: removal.id, mode: "merge", choices: {} });
+            assert.equal((await readSyncSnapshot(second)).version, 1);
+            await assert.rejects(readFile(join(second, ".harness-align", harnessFile)), /ENOENT/u);
             await assert.rejects(fs.stat(join(first, ".codex")), { code: "ENOENT" });
             await disconnectSync(firstState);
             assert.equal((await getSyncStatus(firstState)).connected, false);
@@ -5408,4 +5422,286 @@ test("application update installs only a downloaded offered release and rejects 
     assert.deepEqual(environmentProxy("127.0.0.1:8888"), { proxyRules: "http://127.0.0.1:8888", username: null, password: null });
     assert.throws(() => environmentProxy("http://user:pass@127.0.0.1:8888 extra"), /without spaces/u);
     assert.equal(environmentProxyBypass(" localhost, .github.com "), "localhost,.github.com");
+});
+
+test("native harness file selections import exact bytes and reject unsafe or duplicate paths without changing sources", async () =>
+{
+    assert.equal(ADD_HARNESS_FILE_SCHEMA.safeParse({ harness: "codex" }).success, true);
+    assert.equal(ADD_HARNESS_FILE_SCHEMA.safeParse({ harness: "" }).success, false);
+    assert.equal(ADD_HARNESS_FILE_SCHEMA.safeParse({ harness: "codex", path: "config.toml" }).success, false);
+    await withProject(async (root) =>
+    {
+        const home = join(root, "picker-home");
+        const codex = join(home, ".codex");
+        const sibling = join(home, ".codex-other");
+        await mkdir(join(codex, "nested"), { recursive: true });
+        await mkdir(sibling);
+        await writeFile(join(sibling, "outside.toml"), "outside\n");
+        await writeFile(join(codex, "AGENTS.md"), "managed\n");
+        const before = await readSyncSnapshot(root);
+        await assert.rejects(importSelectedHarnessFile(root, "codex", "config.toml", home), /absolute selected file path/u);
+        await assert.rejects(importSelectedHarnessFile(root, "codex", join(sibling, "outside.toml"), home), /must stay inside/u);
+        await assert.rejects(importSelectedHarnessFile(root, "codex", join(codex, "AGENTS.md"), home), /collides with managed/u);
+        await assert.rejects(importSelectedHarnessFile(root, "codex", join(codex, "missing.toml"), home), /target file does not exist/u);
+        await assert.rejects(importSelectedHarnessFile(root, "codex", join(codex, "nested"), home), /expected a file/u);
+        const linked = join(codex, "linked");
+        await symlink(sibling, linked, process.platform === "win32" ? "junction" : "dir");
+        try
+        {
+            await assert.rejects(importSelectedHarnessFile(root, "codex", join(linked, "outside.toml"), home), /symbolic link/u);
+        }
+        finally
+        {
+            await unlink(linked);
+        }
+        assert.deepEqual(await readSyncSnapshot(root), before);
+        const target = join(codex, "nested", "local config.toml");
+        const bytes = Buffer.from("name = \"imported\"\r\n");
+        await writeFile(target, bytes);
+        assert.equal(await importSelectedHarnessFile(root, "codex", target, home), "nested/local config.toml");
+        const source = join(root, ".harness-align", "harness-files", "codex", "nested", "local config.toml");
+        assert.deepEqual(await readFile(source), bytes);
+        await writeFile(target, "external edit\n");
+        await assert.rejects(importSelectedHarnessFile(root, "codex", target, home), /file already exists/u);
+        assert.deepEqual(await readFile(source), bytes);
+        assert.equal(await readFile(target, "utf8"), "external edit\n");
+    });
+});
+
+test("additional harness files stay exact, reject managed paths, and follow harness rename", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "harness-file-home");
+        const codex = join(home, ".codex");
+        await mkdir(join(codex, "notes"), { recursive: true });
+        await assert.rejects(addHarnessFile(root, "codex", "AGENTS.md", false, home), /collides with managed AGENTS.md or agents/u);
+        await assert.rejects(addHarnessFile(root, "codex", "AGENTS.md/child.txt", false, home), /collides with managed AGENTS.md or agents/u);
+        await assert.rejects(addHarnessFile(root, "codex", "agents/extra.toml", false, home), /collides with managed AGENTS.md or agents/u);
+        await assert.rejects(addHarnessFile(root, "codex", "missing/config.toml", false, home), /parent folder must already exist/u);
+        await assert.rejects(addHarnessFile(root, "codex", "..\\config.toml", false, home), /must be relative/u);
+        await assert.rejects(addHarnessFile(root, "codex", "nul.txt", false, home), /Windows reserved/u);
+        await writeFile(join(codex, "bom.txt"), Buffer.from([0xef, 0xbb, 0xbf, 0x61]));
+        await assert.rejects(addHarnessFile(root, "codex", "bom.txt", true, home), /without BOM/u);
+        await writeFile(join(codex, "binary.txt"), Buffer.from("a\0b"));
+        await assert.rejects(addHarnessFile(root, "codex", "binary.txt", true, home), /NUL/u);
+        await writeFile(join(codex, "config.toml"), "existing\r\n");
+        await assert.rejects(addHarnessFile(root, "codex", "config.toml", false, home), /import it instead/u);
+        await addHarnessFile(root, "codex", "config.toml", true, home);
+        const source = join(root, ".harness-align", "harness-files", "codex", "config.toml");
+        assert.equal(await readFile(source, "utf8"), "existing\r\n");
+        const opened = await loadWorkspace(root);
+        assert.equal(opened.harnessFiles[0]?.content, "existing\r\n");
+        const guard = { path: ".harness-align/harness-files/codex/config.toml", revision: opened.sourceRevisions[".harness-align/harness-files/codex/config.toml"]! };
+        await saveHarnessFile(root, "codex", "config.toml", "edited\r\n", guard);
+        assert.equal(await readFile(source, "utf8"), "edited\r\n");
+        await assert.rejects(deleteSource(root, guard.path), /removeHarnessFile/u);
+        await removeHarnessFile(root, "codex", "config.toml");
+        await assert.rejects(readFile(source), /ENOENT/u);
+        assert.equal(await readFile(join(codex, "config.toml"), "utf8"), "existing\r\n");
+        await addHarnessFile(root, "codex", "notes/keep.toml", false, home);
+        await removeHarnessFile(root, "codex", "notes/keep.toml");
+        await assert.rejects(readdir(join(root, ".harness-align", "harness-files")), /ENOENT/u);
+        await addHarnessFile(root, "codex", "config.toml", true, home);
+        const current = await loadConfig(root);
+        const codexHarness = current.harnesses.find((item) => item.name === "codex");
+        assert.ok(codexHarness);
+        await updateHarness(root, "codex", { ...codexHarness, name: "Codex" });
+        assert.deepEqual(await readdir(join(root, ".harness-align", "harness-files")), ["Codex"]);
+        assert.equal(await readFile(join(root, ".harness-align", "harness-files", "Codex", "config.toml"), "utf8"), "existing\r\n");
+        await removeHarness(root, "Codex");
+        await assert.rejects(readdir(join(root, ".harness-align", "harness-files", "Codex")), /ENOENT/u);
+        await mkdir(join(root, ".harness-align", "harness-files", "other"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "harness-files", "other", "config.toml"), "x");
+        await assert.rejects(loadWorkspace(root), /not configured/u);
+    });
+});
+
+test("harness configuration edits validate additional files before writing or moving sources", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "harness-file-home");
+        await mkdir(join(home, ".codex", "shared-rules"), { recursive: true });
+        await addHarnessFile(root, "codex", "shared-rules/base.md", false, home);
+        const config = await loadConfig(root);
+        const harness = config.harnesses.find((item) => item.name === "codex")!;
+        const before = await readSyncSnapshot(root);
+        const moved = { ...harness, configPath: ".agents" };
+        await assert.rejects(updateHarness(root, "codex", moved), /collides with managed shared rules/u);
+        await assert.rejects(saveConfig(root, { ...config, harnesses: config.harnesses.map((item) => item.name === "codex" ? moved : item) }), /collides with managed shared rules/u);
+        await assert.rejects(updateHarness(root, "codex", { ...harness, name: "h".repeat(230) }), /sync path must be at most 240/u);
+        assert.deepEqual(await readSyncSnapshot(root), before);
+        assert.deepEqual(await readdir(join(root, ".harness-align", "harness-files")), ["codex"]);
+        assert.equal((await loadWorkspace(root)).harnessFiles[0]?.path, "shared-rules/base.md");
+        await assert.rejects(readFile(join(root, ".harness-align", ".edit-recovery.json")), /ENOENT/u);
+    });
+});
+
+test("setup deploys additional harness files without replacing the harness folder", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "harness-file-home");
+        const codex = join(home, ".codex");
+        await mkdir(join(codex, "nested"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/extra.md", "Shared extra");
+        await writeFile(join(codex, "notes.txt"), "keep");
+        await addHarnessFile(root, "codex", "config.toml", false, home);
+        const added = await previewSetup(root, undefined, home);
+        const addedChange = added.changes.find((change) => change.path === "~/.codex/config.toml");
+        assert.equal(addedChange?.status, "added");
+        assert.equal(addedChange?.adoptable, true);
+        assert.equal(addedChange?.external, undefined);
+        assert.equal(addedChange?.harness, "codex");
+        assert.equal(addedChange?.filePath, "config.toml");
+        await setup(root, undefined, home, added.revision);
+        assert.equal(await readFile(join(codex, "config.toml"), "utf8"), "");
+        assert.equal(await readFile(join(codex, "notes.txt"), "utf8"), "keep");
+        assert.equal((await snapshot(join(root, ".harness-align", "generated", "codex"))).has("config.toml"), false);
+        assert.equal((await inspectHarnessFileTargets(root, home)).find((item) => item.path === "config.toml")?.targetState, "match");
+        await writeFile(join(codex, "config.toml"), "local\r\n");
+        const drifted = await previewSetup(root, undefined, home);
+        const driftedChange = drifted.changes.find((change) => change.path === "~/.codex/config.toml");
+        assert.equal(driftedChange?.status, "modified");
+        assert.equal(driftedChange?.adoptable, true);
+        assert.match(driftedChange?.external ?? "", /Changed since last deployment/u);
+        await assert.rejects(setup(root, undefined, home, drifted.revision), /explicit overwrite approval/u);
+        assert.equal(await readFile(join(codex, "config.toml"), "utf8"), "local\r\n");
+        const source = ".harness-align/harness-files/codex/config.toml";
+        await adoptHarnessFile(root, "codex", "config.toml", { path: source, revision: (await loadWorkspace(root)).sourceRevisions[source]! }, home);
+        assert.equal((await loadWorkspace(root)).harnessFiles.find((file) => file.path === "config.toml")?.content, "local\r\n");
+        await unlink(join(codex, "config.toml"));
+        await adoptHarnessFile(root, "codex", "config.toml", { path: source, revision: (await loadWorkspace(root)).sourceRevisions[source]! }, home);
+        assert.equal((await loadWorkspace(root)).harnessFiles.some((file) => file.path === "config.toml"), false);
+        await addHarnessFile(root, "codex", "config.toml", false, home);
+        await saveHarnessFile(root, "codex", "config.toml", "again\r\n", { path: source, revision: (await loadWorkspace(root)).sourceRevisions[source]! });
+        const restored = await previewSetup(root, undefined, home);
+        assert.match(restored.changes.find((change) => change.path === "~/.codex/config.toml")?.external ?? "", /Changed since last deployment/u);
+        await setup(root, undefined, home, restored.revision, true);
+        await removeHarnessFile(root, "codex", "config.toml");
+        assert.equal(await readFile(join(codex, "config.toml"), "utf8"), "again\r\n");
+        const removal = await previewSetup(root, undefined, home);
+        assert.equal(removal.changes.find((change) => change.path === "~/.codex/config.toml")?.status, "deleted");
+        await setup(root, undefined, home, removal.revision);
+        await assert.rejects(readFile(join(codex, "config.toml")), /ENOENT/u);
+        assert.equal(await readFile(join(codex, "notes.txt"), "utf8"), "keep");
+        await addHarnessFile(root, "codex", "config.toml", false, home);
+        const redeployed = await previewSetup(root, undefined, home);
+        await setup(root, undefined, home, redeployed.revision);
+        await rm(codex, { recursive: true, force: true });
+        await setup(root, undefined, home, (await previewSetup(root, undefined, home)).revision);
+        assert.equal(await readFile(join(root, source), "utf8"), "");
+        await assert.rejects(readdir(codex), /ENOENT/u);
+        const baseline = JSON.parse(await readFile(join(root, ".harness-align", ".deployment.json"), "utf8")) as { scopes: Record<string, unknown> };
+        assert.equal(Object.hasOwn(baseline.scopes, ".codex/config.toml"), true);
+        await mkdir(join(codex, "nested"), { recursive: true });
+        await writeFile(join(codex, "notes.txt"), "keep");
+        await addHarnessFile(root, "codex", "nested/keep.toml", false, home);
+        const nested = await previewSetup(root, undefined, home);
+        await setup(root, undefined, home, nested.revision, true);
+        await rm(join(codex, "nested"), { recursive: true, force: true });
+        assert.equal((await inspectHarnessFileTargets(root, home)).find((item) => item.path === "nested/keep.toml")?.targetState, "parent-missing");
+        await assert.rejects(previewSetup(root, undefined, home), /parent folder must already exist/u);
+        await removeHarnessFile(root, "codex", "nested/keep.toml");
+        await setup(root, undefined, home, (await previewSetup(root, undefined, home)).revision);
+        await assert.rejects(readdir(join(codex, "nested")), /ENOENT/u);
+        const cleared = JSON.parse(await readFile(join(root, ".harness-align", ".deployment.json"), "utf8")) as { scopes: Record<string, unknown> };
+        assert.equal(Object.hasOwn(cleared.scopes, ".codex/nested/keep.toml"), false);
+        assert.equal(await readFile(join(codex, "notes.txt"), "utf8"), "keep");
+    });
+});
+
+test("harness file snapshots use version 2 only when those paths exist", async () =>
+{
+    assert.equal(emptySyncSnapshot().version, 1);
+    assert.equal(parseSyncSnapshot({ version: 1, directories: [], files: { "rules/a.md": "" } }).version, 1);
+    assert.throws(() => parseSyncSnapshot({ version: 1, directories: [], files: { "harness-files/codex/config.toml": "" } }), /version 1 cannot contain harness-files/u);
+    const withFiles = parseSyncSnapshot({ version: 2, directories: [], files: { "harness-files/codex/config.toml": Buffer.from("keep\n").toString("base64") } });
+    assert.equal(withFiles.version, 2);
+    assert.ok(withFiles.directories.includes("harness-files"));
+    assert.equal(parseSyncSnapshot({ version: 2, directories: [], files: { "rules/a.md": "" } }).version, 1);
+    const local = parseSyncSnapshot({ version: 2, directories: [], files: { "harness-files/codex/config.toml": Buffer.from("local").toString("base64") } });
+    const remote = parseSyncSnapshot({ version: 2, directories: [], files: { "harness-files/codex/config.toml": Buffer.from("remote").toString("base64") } });
+    assert.deepEqual(mergeSyncSnapshots(emptySyncSnapshot(), local, remote).conflicts, ["harness-files/codex/config.toml"]);
+    await withProject(async (root) =>
+    {
+        assert.equal((await readSyncSnapshot(root)).version, 1);
+        const home = join(root, "harness-file-home");
+        await mkdir(join(home, ".codex"), { recursive: true });
+        await addHarnessFile(root, "codex", "config.toml", false, home);
+        const snapshot = await readSyncSnapshot(root);
+        assert.equal(snapshot.version, 2);
+        assert.equal(snapshot.files["harness-files/codex/config.toml"], "");
+        await removeHarnessFile(root, "codex", "config.toml");
+        assert.equal((await readSyncSnapshot(root)).version, 1);
+        await assert.rejects(readdir(join(root, ".harness-align", "harness-files")), /ENOENT/u);
+    });
+});
+
+test("additional harness files reject managed agent scopes, oversized targets, and unsafe roots", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "status-home");
+        const codex = join(home, ".codex");
+        await mkdir(codex, { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared");
+        await addHarnessFile(root, "codex", "config.toml", false, home);
+        await writeFile(join(codex, "config.toml"), Buffer.alloc(SYNC_MAX_FILE_BYTES + 1, 0x61));
+        assert.equal((await inspectHarnessFileTargets(root, home)).find((item) => item.path === "config.toml")?.targetState, "changed");
+        await assert.rejects(readHarnessTargetFile(root, "codex", "config.toml", home), /8 MiB/u);
+        const oversized = await previewSetup(root, undefined, home);
+        assert.equal(oversized.changes.find((change) => change.path === "~/.codex/config.toml")?.status, "modified");
+        await rm(codex, { recursive: true, force: true });
+        await mkdir(join(home, "elsewhere"));
+        await symlink(join(home, "elsewhere"), codex, "junction");
+        assert.equal((await inspectHarnessFileTargets(root, home)).find((item) => item.path === "config.toml")?.targetState, "unsafe");
+    });
+});
+
+test("a harness rooted at .agents keeps shared rules out of additional-file recovery", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "agents-home");
+        await mkdir(join(home, ".agents"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/base.md", "Shared");
+        const document = JSON.parse(await readFile(join(root, ".harness-align", "config.json"), "utf8")) as { harnesses: unknown[] };
+        document.harnesses = [{ name: "agents", config_path: ".agents", agent_format: "yaml", agent_extension: "md" }];
+        await writeFile(join(root, ".harness-align", "config.json"), `${JSON.stringify(document, null, 2)}\n`);
+        await writeRule(root, "base.md", 100, "# Base\n\nbase", ["agents"]);
+        await writeLayerOption(root, "soul", "arona", "# Soul\n\narona soul", ["agents"]);
+        await writeLayerOption(root, "soul", "kei", "# Soul\n\nkei soul", ["agents"]);
+        await unlink(join(root, ".harness-align", "agents", "explorer.md"));
+        await assert.rejects(addHarnessFile(root, "agents", "shared-rules", false, home), /deployment lock/u);
+        await assert.rejects(addHarnessFile(root, "agents", "skills/demo.md", false, home), /deployment lock/u);
+        await mkdir(join(home, ".agents", "shared-rules"));
+        await writeFile(join(home, ".agents", "shared-rules", "base.md"), "Managed target\n");
+        await assert.rejects(adoptHarnessFile(root, "agents", "shared-rules/base.md", undefined, home), /deployment lock/u);
+        await assert.rejects(readFile(join(root, ".harness-align", "harness-files", "agents", "shared-rules", "base.md")), /ENOENT/u);
+        await unlink(join(home, ".agents", "shared-rules", "base.md"));
+        await fs.rmdir(join(home, ".agents", "shared-rules"));
+        await mkdir(join(root, ".harness-align", "harness-files", "agents"), { recursive: true });
+        await writeFile(join(root, ".harness-align", "harness-files", "agents", "shared-rules"), "x");
+        await assert.rejects(loadWorkspace(root), /deployment lock/u);
+        await unlink(join(root, ".harness-align", "harness-files", "agents", "shared-rules"));
+        await addHarnessFile(root, "agents", "config.toml", false, home);
+        const originalRename = fs.rename;
+        const blocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            const [from, to] = [String(args[0]), String(args[1])];
+            if (from.includes(".harness-align-stage-") && to.endsWith(join(".agents", "shared-rules"))) throw new Error("Interrupted shared rules");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, home), /Interrupted shared rules/u); }
+        finally { blocked.mock.restore(); }
+        assert.equal(await recoverDeployment(root, home), "none");
+        await assert.rejects(readFile(join(root, ".harness-align", ".deployment-recovery.json")), /ENOENT/u);
+        await setup(root, undefined, home);
+        const preview = await previewSetup(root, undefined, home);
+        assert.equal(preview.changes.some((change) => change.path === "~/.agents/shared-rules" && change.status === "deleted"), false);
+        assert.equal(await readFile(join(home, ".agents", "shared-rules", "base.md"), "utf8"), "Shared\n");
+        assert.equal(await readFile(join(home, ".agents", "config.toml"), "utf8"), "");
+    });
 });

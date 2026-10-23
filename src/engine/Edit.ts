@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { stringify as stringifyYaml } from "yaml";
 import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, isAtomicWriteTemporary, isTreeSubset,
          lstatIfExists, pathKey, reparseError, resolveUserHome } from "./FsSafe.js";
-import { loadAgents, loadConfig, loadLayerOptions, loadRules, loadSharedRules, parseConfigSource, type SharedRule, validateAgentHarnesses, validateConfig, validateTargets } from "./Load.js";
+import { assertHarnessFileBytes, assertHarnessFileParent, assertHarnessFileScope, harnessFileSourceRelative, loadAgents, loadConfig, loadHarnessFiles, loadLayerOptions, loadRules, loadSharedRules, parseConfigSource, type HarnessFileSource, type SharedRule, validateAgentHarnesses, validateConfig, validateTargets } from "./Load.js";
 import {
     IDENTIFIER_NAME,
     type Agent,
@@ -32,7 +32,7 @@ import {
 } from "./Model.js";
 import { assertSkillName, hashSkillDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource, readSkillContent, serializeSkillIndex } from "./Skills.js";
 import { parseSyncSnapshot, readSyncSnapshot, syncSkillIndex, syncSnapshotHash, type SyncSnapshot } from "./Sync.js";
-import { recoverDeployment } from "./Setup.js";
+import { readHarnessTargetFile, recoverDeployment } from "./Setup.js";
 
 /** Default candidates filtered by existing user configuration directories on first initialization. */
 const DEFAULT_USER_CONFIG = {
@@ -71,6 +71,7 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 | \`rules/shared/**/*.md\` | 供规则按需引用的独立共享文档, 不拼入助手 AGENTS.md. | 可以. |
 | \`layers/<layer>/<option>.md\` | 可切换的规则片段. config.json 的 \`layers\` 决定组顺序, \`selected\` 决定每组采用哪个选项; frontmatter 仅支持 \`targets\`. | 可以. |
 | \`agents/*.md\` | 子代理 (Subagent) 配置源. YAML frontmatter 保存 \`name\`, \`description\`, \`harnesses\` 下各助手的原生 metadata; Markdown 正文保存共享的子代理指令. | 可以. |
+| \`harness-files/<harness>/<path>\` | 部署到对应 Harness 文件夹的额外文件, 不参与 AGENTS.md 拼装. 内容按原样进入 GitHub 同步, 令牌和密钥应放在环境变量中. | 可以, 保持精确字节, 不转换换行. |
 | \`skills/<id>/SKILL.md\` 及同目录资源 | 可复用技能的说明, 脚本和参考资料. | 本地或无来源记录的 Skill 可以; GitHub 来源的 Skill 不直接修改. |
 | \`skills/index.json\` | 应用维护的 Skill 来源记录, 可读取对应 id 的 \`origin\` 判断来源. | 不可以, 不手改来源或哈希. |
 | \`generated/<harness>/AGENTS.md\` | 为该助手拼装好的完整规则文档. | 不可以, 修改对应 Rules / Layer 源文件. |
@@ -85,6 +86,7 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 - 规则文档: 根 Rules 按 \`priority\` 升序排列, 同优先级按路径排序, 再追加按配置顺序选中的 Layer 正文; 各片段按 \`targets\` 筛选后拼成 \`generated/<harness>/AGENTS.md\`.
 - 子代理配置: \`agents/*.md\` 按其 \`harnesses\` 键选择输出助手, 将共享指令和对应 metadata 转成该助手要求的 TOML 或 YAML frontmatter + Markdown 文件, 写入 \`generated/<harness>/agents/\`.
 - 部署: 生成的规则文档和子代理配置写入用户主目录下对应的 \`config_path\`; 共享规则复制到 \`~/.agents/shared-rules/\`, Skills 按 id 复制到 \`~/.agents/skills/\`.
+- 额外文件: \`harness-files/<harness>/<path>\` 在 Setup 时复制到该 Harness 文件夹内的相同相对路径. 删除源文件后, 下一次 Setup 只删除目标文件, 不删除其父目录. Harness 文件夹不存在时跳过, 目标父目录不存在时不创建.
 
 ## 修改方式
 
@@ -106,6 +108,7 @@ export interface Workspace
     sharedRules: SharedRule[];
     agents: Agent[];
     skills: ProjectSkill[];
+    harnessFiles: HarnessFileSource[];
 }
 
 /** Opened source identity used to reject stale saves, including renames and new files. */
@@ -143,7 +146,7 @@ async function readSourceRevisions(root: string): Promise<Record<string, string>
         else if (stats.isFile()) revisions[relative] = sourceRevision(await fs.readFile(path));
         else throw new HalignError(`${relative}: expected a regular source file or directory`);
     };
-    for (const scope of ["config.json", "rules", "layers", "agents"]) await visit(`.harness-align/${scope}`);
+    for (const scope of ["config.json", "rules", "layers", "agents", "harness-files"]) await visit(`.harness-align/${scope}`);
     return revisions;
 }
 
@@ -248,7 +251,7 @@ function managedRelative(value: string, label: string): string
     {
         throw new HalignError(`${label}: path must stay inside managed .harness-align sources, got ${valueText(value)}`);
     }
-    if (value !== ".harness-align/config.json" && !value.startsWith(".harness-align/rules/") && !value.startsWith(".harness-align/layers/") && !value.startsWith(".harness-align/agents/") && !value.startsWith(".harness-align/skills/"))
+    if (value !== ".harness-align/config.json" && !value.startsWith(".harness-align/rules/") && !value.startsWith(".harness-align/layers/") && !value.startsWith(".harness-align/agents/") && !value.startsWith(".harness-align/skills/") && !value.startsWith(".harness-align/harness-files/"))
     {
         throw new HalignError(`${label}: path must stay inside managed .harness-align sources, got ${valueText(value)}`);
     }
@@ -322,7 +325,7 @@ async function editTreeRevision(root: string, path: string, contents?: Record<st
             hash.update(content).update("\0");
             if (contents) contents[name === "." ? name : name.slice(2)] = createHash("sha256").update(content).digest("hex");
         }
-        else throw new HalignError(`${current}: expected a regular layer source`);
+        else throw new HalignError(`${current}: expected a regular source`);
     };
     await visit(path, ".");
     return hash.digest("hex");
@@ -371,9 +374,14 @@ export async function recoverSourceEdits(root: string): Promise<"none" | "restor
         const from = managedRelative(item.from, recordPath);
         const to = item.to;
         const layerPath = /^\.harness-align\/layers\/[^/]+(?:\/[^/]+\.md)?$/u;
+        const harnessFilesPath = /^\.harness-align\/harness-files\/[^/]+$/u;
         const removalPath = /^\.harness-align\/\.edit-backup-[0-9a-f-]{36}$/u;
-        if (!layerPath.test(from) || (item.remove ? !removalPath.test(to) : !layerPath.test(managedRelative(to, recordPath))) || from === to) throw new HalignError(`${recordPath}: move must remain in layer sources or its deletion backup`);
-        if (!item.remove && (from.split("/").length !== to.split("/").length || (from.split("/").length === 4 && posix.dirname(from) !== posix.dirname(to)))) throw new HalignError(`${recordPath}: option move must remain in its layer`);
+        const movable = (path: string): boolean => layerPath.test(path) || harnessFilesPath.test(path);
+        const destination = item.remove ? to : managedRelative(to, recordPath);
+        if (!movable(from) || (item.remove ? !removalPath.test(to) : !movable(destination)) || from === to) throw new HalignError(`${recordPath}: move must remain in layer or harness-file sources or its deletion backup`);
+        const fromParts = from.split("/");
+        const destinationParts = destination.split("/");
+        if (!item.remove && (fromParts.length !== destinationParts.length || fromParts[1] !== destinationParts[1] || (fromParts.length === 4 && posix.dirname(from) !== posix.dirname(destination)))) throw new HalignError(`${recordPath}: move must remain in its layer or harness-file directory`);
         assertContained(root, join(root, ...to.split("/")), recordPath);
         move = { from, to, remove: item.remove, revision: item.revision };
         if (item.cleanup !== undefined)
@@ -488,7 +496,7 @@ async function writeManagedBatch(root: string, writes: Array<{ path: string; con
             const destination = join(root, ...journal.move.to.split("/"));
             await ensureRegularSource(root, destination);
             await assertRenameDestination(source, destination, journal.move.to);
-            if (await editTreeRevision(root, source) !== journal.move.revision) throw new HalignError(`${source}: layer changed before its move; preserve ${recordPath}`);
+            if (await editTreeRevision(root, source) !== journal.move.revision) throw new HalignError(`${source}: source changed before its move; preserve ${recordPath}`);
             await fs.rename(source, destination);
         }
         for (const [index, write] of writes.entries())
@@ -614,16 +622,17 @@ export async function loadWorkspace(rootPath: string): Promise<Workspace>
     const root = resolve(rootPath);
     const before = await readSourceRevisions(root);
     const config = await loadConfig(root);
-    const [agents, rules, layerOptions, sharedRules, skills] = await Promise.all([
+    const [agents, rules, layerOptions, sharedRules, skills, harnessFiles] = await Promise.all([
         loadAgents(root, config.harnesses),
         loadRules(root, config.harnesses),
         loadLayerOptions(root, config),
         loadSharedRules(root),
         loadSkills(root),
+        loadHarnessFiles(root, config.harnesses),
     ]);
     const sourceRevisions = await readSourceRevisions(root);
     if (JSON.stringify(before) !== JSON.stringify(sourceRevisions)) throw new HalignError(`${root}/.harness-align: sources changed while loading; reload before editing`);
-    return { config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents, skills, sourceRevisions };
+    return { config, rootRules: sortEditableRules(rules), layerOptions, sharedRules, agents, skills, harnessFiles, sourceRevisions };
 }
 
 /** Preserve the exact legacy config before any validated write can promote it to the current format. */
@@ -887,7 +896,7 @@ export async function saveConfig(rootPath: string, config: Config, guard?: Sourc
 {
     const root = resolve(rootPath);
     const validated = validateConfig(configDocument(config));
-    await Promise.all([loadLayerOptions(root, validated), loadRules(root, validated.harnesses), loadAgents(root, validated.harnesses)]);
+    await Promise.all([loadLayerOptions(root, validated), loadRules(root, validated.harnesses), loadAgents(root, validated.harnesses), loadHarnessFiles(root, validated.harnesses)]);
     if (guard)
     {
         if (guard.path !== ".harness-align/config.json") throw new HalignError(`${guard.path}: expected .harness-align/config.json guard`);
@@ -992,6 +1001,7 @@ export async function deleteSource(rootPath: string, relativePath: string): Prom
     if (relative === ".harness-align/config.json") throw new HalignError(`${relative}: config.json cannot be deleted`);
     if (relative.startsWith(".harness-align/layers/")) throw new HalignError(`${relative}: layer options are deleted with removeLayerOption`);
     if (relative.startsWith(".harness-align/skills/")) throw new HalignError(`${relative}: skills are deleted with removeSkill`);
+    if (relative.startsWith(".harness-align/harness-files/")) throw new HalignError(`${relative}: harness files are deleted with removeHarnessFile`);
     const path = await resolveManaged(root, relative, relative);
     const stats = await lstatIfExists(path);
     if (!stats) throw new HalignError(`${relative}: file does not exist`);
@@ -1188,11 +1198,17 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
         ...config,
         harnesses: config.harnesses.map((candidate) => (candidate.name === from ? harness : candidate)),
     }));
-    const [rules, layerOptions, agents] = await Promise.all([
+    const [rules, layerOptions, agents, harnessFiles] = await Promise.all([
         loadRules(root, config.harnesses),
         loadLayerOptions(root, config),
         loadAgents(root, config.harnesses),
+        loadHarnessFiles(root, config.harnesses),
     ]);
+    for (const file of harnessFiles.filter((file) => file.harness === from))
+    {
+        assertHarnessFileScope(harness.configPath, file.path);
+        harnessFileSourceRelative(harness.name, file.path);
+    }
     const nextRules = rules.map((rule) => ({ ...rule, targets: replaceHarnessName(rule.targets, from, harness.name) }));
     const nextLayerOptions = Object.values(layerOptions).flat().map((option) => ({ ...option, targets: replaceHarnessName(option.targets, from, harness.name) }));
     const nextAgents = agents.map((agent) =>
@@ -1229,7 +1245,8 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
             });
         }
     }
-    await writeManagedBatch(root, writes);
+    const move = from === harness.name ? undefined : await harnessFilesDirectoryMove(root, from, harness.name);
+    await writeManagedBatch(root, writes, move);
     return nextConfig;
 }
 
@@ -1273,13 +1290,132 @@ export async function removeHarness(rootPath: string, name: string): Promise<voi
         nextAgents.push({ ...agent, harnesses });
     }
     for (const agent of nextAgents) assertAgentInput(agent, nextConfig.harnesses);
+    const backup = `.harness-align/.edit-backup-${randomUUID()}`;
+    const move = await harnessFilesDirectoryMove(root, name, backup, true);
     await writeManagedBatch(root, [
         { path: ".harness-align/config.json", content: Buffer.from(`${JSON.stringify(configDocument(nextConfig), null, 2)}\n`, "utf8") },
         ...nextRules.map((rule) => ({ path: rule.path, content: serializeFrontmatter({ priority: rule.priority, targets: rule.targets }, rule.body, rule.path) })),
         ...nextLayerOptions.map((option) => ({ path: option.path, content: serializeLayerOption(option.targets, option.body) })),
         ...nextAgents.map((agent) => ({ path: agent.path,
             content: serializeFrontmatter({ name: agent.name, description: agent.description, harnesses: agent.harnesses }, agent.body, agent.path) })),
-    ]);
+    ], move);
+}
+
+/** Return the configured harness or a path-specific error. */
+function requireHarnessConfig(config: Config, name: string): HarnessConfig
+{
+    const harness = config.harnesses.find((candidate) => candidate.name === name);
+    if (!harness) throw new HalignError(`.harness-align/config.json: harness is not configured, got ${valueText(name)}`);
+    return harness;
+}
+
+/** Return a recovery move for an existing `harness-files/<name>` directory. */
+async function harnessFilesDirectoryMove(root: string, from: string, to: string, remove = false): Promise<{ from: string; to: string; remove?: boolean } | undefined>
+{
+    const sourceRelative = `.harness-align/harness-files/${from}`;
+    const source = join(root, ".harness-align", "harness-files", from);
+    await ensureRegularSource(root, source);
+    const stats = await lstatIfExists(source);
+    if (!stats) return undefined;
+    if (stats.isSymbolicLink()) throw reparseError(root, source, false);
+    if (!stats.isDirectory()) throw new HalignError(`${sourceRelative}: expected a directory`);
+    return remove ? { from: sourceRelative, to, remove: true } : { from: sourceRelative, to: `.harness-align/harness-files/${to}` };
+}
+
+/** Delete empty parents left by one harness file, never removing `.harness-align` itself. */
+async function removeEmptyHarnessFileParents(root: string, relativeFile: string): Promise<void>
+{
+    let current = posix.dirname(relativeFile);
+    while (current.startsWith(".harness-align/harness-files"))
+    {
+        const path = join(root, ...current.split("/"));
+        await ensureRegularSource(root, path);
+        const stats = await lstatIfExists(path);
+        if (!stats || stats.isSymbolicLink() || !stats.isDirectory()) return;
+        if ((await fs.readdir(path)).length > 0) return;
+        await fs.rmdir(path);
+        current = posix.dirname(current);
+    }
+}
+
+/** Unlink one harness file and drop empty parent directories through `harness-files`. */
+async function unlinkHarnessFile(root: string, sourceRelative: string): Promise<void>
+{
+    const path = await resolveManaged(root, sourceRelative, sourceRelative);
+    const stats = await lstatIfExists(path);
+    if (!stats) throw new HalignError(`${sourceRelative}: file does not exist`);
+    if (stats.isSymbolicLink()) throw reparseError(root, path, false);
+    if (!stats.isFile()) throw new HalignError(`${sourceRelative}: managed source must be a file`);
+    await fs.unlink(path);
+    await removeEmptyHarnessFileParents(root, sourceRelative);
+}
+
+/** Add one harness file, importing the target or creating an empty source when the target is absent. */
+export async function addHarnessFile(rootPath: string, harnessName: string, relativePath: string, importTarget: boolean, userProfile = process.env.USERPROFILE): Promise<void>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const harness = requireHarnessConfig(config, harnessName);
+    assertHarnessFileScope(harness.configPath, relativePath);
+    const sourceRelative = harnessFileSourceRelative(harness.name, relativePath);
+    const existing = await loadHarnessFiles(root, config.harnesses);
+    const identity = `${harness.name}/${relativePath}`.toLowerCase();
+    const collision = existing.find((file) => `${file.harness}/${file.path}`.toLowerCase() === identity);
+    if (collision) throw new HalignError(`${sourceRelative}: file already exists, got ${valueText(collision.path)}`);
+    const target = await assertHarnessFileParent(userProfile, harness.configPath, relativePath);
+    const present = await readHarnessTargetFile(root, harness.name, relativePath, userProfile);
+    if (importTarget)
+    {
+        if (!present) throw new HalignError(`${target}: target file does not exist`);
+    }
+    else if (present) throw new HalignError(`${target}: target file already exists; import it instead of adding an empty sync source`);
+    const bytes = importTarget ? present! : Buffer.alloc(0);
+    assertHarnessFileBytes(bytes, sourceRelative);
+    await writeManaged(root, sourceRelative, bytes);
+}
+
+/** Replace one existing harness file with exact UTF-8 bytes and no newline normalization. */
+export async function saveHarnessFile(rootPath: string, harnessName: string, relativePath: string, content: string, guard: SourceGuard): Promise<void>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    requireHarnessConfig(config, harnessName);
+    const sourceRelative = harnessFileSourceRelative(harnessName, relativePath);
+    if (guard.path !== sourceRelative) throw new HalignError(`${guard.path}: source guard must match ${sourceRelative}`);
+    const bytes = Buffer.from(content, "utf8");
+    assertHarnessFileBytes(bytes, sourceRelative);
+    const existing = await loadHarnessFiles(root, config.harnesses);
+    if (!existing.some((file) => file.harness === harnessName && file.path === relativePath)) throw new HalignError(`${sourceRelative}: file does not exist`);
+    await writeEditedSource(root, sourceRelative, bytes, guard);
+}
+
+/** Delete one harness file source without deleting its deployed target. */
+export async function removeHarnessFile(rootPath: string, harnessName: string, relativePath: string): Promise<void>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    requireHarnessConfig(config, harnessName);
+    await unlinkHarnessFile(root, harnessFileSourceRelative(harnessName, relativePath));
+}
+
+/** Replace the sync source with the target file, or delete the source when the target is missing. */
+export async function adoptHarnessFile(rootPath: string, harnessName: string, relativePath: string, guard?: SourceGuard, userProfile = process.env.USERPROFILE): Promise<void>
+{
+    const root = resolve(rootPath);
+    const config = await loadConfig(root);
+    const harness = requireHarnessConfig(config, harnessName);
+    const sourceRelative = harnessFileSourceRelative(harness.name, relativePath);
+    if (guard && guard.path !== sourceRelative) throw new HalignError(`${guard.path}: source guard must match ${sourceRelative}`);
+    const bytes = await readHarnessTargetFile(root, harness.name, relativePath, userProfile);
+    if (!bytes)
+    {
+        if (guard) await assertSourceGuard(root, guard);
+        await unlinkHarnessFile(root, sourceRelative);
+        return;
+    }
+    assertHarnessFileBytes(bytes, sourceRelative);
+    if (guard) await writeEditedSource(root, sourceRelative, bytes, guard);
+    else await writeManaged(root, sourceRelative, bytes);
 }
 
 /** Add a harness declaration to config. */

@@ -19,11 +19,13 @@ import {
 import { Badge, Button, Checkbox, Flex, Layout, Menu, Modal, Popover, Segmented, Space, Spin, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useState, type ReactNode } from "react";
 import appIcon from "../../../../../build/icon.png";
-import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
+import { selectionKey, useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
 import { WorkflowStatus } from "./WorkflowStatus";
 import { SyncPanel } from "@/features/settings/SyncPanel";
-import { showError } from "@/components/common/Feedback";
-import type { SetupPreview } from "@shared/models/Workspace";
+import { showError, showSuccess } from "@/components/common/Feedback";
+import type { SetupChange, SetupPreview } from "@shared/models/Workspace";
+import { AdoptHarnessFileModal, type AdoptHarnessFileRequest } from "@/features/workspace/HarnessFiles";
+import { refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { filterSetupChanges, isSkillUpdateAvailable, setupExternalLabel } from "@/lib/Utils";
 
 const { Header, Sider, Content } = Layout;
@@ -72,7 +74,9 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
     const [setupPreview, setSetupPreview] = useState<SetupPreview>();
     const [setupView, setSetupView] = useState<"changed" | "all">("changed");
     const [overwriteExternal, setOverwriteExternal] = useState(false);
+    const [adoptRequest, setAdoptRequest] = useState<AdoptHarnessFileRequest>();
     const hasExternalChanges = setupPreview?.changes.some((change) => change.external && change.status !== "unchanged") ?? false;
+    const hasAdoptableChange = setupPreview?.changes.some((change) => change.adoptable) ?? false;
     const [isReloadOpen, setIsReloadOpen] = useState(false);
     const navigationView = view === "shared-rules" ? "rules" : view;
     const currentNav = navigationView === "settings" || navigationView === "console" ? undefined : WORKSPACE_NAV_ITEMS[navigationView];
@@ -105,6 +109,29 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
         if (!state.workspace || state.isBusy) return;
         if (workspaceChangeCount(state) > 0) setIsReloadOpen(true);
         else onReload();
+    };
+
+    /** Replace one extra-file sync source from the review and keep the dialog open. */
+    const adoptFromReview = (request: AdoptHarnessFileRequest): void =>
+    {
+        void runMutation(async () =>
+        {
+            const state = useAppStore.getState();
+            const sourcePath = `.harness-align/harness-files/${request.harness}/${request.path}`;
+            const draft = state.editorDrafts[selectionKey({ kind: "harness-file", harness: request.harness, path: request.path })];
+            const revisions = draft?.sourceRevisions ?? state.workspace?.sourceRevisions ?? {};
+            await window.appApi.workspace.adoptHarnessFile(request.harness, request.path, {
+                path: sourcePath,
+                revision: revisions[sourcePath] ?? null,
+            });
+            state.clearEditorDraft(selectionKey({ kind: "harness-file", harness: request.harness, path: request.path }));
+            await refreshWorkspace();
+            const preview = await window.appApi.workspace.previewSetup(useAppStore.getState().layerSelection);
+            setSetupPreview(preview);
+            setOverwriteExternal(false);
+            setAdoptRequest(undefined);
+            showSuccess(`Adopted ${request.targetLabel} into the sync source.`, "Review sync to upload it.");
+        });
     };
 
     /** Ask Main for an exact deployment preview before offering the execution button. */
@@ -218,9 +245,6 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
                     onSetup(setupPreview.id, overwriteExternal);
                 }}
             >
-                <Typography.Paragraph>
-                    Review added, modified, deleted, unchanged, and skipped paths. Setup checks sources and targets again before replacing them; a changed preview must be refreshed.
-                </Typography.Paragraph>
                 <Flex className="workspace-list-toolbar" justify="flex-end">
                     <Segmented<"changed" | "all"> size="small" aria-label="Deployment preview filter" value={setupView} onChange={setSetupView}
                         options={[{ label: "Changed", value: "changed" }, { label: "All", value: "all" }]} />
@@ -230,7 +254,7 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
                        locale={{ emptyText: setupView === "changed" ? "No changes" : "No deployment paths" }}
                        columns={[
                            { title: "Change", dataIndex: "status", width: 100 },
-                           { title: "Path", dataIndex: "path" },
+                           { title: "Path", dataIndex: "path", render: (path: string) => <span style={{ overflowWrap: "anywhere" }}>{path}</span> },
                            { title: "External changes", dataIndex: "external", width: 130, render: (reason: string | undefined) => reason ? (
                                <Popover trigger="click" title={setupExternalLabel(reason)} content={reason}>
                                    <Button type="link" size="small" styles={{ root: { paddingInline: 0 } }} aria-label={`External change details: ${reason}`}>
@@ -238,9 +262,22 @@ export function AppShell({ children, onSave, onReload, onGenerate, onSetup }: Ap
                                    </Button>
                                </Popover>
                            ) : null },
+                           { key: "actions", align: "right", width: 170, hidden: !hasAdoptableChange, render: (_, change: SetupChange) => (
+                               change.adoptable && change.harness && change.filePath ? (
+                                   <Button type="link" size="small" styles={{ root: { paddingInline: 0 } }} disabled={isBusy}
+                                           aria-label={`Adopt target content for ${change.path}`} onClick={() => setAdoptRequest({
+                                               harness: change.harness ?? "",
+                                               path: change.filePath ?? "",
+                                               targetLabel: change.path,
+                                               targetMissing: change.status === "added",
+                                               dirty: Boolean(useAppStore.getState().editorDrafts[selectionKey({ kind: "harness-file", harness: change.harness ?? "", path: change.filePath ?? "" })]),
+                                           })}>Adopt target content</Button>
+                               ) : null
+                           ) },
                        ]} />
                 {hasExternalChanges ? <Checkbox checked={overwriteExternal} onChange={(event) => setOverwriteExternal(event.target.checked)}>Overwrite modified targets and delete extra paths shown above</Checkbox> : null}
             </Modal>
+            <AdoptHarnessFileModal request={adoptRequest} isBusy={isBusy} onCancel={() => setAdoptRequest(undefined)} onConfirm={adoptFromReview} />
         </Layout>
     );
 }

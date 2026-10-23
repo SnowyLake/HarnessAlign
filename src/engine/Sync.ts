@@ -13,7 +13,7 @@ import { assertSkillName, parseSkillIndex, type SkillIndex } from "./Skills.js";
 /** Portable snapshot with base64 file bytes and explicit empty directories. */
 export interface SyncSnapshot
 {
-    version: 1;
+    version: 1 | 2;
     files: Record<string, string>;
     directories: string[];
 }
@@ -41,7 +41,13 @@ export interface SyncMerge
 export const SYNC_MAX_FILE_BYTES = 8 * 1024 * 1024;
 export const SYNC_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 export const SYNC_MAX_ENTRIES = 5000;
-export const SYNC_SOURCE_DIRECTORIES = ["rules", "layers", "agents", "skills"] as const;
+export const SYNC_SOURCE_DIRECTORIES = ["rules", "layers", "agents", "skills", "harness-files"] as const;
+
+/** Return whether a portable path is an additional harness file or one of its parent directories. */
+function isHarnessFileSyncPath(path: string): boolean
+{
+    return path === "harness-files" || path.startsWith("harness-files/");
+}
 
 /** Create an empty baseline for the first connection. */
 export function emptySyncSnapshot(): SyncSnapshot
@@ -59,15 +65,22 @@ export function assertSyncPath(path: string, directory = false): void
     }
     for (const part of parts) assertWindowsSafeName(part, `sync path ${JSON.stringify(path)}`);
     if ((!directory && path === "config.json") || SYNC_SOURCE_DIRECTORIES.some((name) => directory && path === name || path.startsWith(`${name}/`))) return;
-    throw new HalignError(`sync path ${JSON.stringify(path)}: expected config.json or a path under rules, layers, agents, or skills`);
+    throw new HalignError(`sync path ${JSON.stringify(path)}: expected config.json or a path under rules, layers, agents, skills, or harness-files`);
+}
+
+/** Re-parse a constructed snapshot after assigning the version required by its paths. */
+function finalizeSyncSnapshot(snapshot: Pick<SyncSnapshot, "files" | "directories">): SyncSnapshot
+{
+    const version = [...Object.keys(snapshot.files), ...snapshot.directories].some(isHarnessFileSyncPath) ? 2 : 1;
+    return parseSyncSnapshot({ ...snapshot, version });
 }
 
 /** Normalize a snapshot and reject malformed bytes, casing collisions, and file/directory aliases. */
 export function parseSyncSnapshot(value: unknown): SyncSnapshot
 {
-    if (!isRecord(value) || value.version !== 1 || !isRecord(value.files) || !Array.isArray(value.directories))
+    if (!isRecord(value) || (value.version !== 1 && value.version !== 2) || !isRecord(value.files) || !Array.isArray(value.directories))
     {
-        throw new HalignError("sync snapshot: expected version 1, a files mapping, and a directories array");
+        throw new HalignError("sync snapshot: expected version 1 or 2, a files mapping, and a directories array");
     }
     if (Object.keys(value.files).length + value.directories.length > SYNC_MAX_ENTRIES) throw new HalignError(`sync snapshot: exceeds ${SYNC_MAX_ENTRIES} entries`);
     const files: Record<string, string> = {};
@@ -110,7 +123,10 @@ export function parseSyncSnapshot(value: unknown): SyncSnapshot
         if (Object.hasOwn(files, path)) throw new HalignError(`sync path ${path}: cannot be both a file and a directory`);
     }
     if (Object.keys(files).length + directories.size > SYNC_MAX_ENTRIES) throw new HalignError(`sync snapshot: exceeds ${SYNC_MAX_ENTRIES} entries`);
-    return { version: 1, files, directories: [...directories].sort(codePointCompare) };
+    const directoriesOut = [...directories].sort(codePointCompare);
+    const version = [...Object.keys(files), ...directoriesOut].some(isHarnessFileSyncPath) ? 2 : 1;
+    if (value.version === 1 && version === 2) throw new HalignError("sync snapshot: version 1 cannot contain harness-files");
+    return { version, files, directories: directoriesOut };
 }
 
 /** Read only the managed source scopes, refusing links and oversized files before reading bytes. */
@@ -145,7 +161,7 @@ export async function readSyncSnapshot(root: string): Promise<SyncSnapshot>
         else throw new HalignError(`sync source ${absolute}: expected a regular file or directory`);
     };
     for (const path of ["config.json", ...SYNC_SOURCE_DIRECTORIES]) await visit(path);
-    return parseSyncSnapshot(snapshot);
+    return finalizeSyncSnapshot(snapshot);
 }
 
 /** Hash normalized bytes and directories to detect stale previews independently of clocks. */
@@ -298,7 +314,7 @@ export function restoreSyncChange(base: SyncSnapshot, local: SyncSnapshot, remot
         if (there?.provenance) index.skills[there.provenance.id] = there.provenance.value;
         result.files["skills/index.json"] = Buffer.from(`${JSON.stringify(index, null, 2)}\n`).toString("base64");
     }
-    return parseSyncSnapshot(result);
+    return finalizeSyncSnapshot(result);
 }
 
 /** Merge independent edits, keeping divergent file and skill changes explicit. */
@@ -337,5 +353,5 @@ export function mergeSyncSnapshots(base: SyncSnapshot, local: SyncSnapshot, remo
         result.files["skills/index.json"] = Buffer.from(`${JSON.stringify({ skills: Object.fromEntries(provenance) }, null, 2)}\n`).toString("base64");
     }
     // Parent directories are reconstituted when independent additions survive a directory deletion.
-    return { snapshot: parseSyncSnapshot(result), changes, conflicts };
+    return { snapshot: finalizeSyncSnapshot(result), changes, conflicts };
 }

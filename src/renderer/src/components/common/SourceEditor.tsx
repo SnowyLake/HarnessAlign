@@ -34,6 +34,8 @@ export interface SourceEditorProps
     language?: SourceLanguage;
     readOnly?: boolean;
     resizeKey?: unknown;
+    /** Join lines with this separator. Omit it to keep CodeMirror's LF default. */
+    lineSeparator?: "\r\n" | "\r";
     "aria-label"?: string;
 }
 
@@ -139,6 +141,7 @@ export function SourceEditor({
     language = "plain",
     readOnly = false,
     resizeKey,
+    lineSeparator,
     "aria-label": ariaLabel,
 }: SourceEditorProps)
 {
@@ -182,6 +185,7 @@ export function SourceEditor({
                     highlightSelectionMatches(),
                     search(),
                     EditorView.lineWrapping,
+                    ...(lineSeparator ? [EditorState.lineSeparator.of(lineSeparator)] : []),
                     keymap.of([...searchKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap]),
                     languageExtension(language),
                     syntaxHighlighting(sourceHighlightStyle),
@@ -192,7 +196,7 @@ export function SourceEditor({
                     EditorView.updateListener.of((update) =>
                     {
                         if (!update.docChanged || !inputRef.current) return;
-                        inputRef.current.value = update.state.doc.toString();
+                        inputRef.current.value = update.state.sliceDoc();
                         inputRef.current.dispatchEvent(new Event("input", { bubbles: true }));
                     }),
                 ],
@@ -214,7 +218,7 @@ export function SourceEditor({
     /** Capture unsaved source when opening the preview while preserving the mounted editor state. */
     const handleModeChange = (mode: "source" | "preview"): void =>
     {
-        if (mode === "preview") setPreviewContent(viewRef.current?.state.doc.toString() ?? defaultValue);
+        if (mode === "preview") setPreviewContent(viewRef.current?.state.sliceDoc() ?? defaultValue);
         setIsPreview(mode === "preview");
     };
 
@@ -235,7 +239,7 @@ export function SourceEditor({
                 </div>
             ) : null}
             <div className="source-editor" style={style}>
-                {name !== undefined ? <input ref={inputRef} type="hidden" name={name} value={viewRef.current?.state.doc.toString() ?? defaultValue} /> : null}
+                {name !== undefined ? <input ref={inputRef} type="hidden" name={name} value={viewRef.current?.state.sliceDoc() ?? defaultValue} /> : null}
                 <div ref={hostRef} hidden={isPreview} />
                 {isPreview ? <div className="markdown-preview" role="region" aria-label={ariaLabel ? `${ariaLabel} preview` : "Markdown preview"}>
                     <MarkdownPreview content={previewContent} />

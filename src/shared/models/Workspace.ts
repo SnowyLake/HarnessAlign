@@ -179,12 +179,27 @@ export type WorkspaceItemTarget =
     | { kind: "generated"; path: string }
     | { kind: "skill"; id: string };
 
+/** Whether an additional harness file matches the copy in its harness folder. */
+export type HarnessFileTargetState = "match" | "changed" | "missing" | "parent-missing" | "folder-missing" | "unsafe";
+
+/** Additional file stored under `.harness-align/harness-files` and deployed by Setup. */
+export interface HarnessFile
+{
+    harness: string;
+    path: string;
+    content: string;
+    targetState?: HarnessFileTargetState;
+}
+
 /** One reviewed deployment change under a user harness, shared-rule, or skill directory. */
 export interface SetupChange
 {
     path: string;
     status: "added" | "modified" | "deleted" | "unchanged" | "skipped";
     external?: string;
+    adoptable?: true;
+    harness?: string;
+    filePath?: string;
 }
 
 /** Server-owned deployment preview; execution accepts only its identity. */
@@ -219,6 +234,7 @@ export interface Workspace
     sharedRules: SharedRule[];
     agents: Agent[];
     skills: ProjectSkill[];
+    harnessFiles: HarnessFile[];
     generatedFiles: GeneratedFile[];
     generationStatus: GenerationStatus;
     deploymentStatus: DeploymentStatus;

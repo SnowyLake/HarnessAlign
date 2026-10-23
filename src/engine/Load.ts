@@ -4,9 +4,10 @@
  */
 
 import { promises as fs } from "node:fs";
-import { join, posix } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { display, ensureRegularSource, lstatIfExists, pathKey, readUtf8, reparseError } from "./FsSafe.js";
+import { assertContained, display, ensureRegularSource, isAtomicWriteTemporary, lstatIfExists, pathKey, readUtf8, reparseError, resolveUserHome } from "./FsSafe.js";
+import { SYNC_MAX_FILE_BYTES } from "./Sync.js";
 import {
     AGENT_FIELDS,
     IDENTIFIER_NAME,
@@ -630,4 +631,152 @@ export async function loadSharedRules(root: string): Promise<SharedRule[]>
         });
     }
     return rules;
+}
+
+/** One additional file copied into a harness folder during Setup. */
+export interface HarnessFileSource
+{
+    harness: string;
+    path: string;
+    content: string;
+}
+
+/** Reject absolute, escaping, reserved, and managed-output paths inside a harness folder. */
+export function assertHarnessFilePath(relativePath: string): void
+{
+    if (!relativePath || relativePath.includes("\\") || posix.isAbsolute(relativePath) || /^[A-Za-z]:/u.test(relativePath))
+    {
+        throw new HalignError(`harness file: path must be relative to the harness folder, got ${valueText(relativePath)}`);
+    }
+    const parts = relativePath.split("/");
+    if (parts.some((part) => !part || part === "." || part === ".."))
+    {
+        throw new HalignError(`harness file: path must be relative to the harness folder, got ${valueText(relativePath)}`);
+    }
+    for (const part of parts) assertWindowsSafeName(part, `harness file ${relativePath}`);
+    const folded = parts.map((part) => part.toLowerCase());
+    if (folded[0] === "agents" || folded[0] === "agents.md")
+    {
+        throw new HalignError(`harness file ${relativePath}: collides with managed AGENTS.md or agents/`);
+    }
+}
+
+/** Reject an additional file that would replace shared rules, skills, or the ownership lock. */
+export function assertHarnessFileScope(configPath: string, relativePath: string): void
+{
+    assertHarnessFilePath(relativePath);
+    const scope = `${configPath}/${relativePath}`.toLowerCase();
+    const reserved = scope === ".agents/shared-rules" || scope.startsWith(".agents/shared-rules/")
+        || scope === ".agents/skills" || scope.startsWith(".agents/skills/")
+        || scope === ".agents/.harness-align.lock.json" || scope.startsWith(".agents/.harness-align.lock.json/");
+    if (reserved) throw new HalignError(`harness file ${relativePath}: collides with managed shared rules, skills, or the deployment lock`);
+}
+
+/** Return the managed source path for one additional harness file. */
+export function harnessFileSourceRelative(harness: string, relativePath: string): string
+{
+    assertHarnessFilePath(relativePath);
+    assertWindowsSafeName(harness, `harness file ${relativePath}`);
+    const relative = `harness-files/${harness}/${relativePath}`;
+    if (relative.length > 240) throw new HalignError(`harness file ${relativePath}: sync path must be at most 240 characters, got ${relative.length}`);
+    return `.harness-align/${relative}`;
+}
+
+/** Reject NUL, BOM, invalid UTF-8, and files over the sync limit without changing bytes. */
+export function assertHarnessFileBytes(bytes: Buffer, label: string): void
+{
+    if (bytes.length > SYNC_MAX_FILE_BYTES) throw new HalignError(`${label}: exceeds the 8 MiB file limit, got ${bytes.length} bytes`);
+    if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) throw new HalignError(`${label}: expected UTF-8 text without BOM`);
+    if (bytes.includes(0)) throw new HalignError(`${label}: expected UTF-8 text without NUL bytes`);
+    try
+    {
+        new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    }
+    catch (error)
+    {
+        throw new HalignError(`${label}: expected UTF-8 text, got ${errorText(error)}`);
+    }
+}
+
+/** Require the harness folder and the target parent to already exist as real directories. */
+export async function assertHarnessFileParent(userProfile: string | undefined, configPath: string, relativePath: string): Promise<string>
+{
+    assertHarnessFilePath(relativePath);
+    const home = resolveUserHome(userProfile);
+    const harnessRoot = join(home, ...configPath.split("/"));
+    await ensureRegularSource(home, harnessRoot);
+    const rootStats = await lstatIfExists(harnessRoot);
+    if (!rootStats) throw new HalignError(`${harnessRoot}: harness folder does not exist`);
+    if (rootStats.isSymbolicLink()) throw reparseError(home, harnessRoot, false);
+    if (!rootStats.isDirectory()) throw new HalignError(`${harnessRoot}: expected a directory`);
+    const target = join(harnessRoot, ...relativePath.split("/"));
+    assertContained(harnessRoot, target, relativePath);
+    const parent = dirname(target);
+    await ensureRegularSource(home, parent);
+    const parentStats = await lstatIfExists(parent);
+    if (!parentStats) throw new HalignError(`${parent}: parent folder must already exist`);
+    if (parentStats.isSymbolicLink()) throw reparseError(home, parent, false);
+    if (!parentStats.isDirectory()) throw new HalignError(`${parent}: expected a directory`);
+    return target;
+}
+
+/** Load additional harness files, rejecting unknown directories and case-insensitive duplicates. */
+export async function loadHarnessFiles(root: string, harnesses: readonly { name: string; configPath: string }[]): Promise<HarnessFileSource[]>
+{
+    const directory = join(root, ".harness-align", "harness-files");
+    await ensureRegularSource(root, directory);
+    const stats = await lstatIfExists(directory);
+    if (!stats) return [];
+    if (stats.isSymbolicLink()) throw reparseError(root, directory, false);
+    if (!stats.isDirectory()) throw new HalignError(`${display(root, directory)}: expected a directory`);
+    const configured = new Map(harnesses.map((harness) => [harness.name.toLowerCase(), harness]));
+    const files: HarnessFileSource[] = [];
+    const seen = new Map<string, string>();
+    /** Record one regular file under a configured harness directory. */
+    const visit = async (harness: { name: string; configPath: string }, current: string, relative: string): Promise<void> =>
+    {
+        await ensureRegularSource(root, current);
+        for (const name of (await fs.readdir(current)).sort(codePointCompare))
+        {
+            if (isAtomicWriteTemporary(name)) continue;
+            const path = join(current, name);
+            const childRelative = relative ? `${relative}/${name}` : name;
+            await ensureRegularSource(root, path);
+            const child = await lstatIfExists(path);
+            if (!child) continue;
+            if (child.isSymbolicLink()) throw reparseError(root, path, false);
+            if (child.isDirectory())
+            {
+                await visit(harness, path, childRelative);
+                continue;
+            }
+            if (!child.isFile()) throw new HalignError(`${display(root, path)}: expected a regular file`);
+            assertHarnessFileScope(harness.configPath, childRelative);
+            const sourceRelative = harnessFileSourceRelative(harness.name, childRelative);
+            const identity = `${harness.name}/${childRelative}`.toLowerCase();
+            const previous = seen.get(identity);
+            if (previous) throw new HalignError(`${sourceRelative}: conflicts with ${previous} without case sensitivity`);
+            seen.set(identity, sourceRelative);
+            if (child.size > SYNC_MAX_FILE_BYTES) throw new HalignError(`${sourceRelative}: exceeds the 8 MiB file limit, got ${child.size} bytes`);
+            const bytes = await fs.readFile(path);
+            assertHarnessFileBytes(bytes, sourceRelative);
+            files.push({ harness: harness.name, path: childRelative, content: bytes.toString("utf8") });
+        }
+    };
+    for (const entry of (await fs.readdir(directory)).sort(codePointCompare))
+    {
+        if (isAtomicWriteTemporary(entry)) continue;
+        const child = join(directory, entry);
+        await ensureRegularSource(root, child);
+        const childStats = await lstatIfExists(child);
+        if (!childStats) continue;
+        if (childStats.isSymbolicLink()) throw reparseError(root, child, false);
+        if (!childStats.isDirectory()) throw new HalignError(`${display(root, child)}: expected a harness directory`);
+        const harness = configured.get(entry.toLowerCase());
+        if (!harness) throw new HalignError(`${display(root, child)}: harness is not configured, got ${valueText(entry)}`);
+        if (harness.name !== entry) throw new HalignError(`${display(root, child)}: harness directory must match ${valueText(harness.name)}, got ${valueText(entry)}`);
+        await visit(harness, child, "");
+    }
+    files.sort((left, right) => codePointCompare(left.harness, right.harness) || codePointCompare(left.path, right.path));
+    return files;
 }

@@ -3,17 +3,18 @@
  * The config root is always `%USERPROFILE%`; renderer input never chooses a directory.
  */
 
-import { ipcMain, shell } from "electron";
+import { dialog, ipcMain, shell } from "electron";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
 import { z } from "zod";
 import { HalignError } from "../../engine/Model.js";
 import { resolveExistingHarnessRoot } from "../../engine/Setup.js";
 import {
-    AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA,
-    RULE_INPUT_SCHEMA, SOURCE_GUARD_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA,
+    ADD_HARNESS_FILE_SCHEMA, ADOPT_HARNESS_FILE_SCHEMA, AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA,
+    RULE_INPUT_SCHEMA, SAVE_HARNESS_FILE_SCHEMA, SOURCE_GUARD_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA,
 } from "../../shared/models/Schemas.js";
-import { resolveWorkspaceItemFolder, withWorkspace, workspaceService } from "../services/WorkspaceService.js";
+import { importSelectedHarnessFile, resolveWorkspaceItemFolder, withWorkspace, workspaceService } from "../services/WorkspaceService.js";
 import { runIpc } from "../utils/Ipc.js";
+import { getMainWindow } from "../windows/MainWindow.js";
 
 /** Register workspace IPC handlers. */
 export function registerWorkspaceHandlers(): void
@@ -96,6 +97,42 @@ export function registerWorkspaceHandlers(): void
     ipcMain.handle(IPC_CHANNELS.workspaceRemoveHarness, (event, name: unknown) => runIpc(event, async () =>
     {
         await workspaceService.removeHarness(z.string().parse(name));
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceAddHarnessFile, (event, input: unknown) => runIpc(event, async () =>
+    {
+        const parsed = ADD_HARNESS_FILE_SCHEMA.parse(input);
+        return withWorkspace(async (root) =>
+        {
+            const target = await resolveExistingHarnessRoot(root, parsed.harness);
+            const window = getMainWindow();
+            if (!window) throw new HalignError("Add harness file: the application window is unavailable");
+            const selected = await dialog.showOpenDialog(window, {
+                title: `Add file to ${parsed.harness}`,
+                defaultPath: target,
+                buttonLabel: "Import",
+                properties: ["openFile", "showHiddenFiles", "dontAddToRecent"],
+            });
+            if (selected.canceled || selected.filePaths.length === 0) return null;
+            return importSelectedHarnessFile(root, parsed.harness, selected.filePaths[0]!);
+        }, "Add harness file");
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceSaveHarnessFile, (event, input: unknown) => runIpc(event, async () =>
+    {
+        const parsed = SAVE_HARNESS_FILE_SCHEMA.parse(input);
+        await workspaceService.saveHarnessFile(parsed.harness, parsed.path, parsed.content, parsed.guard);
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceRemoveHarnessFile, (event, harness: unknown, path: unknown) => runIpc(event, async () =>
+    {
+        await workspaceService.removeHarnessFile(z.string().min(1).parse(harness), z.string().min(1).parse(path));
+    }));
+
+    ipcMain.handle(IPC_CHANNELS.workspaceAdoptHarnessFile, (event, input: unknown) => runIpc(event, async () =>
+    {
+        const parsed = ADOPT_HARNESS_FILE_SCHEMA.parse(input);
+        await workspaceService.adoptHarnessFile(parsed.harness, parsed.path, parsed.guard);
     }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceUpdateHarness, (event, from: unknown, harness: unknown) => runIpc(event, async () =>

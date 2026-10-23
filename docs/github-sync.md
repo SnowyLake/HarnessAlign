@@ -73,13 +73,16 @@ View versions 用于对照本地和远端文件. Local 中的删除行以 `-` �
 | `config.json` | 同步标题, Harness, Layer 选择和 Skills 来源 |
 | `rules/`, 包括 `shared/` | 同步配置源 |
 | `layers/`, `agents/` | 同步全部配置源, 保留空 Layer |
+| `harness-files/<harness>/` | 同步额外文件的同步源; 比较视图的 Local source 与 GitHub 分别显示本机同步源和远端版本, 不读取助手目录里的副本 |
 | 本地导入或来源不明的 Skills | 同步完整文件, 二进制资产和来源记录 |
 | GitHub 下载的 Skills | 只同步已安装清单和来源记录, 接收设备补齐内容 |
 | 配置目录中的 `AGENTS.md` | 不同步, 由本机应用维护编辑指引 |
 | `generated/` 和已部署的助手目录 | 不同步, 各设备自行生成和部署 |
 | 主题, 窗口位置, Token, 同步基线, 格式升级备份和恢复记录 | 只保留在本机 |
 
-存档位于仓库的 `harness-align/` 目录, README 等其他仓库文件会保留. `harness-align/sync.json` 记录同步格式和目录信息, 包括空 Layer, 请不要删除或手工修改.
+存档位于仓库的 `harness-align/` 目录, README 等其他仓库文件会保留. `harness-align/sync.json` 记录同步格式和目录信息, 包括空 Layer, 请不要删除或手工修改. 这个标记保持版本 `1`.
+
+没有额外文件时, 配置快照版本为 `1`. 包含 `harness-files` 时版本为 `2`, 旧版应用会拒绝这些路径. 额外文件按整个文件合并, 不与 Skill 分成一组. 同步不会读取助手目录. 文件内容按原样上传, 不隐藏其中的令牌或密钥. 助手目录中的副本要通过 Setup 或 Adopt target content 与同步源对齐, 再在同步预览里选择上传或保留远端.
 
 ## Skills 如何同步
 
