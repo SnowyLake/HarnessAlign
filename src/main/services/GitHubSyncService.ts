@@ -9,15 +9,17 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { applySyncSources, upgradeSyncConfig, upgradeWorkspaceConfig, validateSyncSources } from "../../engine/Edit.js";
+import { applySyncSources, upgradeSyncConfig, validateSyncSources } from "../../engine/Edit.js";
+import { applyFileSyncTargets, ensureFileSyncCompatibility, inspectFileSyncTargets, type FileSyncApplication, type FileSyncTarget } from "../../engine/Setup.js";
 import { atomicWrite, ensureRegularSource, lstatIfExists } from "../../engine/FsSafe.js";
+import { parseConfigSource } from "../../engine/Load.js";
 import { HalignError } from "../../engine/Model.js";
 import {
-    assertSyncPath, emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, syncSnapshotHash,
+    assertSyncPath, emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, stopSyncFile, syncFilePaths, syncSnapshotHash, withoutFileContents,
     SYNC_MAX_ENTRIES, SYNC_MAX_FILE_BYTES, SYNC_MAX_TOTAL_BYTES, type SyncMerge, type SyncSnapshot,
 } from "../../engine/Sync.js";
 import { syncPreviewHasWork } from "../../shared/models/Sync.js";
-import type { SyncApplyInput, SyncCheckResult, SyncConnectionInput, SyncDetail, SyncDiscardInput, SyncFileView, SyncPreview, SyncResult, SyncStatus } from "../../shared/models/Sync.js";
+import type { FileSyncState, SyncApplyInput, SyncCheckResult, SyncConnectionInput, SyncDetail, SyncDiscardInput, SyncFileChange, SyncFileView, SyncPreview, SyncResult, SyncStatus } from "../../shared/models/Sync.js";
 import { fetchRemote, githubRateLimitHint, readResponseBytes } from "./RemoteFetch.js";
 import { hydrateSyncSkills } from "./SkillRemoteService.js";
 
@@ -30,10 +32,11 @@ interface SyncConnection extends Omit<SyncConnectionInput, "token">
 /** Persisted baseline and in-flight upload survive network failures and process exits. */
 interface SyncState
 {
-    version: 1;
+    version: 1 | 2 | 3;
     connection: SyncConnection | null;
     base: { connectionKey: string; head: string; snapshot: SyncSnapshot; syncedAt: string } | null;
-    pending: { connectionKey: string; head: string; parent: string; before: SyncSnapshot; snapshot: SyncSnapshot } | null;
+    pending: { connectionKey: string; head: string; parent: string; before: SyncSnapshot; snapshot: SyncSnapshot; applications?: FileSyncApplication[] | undefined } | null;
+    applications?: FileSyncApplication[] | undefined;
 }
 
 /** One immutable remote head and the source subtree read from it. */
@@ -55,6 +58,13 @@ interface RetainedPreview
     local: SyncSnapshot;
     remote: RemoteSnapshot;
     base: SyncSnapshot;
+    plan?: {
+        next: SyncSnapshot;
+        candidate: SyncSnapshot;
+        observations: FileSyncTarget[];
+        observationSnapshot: SyncSnapshot;
+        applications: FileSyncApplication[];
+    };
 }
 
 const SHA_SCHEMA = z.string().regex(/^[a-f0-9]{40}$/u);
@@ -67,11 +77,21 @@ const TREE_SCHEMA = z.object({
 });
 const SNAPSHOT_SCHEMA = z.unknown().transform((value) => parseSyncSnapshot(value));
 const CONNECTION_SCHEMA = z.object({ owner: z.string(), repository: z.string(), branch: z.string(), encryptedToken: z.string() });
+const FILE_APPLICATION_SCHEMA = z.object({
+    target: z.object({
+        key: z.string().min(1).max(240), harness: z.string().min(1).max(240), filePath: z.string().min(1).max(240), target: z.string().min(1).max(500),
+        content: z.string().max(Math.ceil(SYNC_MAX_FILE_BYTES / 3) * 4).nullable(), state: z.enum(["ready", "missing", "folder-missing", "parent-missing", "unsafe"]),
+        baseline: z.string().regex(/^[a-f0-9]{64}$/u).optional(), error: z.string().optional(),
+    }),
+    content: z.string().max(Math.ceil(SYNC_MAX_FILE_BYTES / 3) * 4),
+});
 const STATE_SCHEMA = z.object({
-    version: z.literal(1),
+    version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     connection: CONNECTION_SCHEMA.nullable(),
     base: z.object({ connectionKey: z.string(), head: SHA_SCHEMA, snapshot: SNAPSHOT_SCHEMA, syncedAt: z.string() }).nullable(),
-    pending: z.object({ connectionKey: z.string(), head: SHA_SCHEMA, parent: SHA_SCHEMA, before: SNAPSHOT_SCHEMA, snapshot: SNAPSHOT_SCHEMA }).nullable(),
+    pending: z.object({ connectionKey: z.string(), head: SHA_SCHEMA, parent: SHA_SCHEMA, before: SNAPSHOT_SCHEMA, snapshot: SNAPSHOT_SCHEMA,
+        applications: z.array(FILE_APPLICATION_SCHEMA).max(SYNC_MAX_ENTRIES).optional() }).nullable(),
+    applications: z.array(FILE_APPLICATION_SCHEMA).max(SYNC_MAX_ENTRIES).optional(),
 });
 const REMOTE_DIRECTORY = "harness-align";
 const REMOTE_MANIFEST = "sync.json";
@@ -94,7 +114,8 @@ function clearRemoteCache(): void
 /** Encode the sync format marker the same way upload and cache hashing do. */
 function manifestBytes(snapshot: SyncSnapshot): Buffer
 {
-    return Buffer.from(`${JSON.stringify({ version: 1, directories: snapshot.directories }, null, 2)}\n`);
+    return Buffer.from(`${JSON.stringify({ version: snapshot.version === 4 ? 3 : snapshot.version === 3 ? 2 : 1, directories: snapshot.directories,
+        ...(snapshot.version >= 3 ? { stoppedFiles: snapshot.stoppedFiles ?? [] } : {}), ...(snapshot.version === 4 ? { files: syncFilePaths(snapshot) } : {}) }, null, 2)}\n`);
 }
 
 /** Retain only this snapshot's bytes so local uploads cannot accumulate historical versions. */
@@ -157,8 +178,8 @@ async function readState(directory: string): Promise<SyncState>
 {
     const path = await statePath(directory);
     const stats = await lstatIfExists(path);
-    if (!stats) return { version: 1, connection: null, base: null, pending: null };
-    if (!stats.isFile() || stats.size > 160 * 1024 * 1024) throw new HalignError(`${path}: expected a sync state file of at most 160 MiB`);
+    if (!stats) return { version: 3, connection: null, base: null, pending: null };
+    if (!stats.isFile() || stats.size > 320 * 1024 * 1024) throw new HalignError(`${path}: expected a sync state file of at most 320 MiB`);
     try
     {
         const state = STATE_SCHEMA.parse(JSON.parse(await fs.readFile(path, "utf8")));
@@ -174,7 +195,10 @@ async function readState(directory: string): Promise<SyncState>
 /** Persist credentials, baseline, and pending receipt together in one atomic file. */
 async function writeState(directory: string, state: SyncState): Promise<void>
 {
-    await atomicWrite(await statePath(directory), Buffer.from(`${JSON.stringify(state)}\n`));
+    state.version = 3;
+    const bytes = Buffer.from(`${JSON.stringify(state)}\n`);
+    if (bytes.length > 320 * 1024 * 1024) throw new HalignError("GitHub sync state exceeds 320 MiB; pending work was preserved");
+    await atomicWrite(await statePath(directory), bytes);
 }
 
 /** Return a sanitized status without exposing stored credentials or source paths. */
@@ -188,7 +212,19 @@ function publicStatus(state: SyncState): SyncStatus
         branch: connection?.branch ?? "",
         lastSyncedAt: connection && state.base?.connectionKey === connectionKey(connection) ? state.base.syncedAt : null,
         hasPendingUpload: state.pending !== null,
+        hasPendingApplication: (state.applications?.length ?? 0) > 0,
     };
+}
+
+/** Refuse to publish intermediate source or target state from an interrupted local operation. */
+async function assertWorkspaceRecovered(root: string): Promise<void>
+{
+    for (const name of [".sync-recovery.json", ".edit-recovery.json", ".deployment-recovery.json"])
+    {
+        const path = join(root, ".harness-align", name);
+        await ensureRegularSource(root, path);
+        if (await lstatIfExists(path)) throw new HalignError(`${path}: local recovery is required; reload the workspace before reviewing sync`);
+    }
 }
 
 /** Read local connection status without contacting GitHub. */
@@ -197,11 +233,16 @@ export async function getSyncStatus(directory: string, root?: string): Promise<S
     const state = await readState(directory);
     const status = publicStatus(state);
     if (!root || !state.connection) return status;
-    if (!state.base || state.base.connectionKey !== connectionKey(state.connection)) return { ...status, localState: "uninitialized" };
     try
     {
+        await assertWorkspaceRecovered(root);
+        if (!state.base || state.base.connectionKey !== connectionKey(state.connection)) return { ...status, localState: "uninitialized" };
         const local = portableSyncSnapshot(await readSyncSnapshot(root));
-        return { ...status, localState: syncSnapshotHash(local) === syncSnapshotHash(portableSyncSnapshot(state.base.snapshot)) ? "current" : "changed" };
+        const actual = await inspectFileSyncTargets(root, local, root);
+        const changed = status.hasPendingApplication || Object.keys((await readSyncSnapshot(root)).legacyFiles ?? {}).length > 0
+            || syncSnapshotHash(withoutFileContents(local)) !== syncSnapshotHash(withoutFileContents(portableSyncSnapshot(state.base.snapshot)))
+            || actual.some((target) => target.state !== "ready" || target.content !== state.base!.snapshot.files[target.key]);
+        return { ...status, localState: changed ? "changed" : "current" };
     }
     catch (error)
     {
@@ -213,7 +254,7 @@ export async function getSyncStatus(directory: string, root?: string): Promise<S
 export async function getSyncEncryptedToken(directory: string): Promise<string>
 {
     const connection = (await readState(directory)).connection;
-    if (!connection) throw new HalignError("GitHub Sync is not connected");
+    if (!connection) throw new HalignError("Remote is not connected");
     return connection.encryptedToken;
 }
 
@@ -399,10 +440,14 @@ async function readRemote(connection: SyncConnection, token: string, baseline?: 
     }
     const marker = used.get(manifestEntry.sha);
     if (!marker) throw new HalignError(`${REMOTE_DIRECTORY}/${REMOTE_MANIFEST}: missing sync format marker; use an empty sync directory or a repository created by Harness Align`);
-    const manifest = z.object({ version: z.literal(1), directories: z.array(z.string()) }).parse(JSON.parse(marker.toString("utf8")));
+    const manifest = z.object({ version: z.union([z.literal(1), z.literal(2), z.literal(3)]), directories: z.array(z.string()), stoppedFiles: z.array(z.string()).optional(), files: z.array(z.string()).optional() }).parse(JSON.parse(marker.toString("utf8")));
+    if (manifest.version === 1 && manifest.stoppedFiles !== undefined) throw new HalignError("GitHub sync marker: stoppedFiles requires version 2");
     snapshot.directories.push(...manifest.directories);
     const hasHarnessFiles = [...Object.keys(snapshot.files), ...snapshot.directories].some((path) => path === "harness-files" || path.startsWith("harness-files/"));
-    const checked = parseSyncSnapshot({ ...snapshot, version: hasHarnessFiles ? 2 : 1 });
+    const checked = parseSyncSnapshot({ ...snapshot, version: manifest.version === 3 ? 4 : manifest.version === 2 ? 3 : hasHarnessFiles ? 2 : 1,
+        ...(manifest.version === 3 ? { filePaths: manifest.files } : {}),
+        ...(manifest.stoppedFiles !== undefined ? { stoppedFiles: manifest.stoppedFiles } : {}) });
+    if (manifest.version === 3 && (!manifest.files || syncFilePaths(checked).some((path) => !Object.hasOwn(checked.files, path)))) throw new HalignError("GitHub sync marker: each registered file requires content");
     await validateSyncSources(checked, true);
     const remote = { head, rootTree, snapshot: checked, blobs, empty: false };
     cachedRemote = { connectionKey: key, remote };
@@ -441,10 +486,45 @@ async function createSyncCommit(connection: SyncConnection, token: string, remot
 async function finishSync(root: string, directory: string, state: SyncState, before: SyncSnapshot, snapshot: SyncSnapshot, head: string): Promise<void>
 {
     const hydrated = await hydrateSyncSkills(snapshot, before);
+    await ensureFileSyncCompatibility(root);
     await applySyncSources(root, before, hydrated);
     state.base = { connectionKey: connectionKey(state.connection!), head, snapshot, syncedAt: new Date().toISOString() };
+    state.applications = state.pending?.applications ?? [];
     state.pending = null;
     await writeState(directory, state);
+}
+
+/** Continue the separately persisted actual-file stage without repeating a successful cloud publication. */
+async function applyPendingFiles(root: string, directory: string, state: SyncState): Promise<SyncResult>
+{
+    if (!state.applications?.length) return { status: publicStatus(state), message: "Configuration synced. Additional files are current on this device; use Setup for generated rules and agents." };
+    const applications = state.applications;
+    try
+    {
+        const result = await applyFileSyncTargets(root, state.applications, root);
+        const local = await readSyncSnapshot(root);
+        if (local.legacyFiles)
+        {
+            const next = parseSyncSnapshot(local);
+            for (const application of applications)
+            {
+                if (!result.skipped.includes(application.target.key) && next.legacyFiles?.[application.target.key] === application.content) delete next.legacyFiles[application.target.key];
+            }
+            await applySyncSources(root, local, next);
+        }
+        state.applications = state.applications.filter((application) => result.skipped.includes(application.target.key));
+        await writeState(directory, state);
+        const pending = state.applications.length > 0;
+        return { status: publicStatus(state), applicationPending: pending,
+            message: pending ? `Remote synced. ${result.applied} Local file(s) updated; ${state.applications.length} await an existing harness or parent folder. Review sync after creating the folders.`
+                : `Remote synced; ${result.applied} Local file(s) updated.` };
+    }
+    catch (error)
+    {
+        state.applications = applications;
+        return { status: publicStatus(state), applicationPending: true,
+            message: `Remote synced; Local updates are pending. Local edits are preserved. Review or resume sync. ${error instanceof Error ? error.message : String(error)}` };
+    }
 }
 
 /** Resolve uncertain publication by checking immutable commit ancestry before retrying any upload. */
@@ -463,7 +543,7 @@ async function recoverUpload(root: string, directory: string, state: SyncState, 
     const local = await readSyncSnapshot(root);
     if (published && remote.empty) throw new HalignError(`${REMOTE_DIRECTORY}: the published archive is missing; restore it before recovering sync`);
     if (published && (syncSnapshotHash(pending.before) === syncSnapshotHash(local)
-        || syncSnapshotHash(portableSyncSnapshot(pending.snapshot)) === syncSnapshotHash(portableSyncSnapshot(local))))
+        || syncSnapshotHash(portableSyncSnapshot(pending.snapshot.version === 4 ? withoutFileContents(pending.snapshot) : pending.snapshot)) === syncSnapshotHash(portableSyncSnapshot(local))))
     {
         await finishSync(root, directory, state, local, pending.snapshot, pending.head);
         return "Recovered an earlier upload. The local workspace was refreshed; review any newer remote changes below.";
@@ -478,7 +558,7 @@ async function recoverUpload(root: string, directory: string, state: SyncState, 
 /** Read the remote archive shared by interactive preview and the startup check. */
 async function readSyncRemote(state: SyncState, token: string): Promise<RemoteSnapshot>
 {
-    if (!state.connection) throw new HalignError("GitHub Sync is not connected");
+    if (!state.connection) throw new HalignError("Remote is not connected");
     const key = connectionKey(state.connection);
     const known = state.base?.connectionKey === key ? state.base : null;
     if (known && cachedRemote?.connectionKey !== key) rememberSnapshotBlobs(known.snapshot);
@@ -494,49 +574,203 @@ function remoteConfigNeedsUpgrade(remote: RemoteSnapshot): boolean
     return remote.snapshot.files["config.json"] !== upgradeSyncConfig(remote.snapshot).files["config.json"];
 }
 
-/** Build the review counts from snapshots already loaded. Does not recover, upgrade, or retain the preview. */
-function buildSyncPreview(state: SyncState, remote: RemoteSnapshot, local: SyncSnapshot, notice: string): { preview: SyncPreview; base: NonNullable<SyncState["base"]> | null }
+/** Upgrade legacy removals without confusing content-free declarations with missing files. */
+function withFileStops(base: SyncSnapshot, snapshot: SyncSnapshot): SyncSnapshot
 {
-    const base = state.connection && state.base?.connectionKey === connectionKey(state.connection) ? state.base : null;
-    const merged = mergeConfigSnapshots(portableSyncSnapshot(base?.snapshot ?? emptySyncSnapshot()), portableSyncSnapshot(local), portableSyncSnapshot(remote.snapshot));
-    const remoteUpgrade = remoteConfigNeedsUpgrade(remote);
-    const configChange = merged.changes.find((change) => change.key === "config.json");
-    return {
-        base, preview: {
-            id: randomUUID(), head: remote.head, firstSync: base === null, remoteEmpty: remote.empty,
-            uploadCount: merged.changes.filter((change) => change.direction === "upload" || change.direction === "conflict").length
-                + (remoteUpgrade && configChange?.direction === "download" ? 1 : 0),
-            downloadCount: merged.changes.filter((change) => change.direction === "download" || change.direction === "conflict").length,
-            changes: merged.changes, notice,
-        },
-    };
+    let next = withoutFileContents(snapshot);
+    const present = new Set([...syncFilePaths(next), ...next.directories].map((key) => key.toLowerCase()));
+    for (const key of syncFilePaths(base)) if (!present.has(key.toLowerCase())) next = stopSyncFile(next, key);
+    return next;
 }
 
-/** Compare a connected archive without recovering uploads, upgrading config, or keeping an applicable preview. */
+/** Reject unsupported first-use actions before planning any file collection. */
+function assertSyncMode(preview: RetainedPreview, mode: SyncApplyInput["mode"]): void
+{
+    if (preview.remote.empty && (!preview.public.firstSync || mode !== "initialize")) throw new HalignError("The remote archive is not initialized; use Initialize archive explicitly before syncing");
+    if (!preview.remote.empty && mode === "initialize") throw new HalignError("The remote archive already exists; initialization cannot replace it");
+    if (mode !== "merge" && !preview.public.firstSync) throw new HalignError("Whole-workspace adoption is only available on the first sync");
+}
+
+/** Compare the actual file and GitHub against the last accepted baseline, retaining only reviewed recovery bytes. */
+async function buildFileSyncPlan(root: string, state: SyncState, retained: RetainedPreview, input: SyncApplyInput): Promise<SyncPreview>
+{
+    assertSyncMode(retained, input.mode);
+    const base = withoutFileContents(portableSyncSnapshot(retained.base));
+    let local = withFileStops(base, portableSyncSnapshot(retained.local));
+    const remote = withFileStops(base, portableSyncSnapshot(retained.remote.snapshot));
+    const fileChoices = input.fileChoices ?? {};
+    const identities = Object.keys(fileChoices).map((key) => key.toLowerCase());
+    if (new Set(identities).size !== identities.length) throw new HalignError("File choices contain duplicate paths without case sensitivity");
+    const known = new Set([...syncFilePaths(local), ...syncFilePaths(remote)].map((key) => key.toLowerCase()));
+    for (const [key, choice] of Object.entries(fileChoices))
+    {
+        if (!known.has(key.toLowerCase())) throw new HalignError(`${key}: file decision is not part of this preview`);
+        if (choice === "stop") local = stopSyncFile(local, key);
+    }
+    const metadataChoices = { ...input.choices };
+    for (const [key, choice] of Object.entries(fileChoices)) if (choice === "target" || choice === "remote" || choice === "legacy") metadataChoices[key.toLowerCase()] = choice === "remote" ? "remote" : "local";
+    const merged = mergeConfigSnapshots(base, local, remote, metadataChoices);
+    let next = upgradeSyncConfig(input.mode === "remote" ? remote : input.mode === "local" || input.mode === "initialize" ? local : merged.snapshot);
+    for (const [key, choice] of Object.entries(fileChoices)) if (choice === "stop") next = stopSyncFile(next, key);
+    const nextPaths = new Set([...syncFilePaths(next), ...next.directories].map((key) => key.toLowerCase()));
+    for (const key of new Set([...syncFilePaths(local), ...syncFilePaths(remote)])) if (!nextPaths.has(key.toLowerCase())) next = stopSyncFile(next, key);
+    const config = parseConfigSource(Buffer.from(next.files["config.json"]!, "base64")).config;
+    const observationSnapshot = parseSyncSnapshot({ version: 4, files: { "config.json": next.files["config.json"]! }, directories: [],
+        filePaths: syncFilePaths(next).filter((key) => config.harnesses.some((harness) => harness.name === key.split("/")[1])) });
+    const observations = await inspectFileSyncTargets(root, observationSnapshot, root);
+    const fileChanges: SyncFileChange[] = [];
+    const applications: FileSyncApplication[] = [];
+    const changes = merged.changes.filter((change) => !change.key.startsWith("harness-files/") || change.key.endsWith("/"));
+    const candidate = withoutFileContents(retained.local);
+    /** Resolve a Windows file identity while retaining the selected spelling. */
+    const bytesAt = (snapshot: SyncSnapshot, key: string): string | undefined =>
+    {
+        const path = Object.keys(snapshot.files).find((path) => path.toLowerCase() === key.toLowerCase());
+        return path === undefined ? undefined : snapshot.files[path];
+    };
+    for (const key of syncFilePaths(next))
+    {
+        const target = observations.find((item) => item.key === key);
+        const incoming = bytesAt(retained.remote.snapshot, key);
+        const baseConfig = retained.base.files["config.json"];
+        const baseHarness = baseConfig === undefined ? undefined : parseConfigSource(Buffer.from(baseConfig, "base64")).config.harnesses.find((harness) => harness.name === key.split("/")[1]);
+        const sameTarget = baseHarness && target?.target === `${baseHarness.configPath}/${key.split("/").slice(2).join("/")}`;
+        const previous = sameTarget ? bytesAt(retained.base, key) : undefined;
+        const actual = target?.content ?? undefined;
+        const pending = state.applications?.find((item) => item.target.key.toLowerCase() === key.toLowerCase() && item.target.target === target?.target);
+        const pendingUnchanged = pending && target?.content === pending.target.content && target.state === pending.target.state;
+        const legacyKey = Object.keys(retained.local.legacyFiles ?? {}).find((path) => path.toLowerCase() === key.toLowerCase());
+        const legacy = legacyKey ? retained.local.legacyFiles![legacyKey] : retained.local.version < 4 ? bytesAt(retained.local, key) : undefined;
+        const migration = legacy !== undefined && legacy !== actual && !(pending && pending.content === legacy);
+        const choice = Object.entries(fileChoices).find(([path]) => path.toLowerCase() === key.toLowerCase())?.[1];
+        const localContent = pendingUnchanged ? pending.content : actual;
+        let content: string | undefined;
+        let needsChoice = false;
+        let localState: FileSyncState = target?.state !== "ready" ? target?.state ?? "unsafe" : "match";
+        const registeredHere = syncFilePaths(retained.local).some((path) => path.toLowerCase() === key.toLowerCase());
+        if (choice === "target")
+        {
+            if (actual === undefined) throw new HalignError(`${key}: Local file is unavailable`);
+            content = actual;
+        }
+        else if (choice === "remote")
+        {
+            if (incoming === undefined) throw new HalignError(`${key}: Remote has no file to restore`);
+            content = incoming;
+        }
+        else if (choice === "legacy")
+        {
+            if (legacy === undefined) throw new HalignError(`${key}: no legacy change awaits migration`);
+            content = legacy;
+        }
+        else if (migration) needsChoice = true;
+        else if (target?.state === "folder-missing" || target?.state === "parent-missing") content = incoming ?? pending?.content ?? previous;
+        else if (target?.state === "missing" && registeredHere && !pendingUnchanged) needsChoice = true;
+        else if (input.mode === "remote") content = incoming;
+        else if (localContent === incoming) content = localContent;
+        else if (localContent === undefined) content = incoming;
+        else if (incoming === undefined || incoming === previous) content = localContent;
+        else if (localContent === previous) content = incoming;
+        else needsChoice = true;
+        if (merged.conflicts.includes(key.toLowerCase())) needsChoice = true;
+        if (migration) localState = "migration";
+        else if (target?.state === "ready") localState = needsChoice ? "conflict" : actual === incoming ? "match" : content === actual ? "local-changed" : "remote-changed";
+        if (!target || target.state === "unsafe") needsChoice = true;
+        if (content === undefined) needsChoice = true;
+        if (actual !== undefined) candidate.files[key] = actual;
+        if (content !== undefined) next.files[key] = content;
+        const unavailable = target?.state === "folder-missing" || target?.state === "parent-missing";
+        const upload = content !== incoming;
+        const apply = content !== actual;
+        const action = needsChoice ? "conflict" : unavailable ? "unavailable" : upload && apply ? "upload-apply" : upload ? "upload" : apply ? "apply" : "unchanged";
+        fileChanges.push({ key, target: target ? `~/${target.target}` : key, state: localState, action, needsChoice,
+            canUseTarget: actual !== undefined, canUseSource: incoming !== undefined, hasLegacy: migration,
+            ...(!target ? { error: `Harness ${key.split("/")[1]} is absent from the selected configuration. Stop syncing this file or resolve the configuration first.` } : target.error ? { error: target.error } : {}) });
+        if (target && content !== undefined) applications.push({ target, content });
+        if (action !== "unchanged") changes.push({ key: key.toLowerCase(), paths: [key], direction: needsChoice ? "conflict" : upload ? "upload" : "download" });
+    }
+    for (const key of next.stoppedFiles ?? [])
+    {
+        if (!known.has(key.toLowerCase())) continue;
+        fileChanges.push({ key, target: key, state: "match", action: "stop", needsChoice: false, canUseTarget: false, canUseSource: false, hasLegacy: false });
+        changes.push({ key: key.toLowerCase(), paths: [key], direction: remote.stoppedFiles?.some((path) => path.toLowerCase() === key.toLowerCase()) ? "download" : "upload" });
+    }
+    let planError: string | undefined;
+    try { await validateSyncSources(next, true); }
+    catch (error) { planError = error instanceof Error ? error.message : String(error); }
+    const unresolved = input.mode === "merge" ? merged.conflicts : [];
+    const formatUpgrade = !retained.remote.empty && retained.remote.snapshot.version !== 4;
+    const preview: SyncPreview = {
+        ...retained.public, id: randomUUID(), changes,
+        uploadCount: changes.filter((change) => change.direction === "upload" || change.direction === "conflict").length + (formatUpgrade ? 1 : 0) + (remoteConfigNeedsUpgrade(retained.remote) && !changes.some((change) => change.key === "config.json" && (change.direction === "upload" || change.direction === "conflict")) ? 1 : 0),
+        downloadCount: changes.filter((change) => change.direction === "download" || change.direction === "conflict").length,
+        fileChanges, applyCount: fileChanges.filter((change) => change.action === "apply" || change.action === "upload-apply").length,
+        unresolvedCount: unresolved.length + fileChanges.filter((change) => change.needsChoice).length + (planError ? 1 : 0),
+        recoveryRequired: state.pending !== null, ...(planError ? { planError } : {}),
+    };
+    if (!planError) delete preview.planError;
+    retained.public = preview;
+    retained.plan = { next, candidate, observations, observationSnapshot, applications };
+    return preview;
+}
+
+/** Read immutable remote/source evidence without recovering an earlier write or upgrading source files. */
+async function prepareSyncReview(root: string, directory: string, token: string): Promise<{ state: SyncState; retained: RetainedPreview }>
+{
+    await assertWorkspaceRecovered(root);
+    const state = await readState(directory);
+    if (!state.connection) throw new HalignError("Remote is not connected");
+    const remote = await readSyncRemote(state, token);
+    const local = await readSyncSnapshot(root);
+    const base = state.base?.connectionKey === connectionKey(state.connection) ? state.base : null;
+    const notice = [state.pending ? "An earlier confirmed sync needs recovery. Resume it before starting another sync." : "",
+        state.applications?.length ? "Remote is synced. Local updates are pending; later edits are preserved." : "",
+        remoteConfigNeedsUpgrade(remote) ? "The remote configuration uses format 1. Confirming sync upgrades it to format 3." : "",
+        !remote.empty && remote.snapshot.version !== 4 ? "This sync upgrades the Remote archive. Update other devices before syncing them." : ""].filter(Boolean).join("\n");
+    const retained: RetainedPreview = {
+        public: { id: randomUUID(), head: remote.head, firstSync: base === null, remoteEmpty: remote.empty, uploadCount: 0, downloadCount: 0,
+            changes: [], notice, fileChanges: [], applyCount: 0, unresolvedCount: 0, recoveryRequired: state.pending !== null },
+        connectionKey: connectionKey(state.connection), baseHead: base?.head ?? null, local, remote, base: base?.snapshot ?? emptySyncSnapshot(),
+    };
+    await buildFileSyncPlan(root, state, retained, { previewId: retained.public.id, mode: remote.empty ? "initialize" : "merge", choices: {} });
+    return { state, retained };
+}
+
+/** Compare actual files and cloud state without writing or retaining an applicable preview. */
 export async function checkSync(root: string, directory: string, token: string): Promise<SyncCheckResult>
 {
-    const state = await readState(directory);
-    if (!state.connection) return { pending: false };
-    const remote = await readSyncRemote(state, token);
-    const { preview } = buildSyncPreview(state, remote, await readSyncSnapshot(root), "");
-    return { pending: syncPreviewHasWork(preview, state.pending !== null) };
+    if (!(await readState(directory)).connection) return { pending: false };
+    const { state, retained } = await prepareSyncReview(root, directory, token);
+    return { pending: syncPreviewHasWork(retained.public, state.pending !== null || (state.applications?.length ?? 0) > 0) };
 }
 
-/** Prepare a fresh preview without publishing changes or overwriting unresolved local edits. */
+/** Prepare a new read-only plan whose file effects are shown before any collection or application. */
 export async function previewSync(root: string, directory: string, token: string): Promise<SyncPreview>
 {
     retainedPreview = undefined;
+    const { retained } = await prepareSyncReview(root, directory, token);
+    retainedPreview = retained;
+    return retained.public;
+}
+
+/** Replan from retained remote/source evidence; changing any choice invalidates the prior plan id. */
+export async function planSync(root: string, directory: string, input: SyncApplyInput): Promise<SyncPreview>
+{
+    const retained = requirePreview(input.previewId);
+    const { state } = await readPreviewSources(root, directory, retained);
+    return buildFileSyncPlan(root, state, retained, input);
+}
+
+/** Explicitly resume an already confirmed upload or local application, preserving later external edits. */
+export async function resumeSync(root: string, directory: string, token: string): Promise<SyncResult>
+{
+    retainedPreview = undefined;
     const state = await readState(directory);
-    if (!state.connection) throw new HalignError("GitHub Sync is not connected");
-    const remote = await readSyncRemote(state, token);
-    const recoveryNotice = await recoverUpload(root, directory, state, token, remote);
-    const backup = await upgradeWorkspaceConfig(root);
-    const local = await readSyncSnapshot(root);
-    const notice = [recoveryNotice, backup ? "Local configuration upgraded from format 1 to 3; the original configuration backup was retained." : "",
-        remoteConfigNeedsUpgrade(remote) ? "The remote configuration uses format 1. Applying sync upgrades it to format 3; older applications cannot read format 3." : ""].filter(Boolean).join("\n");
-    const { preview, base } = buildSyncPreview(state, remote, local, notice);
-    retainedPreview = { public: preview, connectionKey: connectionKey(state.connection), baseHead: base?.head ?? null, local, remote, base: base?.snapshot ?? emptySyncSnapshot() };
-    return preview;
+    if (!state.connection) throw new HalignError("Remote is not connected");
+    let notice = "";
+    if (state.pending) notice = await recoverUpload(root, directory, state, token, await readSyncRemote(state, token));
+    const result = await applyPendingFiles(root, directory, state);
+    return { ...result, message: [notice, result.message].filter(Boolean).join("\n") };
 }
 
 /** Compare upgraded copies while keeping remote version-only writes visible in the existing review. */
@@ -575,11 +809,14 @@ export function inspectSync(previewId: string, key: string): SyncDetail
 {
     const preview = requirePreview(previewId);
     const change = preview.public.changes.find((item) => item.key === key);
-    if (!change) throw new HalignError("Sync change is not part of this preview");
-    const paths = change.paths.slice();
+    const file = preview.public.fileChanges.find((item) => item.key === key);
+    if (!change && !file) throw new HalignError("Sync change is not part of this preview");
+    const paths = change?.paths.slice() ?? [key];
     if (key.startsWith("skills/") && !paths.includes("skills/index.json")) paths.push("skills/index.json");
     return {
-        files: paths.slice(0, 20).map((path) => ({ path, local: fileView(preview.local.files[path]), remote: fileView(preview.remote.snapshot.files[path]) })),
+        files: paths.slice(0, 20).map((path) => ({ path, local: fileView(preview.plan?.candidate.files[path] ?? preview.local.files[path]), remote: fileView(preview.remote.snapshot.files[path]),
+            ...(path.startsWith("harness-files/") ? { actual: fileView(preview.plan?.observations.find((target) => target.key === path)?.content ?? undefined),
+                saved: fileView(preview.local.legacyFiles?.[path] ?? (preview.local.version < 4 ? preview.local.files[path] : undefined)), result: fileView(preview.plan?.next.files[path]) } : {}) })),
         omittedFiles: Math.max(0, paths.length - 20),
     };
 }
@@ -587,6 +824,7 @@ export function inspectSync(previewId: string, key: string): SyncDetail
 /** Recheck the connection, baseline, recovery state, and local bytes before any preview-based write. */
 async function readPreviewSources(root: string, directory: string, preview: RetainedPreview): Promise<{ state: SyncState; connection: SyncConnection; local: SyncSnapshot }>
 {
+    await assertWorkspaceRecovered(root);
     const state = await readState(directory);
     if (!state.connection || connectionKey(state.connection) !== preview.connectionKey || (state.base?.connectionKey === preview.connectionKey ? state.base.head : null) !== preview.baseHead)
     {
@@ -603,11 +841,13 @@ export async function discardSync(root: string, directory: string, token: string
 {
     const preview = requirePreview(input.previewId);
     if (preview.remote.empty) throw new HalignError("The remote archive is not initialized; local restoration is unavailable");
+    if (input.key.startsWith("harness-files/")) throw new HalignError("Additional files must be resolved in the sync plan so Local and Remote are reviewed together");
     const change = preview.public.changes.find((entry) => entry.key === input.key);
     if (!change || !["upload", "conflict"].includes(change.direction)) throw new HalignError(`sync change ${input.key}: expected a preview entry with local changes`);
     if (change.key.endsWith("/") && change.paths.length === 0) throw new HalignError(`sync change ${input.key}: discard individual files instead of a directory entry`);
     const { state, connection, local } = await readPreviewSources(root, directory, preview);
     const next = upgradeSyncConfig(restoreSyncChange(portableSyncSnapshot(preview.base), portableSyncSnapshot(local), portableSyncSnapshot(preview.remote.snapshot), input.key));
+    if (local.legacyFiles) next.legacyFiles = { ...local.legacyFiles };
     await validateSyncSources(next, true);
     await checkRepository(connection, token);
     const head = REFERENCE_SCHEMA.parse(await github(connection, token, `/git/ref/heads/${encodeURIComponent(connection.branch)}`)).object.sha;
@@ -618,28 +858,29 @@ export async function discardSync(root: string, directory: string, token: string
 }
 
 /** Apply reviewed decisions only while both local sources and the remote head still match the preview. */
-export async function applySync(root: string, directory: string, token: string, input: SyncApplyInput): Promise<SyncResult>
+export async function applySync(root: string, directory: string, token: string, input: { previewId: string }): Promise<SyncResult>
 {
     const preview = requirePreview(input.previewId);
     const { state, connection, local } = await readPreviewSources(root, directory, preview);
-    if (preview.remote.empty)
-    {
-        if (!preview.public.firstSync || input.mode !== "initialize") throw new HalignError("The remote archive is not initialized; use Initialize archive explicitly before syncing");
-    }
-    else if (input.mode === "initialize") throw new HalignError("The remote archive already exists; initialization cannot replace it");
-    if (input.mode !== "merge" && !preview.public.firstSync) throw new HalignError("Whole-workspace adoption is only available on the first sync");
-    if (input.mode === "remote" && preview.remote.empty) throw new HalignError("The remote has no Harness Align configuration to adopt");
-    const merged = mergeConfigSnapshots(portableSyncSnapshot(preview.base), portableSyncSnapshot(local), portableSyncSnapshot(preview.remote.snapshot), input.choices);
-    if (input.mode === "merge" && merged.conflicts.length) throw new HalignError(`Resolve sync conflicts: ${merged.conflicts.join(", ")}`);
-    const next = upgradeSyncConfig(portableSyncSnapshot(input.mode === "local" ? local : input.mode === "remote" ? preview.remote.snapshot : merged.snapshot));
+    const plan = preview.plan;
+    if (!plan || preview.public.unresolvedCount) throw new HalignError(`Resolve sync conflicts before applying: ${preview.public.planError ?? "choose versions for the highlighted files"}`);
+    const next = plan.next;
+    const actual = await inspectFileSyncTargets(root, plan.observationSnapshot, root);
+    if (JSON.stringify(actual) !== JSON.stringify(plan.observations)) throw new HalignError("Local files or alignment baselines changed after preview; preview again");
     await validateSyncSources(next, true);
     await checkRepository(connection, token);
     const currentHead = REFERENCE_SCHEMA.parse(await github(connection, token, `/git/ref/heads/${encodeURIComponent(connection.branch)}`)).object.sha;
     if (currentHead !== preview.remote.head) throw new HalignError("The remote branch changed after preview; preview again");
-    const needsUpload = preview.remote.empty || syncSnapshotHash(next) !== syncSnapshotHash(preview.remote.snapshot);
+    const needsUpload = preview.remote.empty || preview.remote.snapshot.version !== 4 || syncSnapshotHash(next) !== syncSnapshotHash(preview.remote.snapshot);
     const uploaded = needsUpload ? await createSyncCommit(connection, token, preview.remote, next) : preview.remote;
+    if (syncSnapshotHash(await readSyncSnapshot(root)) !== syncSnapshotHash(local)
+        || JSON.stringify(await inspectFileSyncTargets(root, plan.observationSnapshot, root)) !== JSON.stringify(plan.observations))
+    {
+        throw new HalignError("Local sources or files changed while preparing the upload; preview again before publishing");
+    }
+    await assertWorkspaceRecovered(root);
     // A receipt covers publication and a crash between local adoption and saving the baseline.
-    state.pending = { connectionKey: preview.connectionKey, head: uploaded.head, parent: currentHead, before: local, snapshot: next };
+    state.pending = { connectionKey: preview.connectionKey, head: uploaded.head, parent: currentHead, before: local, snapshot: next, applications: plan.applications };
     await writeState(directory, state);
     if (needsUpload)
     {
@@ -650,5 +891,5 @@ export async function applySync(root: string, directory: string, token: string, 
     rememberSnapshotBlobs(next);
     cachedRemote = { connectionKey: preview.connectionKey, remote: uploaded };
     retainedPreview = undefined;
-    return { status: publicStatus(state), message: "Configuration synced. Run Setup when you are ready to deploy it on this device." };
+    return applyPendingFiles(root, directory, state);
 }

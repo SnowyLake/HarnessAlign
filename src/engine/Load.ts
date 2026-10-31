@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { assertContained, display, ensureRegularSource, isAtomicWriteTemporary, lstatIfExists, pathKey, readUtf8, reparseError, resolveUserHome } from "./FsSafe.js";
-import { SYNC_MAX_FILE_BYTES } from "./Sync.js";
+import { readSyncSnapshot, syncFilePaths, SYNC_MAX_FILE_BYTES } from "./Sync.js";
 import {
     AGENT_FIELDS,
     IDENTIFIER_NAME,
@@ -633,7 +633,7 @@ export async function loadSharedRules(root: string): Promise<SharedRule[]>
     return rules;
 }
 
-/** One additional file copied into a harness folder during Setup. */
+/** One actual-file registration, optionally carrying unresolved legacy migration content. */
 export interface HarnessFileSource
 {
     harness: string;
@@ -720,63 +720,27 @@ export async function assertHarnessFileParent(userProfile: string | undefined, c
     return target;
 }
 
-/** Load additional harness files, rejecting unknown directories and case-insensitive duplicates. */
+/** Load direct-file declarations and legacy migration inputs without reading actual user files. */
 export async function loadHarnessFiles(root: string, harnesses: readonly { name: string; configPath: string }[]): Promise<HarnessFileSource[]>
 {
-    const directory = join(root, ".harness-align", "harness-files");
-    await ensureRegularSource(root, directory);
-    const stats = await lstatIfExists(directory);
-    if (!stats) return [];
-    if (stats.isSymbolicLink()) throw reparseError(root, directory, false);
-    if (!stats.isDirectory()) throw new HalignError(`${display(root, directory)}: expected a directory`);
-    const configured = new Map(harnesses.map((harness) => [harness.name.toLowerCase(), harness]));
+    const snapshot = await readSyncSnapshot(root);
     const files: HarnessFileSource[] = [];
-    const seen = new Map<string, string>();
-    /** Record one regular file under a configured harness directory. */
-    const visit = async (harness: { name: string; configPath: string }, current: string, relative: string): Promise<void> =>
+    for (const directory of snapshot.directories.filter((path) => path.startsWith("harness-files/")))
     {
-        await ensureRegularSource(root, current);
-        for (const name of (await fs.readdir(current)).sort(codePointCompare))
-        {
-            if (isAtomicWriteTemporary(name)) continue;
-            const path = join(current, name);
-            const childRelative = relative ? `${relative}/${name}` : name;
-            await ensureRegularSource(root, path);
-            const child = await lstatIfExists(path);
-            if (!child) continue;
-            if (child.isSymbolicLink()) throw reparseError(root, path, false);
-            if (child.isDirectory())
-            {
-                await visit(harness, path, childRelative);
-                continue;
-            }
-            if (!child.isFile()) throw new HalignError(`${display(root, path)}: expected a regular file`);
-            assertHarnessFileScope(harness.configPath, childRelative);
-            const sourceRelative = harnessFileSourceRelative(harness.name, childRelative);
-            const identity = `${harness.name}/${childRelative}`.toLowerCase();
-            const previous = seen.get(identity);
-            if (previous) throw new HalignError(`${sourceRelative}: conflicts with ${previous} without case sensitivity`);
-            seen.set(identity, sourceRelative);
-            if (child.size > SYNC_MAX_FILE_BYTES) throw new HalignError(`${sourceRelative}: exceeds the 8 MiB file limit, got ${child.size} bytes`);
-            const bytes = await fs.readFile(path);
-            assertHarnessFileBytes(bytes, sourceRelative);
-            files.push({ harness: harness.name, path: childRelative, content: bytes.toString("utf8") });
-        }
-    };
-    for (const entry of (await fs.readdir(directory)).sort(codePointCompare))
-    {
-        if (isAtomicWriteTemporary(entry)) continue;
-        const child = join(directory, entry);
-        await ensureRegularSource(root, child);
-        const childStats = await lstatIfExists(child);
-        if (!childStats) continue;
-        if (childStats.isSymbolicLink()) throw reparseError(root, child, false);
-        if (!childStats.isDirectory()) throw new HalignError(`${display(root, child)}: expected a harness directory`);
-        const harness = configured.get(entry.toLowerCase());
-        if (!harness) throw new HalignError(`${display(root, child)}: harness is not configured, got ${valueText(entry)}`);
-        if (harness.name !== entry) throw new HalignError(`${display(root, child)}: harness directory must match ${valueText(harness.name)}, got ${valueText(entry)}`);
-        await visit(harness, child, "");
+        const name = directory.split("/")[1];
+        if (!harnesses.some((harness) => harness.name === name)) throw new HalignError(`${directory}: harness is not configured, got ${valueText(name)}`);
     }
-    files.sort((left, right) => codePointCompare(left.harness, right.harness) || codePointCompare(left.path, right.path));
+    for (const key of syncFilePaths(snapshot))
+    {
+        const [, name, ...parts] = key.split("/");
+        const harness = harnesses.find((item) => item.name === name);
+        if (!harness) throw new HalignError(`${key}: harness is not configured, got ${valueText(name)}`);
+        const path = parts.join("/");
+        assertHarnessFileScope(harness.configPath, path);
+        harnessFileSourceRelative(harness.name, path);
+        const encoded = snapshot.files[key] ?? snapshot.legacyFiles?.[key];
+        if (encoded !== undefined) assertHarnessFileBytes(Buffer.from(encoded, "base64"), key);
+        files.push({ harness: harness.name, path, content: encoded === undefined ? "" : Buffer.from(encoded, "base64").toString("utf8") });
+    }
     return files;
 }

@@ -16,7 +16,7 @@
 多台设备连接同一个 GitHub 私有仓库和分支, 就可以同步 Harness Align 配置. 上传, 下载, 恢复和部署仍要在 Sync 里确认, 不会在后台自动执行. 工作区加载成功后, 已连接的仓库会做一次只读检查, 比较方式与打开 Sync 后的预览相同. 这次检查不恢复中断上传, 不升级配置, 不写入配置或 Harness 目录, 也不把界面锁成忙碌; 它与保存, 部署共用工作区队列. 已保存的凭据只在已连接时解密, 与手动打开 Sync 相同, 不会回到界面. 未连接时不解密, 也不访问网络. 有待上传, 待下载, 待初始化或待恢复的内容时, 顶部 Sync 按钮显示红点; 检查失败只写入 Console, 不显示红点. 成功同步, 或之后的预览已经没有这些内容时, 红点消失. 本机不需要安装 Git, 也不需要克隆仓库或自建服务器.
 
 1. 在 GitHub 创建专用私有仓库, 勾选创建 README, 让仓库有一个可用分支.
-2. 在 Settings 的 GitHub connection 中点击 Connect GitHub, 再点击 Create token on GitHub. [Token 创建模板](https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write)预填名称 `HarnessAlign-Sync`, 90 天有效期和 `Contents: Read and write` 权限.
+2. 在 Settings 的 Remote connection 中点击 Connect Remote, 再点击 Create token on GitHub. [Token 创建模板](https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write)预填名称 `HarnessAlign-Sync`, 90 天有效期和 `Contents: Read and write` 权限.
 3. 在 GitHub 选择正确的 Resource owner, 将 Repository access 设为 Only select repositories, 只选同步仓库, 然后创建 fine-grained personal access token. 名称可追加设备名, 方便分别管理; 组织仓库可能需要管理员批准.
 4. 回到应用, 填写 Owner, Private repository, Existing branch 和 Token, 点击 Connect.
 
@@ -24,39 +24,49 @@ Token 使用本机系统加密保存, 不写入同步仓库, 也不会在界面�
 
 ## 首次同步
 
-先保存或放弃所有工作区草稿, 再点击顶部 Sync. 该按钮在各工作页面都可用, 打开后会自动预览变更. 启动时的红点只表示检查看到待处理内容; 点击后仍重新预览. 中断上传的恢复和配置格式升级只发生在这次手动预览里, 不会由启动检查执行. 变更列表固定表头并在限定高度内滚动, 不分页; 窄窗口下可横向滚动查看完整列.
+先保存或放弃所有工作区草稿, 再点击顶部 Sync. 该按钮在各工作页面都可用, 打开后会自动预览变更, 包括已添加的 Additional files 在助手目录中的实际内容. 启动时的红点只表示检查看到待处理内容; 点击后仍重新预览. 预览和切换选择不会采集写回、恢复上传或升级配置, 中断操作通过 Resume sync 显式继续. 窗口左侧列出变化项, 右侧显示所选项的 Local / Remote 内容和版本选择. 列表与内容分别滚动, 窄窗口下两端内容上下排列.
 
-如果仓库还没有 Harness Align 存档, 确认显示的仓库和分支, 点击 Initialize archive, 将本机已保存的配置创建为远端存档. 初始化之前不能使用普通同步或 Discard local changes.
+如果仓库还没有 Harness Align 存档, 确认显示的仓库和分支, 点击 Initialize archive, 将本机已保存的配置创建为远端存档. 初始化之前不能使用普通同步或 Discard Local changes.
 
 首次接入已有存档时, 可以选择:
 
 | 选项 | 结果 |
 | --- | --- |
 | Merge local and remote | 合并双方独立修改, 由你处理冲突 |
-| Use this device's complete configuration | 用本机完整配置替换远端配置 |
-| Use the remote's complete configuration | 用远端完整配置替换本机配置, 保留本地备份 |
+| Use Local configuration | 用本机完整配置替换远端配置 |
+| Use Remote configuration | 用远端完整配置替换本机配置, 保留本地备份 |
 
-选择某一方的完整配置时, 也会应用该方的删除操作. 检查预览后点击 Sync now. 其他设备连接相同仓库及分支即可加入同步.
+选择某一方的完整配置时, 也会应用该方的配置源删除操作. Additional files 移出同步集合时保留实际文件. 检查预览后点击 Sync now. 其他设备连接相同仓库及分支即可加入同步.
 
-同步只更新配置源. 完成后按需执行 Generate 或 Setup, 更新这台设备的生成结果或助手目录.
+Additional files 会在同一次确认中采集、同步并应用到本机, 不需要再执行 Setup. Rules、Agents、Shared Rules 和 Skills 仍在同步配置源后按需执行 Generate 或 Setup.
 
 ## 日常同步与冲突处理
 
-打开 Sync 查看上传, 下载和冲突项. Refresh preview 会核对远端当前版本, 并与本机上次成功同步的版本比较. 远端没有变化时只重读本地配置, 有变化时复用缓存, 下载缺少的内容.
+打开 Sync 查看上传, 下载和冲突项. Refresh 会核对远端当前版本, 并与本机上次成功同步的版本比较. 远端没有变化时只重读本地配置, 有变化时复用缓存, 下载缺少的内容.
 
-View versions 用于对照本地和远端文件. Local 中的删除行以 `-` 标记和红色背景显示, Remote 中的新增行以 `+` 标记和绿色背景显示; 大段差异按整个变化段高亮, 限制比较计算量. 大文件只显示部分文本, 二进制文件显示大小和哈希. Keep local / Keep remote 仍作用于整个源组或整个 Skill, 不做逐行合并.
+点击左侧条目直接对照 Local / Remote, 无需打开第二层窗口. Local 中的删除行以 `-` 标记和红色背景显示, Remote 中的新增行以 `+` 标记和绿色背景显示; 大段差异按整个变化段高亮, 限制比较计算量. 大文件只显示部分文本, 二进制文件显示哈希. Use Local / Use Remote 仍作用于整个源组或整个 Skill, 不做逐行合并.
 
-不同文件的独立修改会自动合并. 同一文件的不同修改, 或一方删除而另一方修改时, 需要选择 Keep local 或 Keep remote. 应用不做逐行自动合并. 同一个 Skill 的文件和来源记录作为整体选择; 目录大小写冲突, 文件与目录的冲突也会连同相关内容整组处理.
+不同文件的独立修改会自动合并. 同一文件的不同修改, 或一方删除而另一方修改时, 需要选择 Use Local 或 Use Remote. 应用不做逐行自动合并. 同一个 Skill 的文件和来源记录作为整体选择; 目录大小写冲突, 文件与目录的冲突也会连同相关内容整组处理.
+
+Additional files 列在 Files 分组, 各项显示 Local → Remote、Remote → Local 或需要处理的状态. 默认隐藏无变化文件, 可通过 Show unchanged 展开. 通常在助手或外部编辑器修改文件后, 直接点击 Sync 即可采集并上传; 接收另一设备的更新时, 同一次同步会更新本机实际文件. 比较依据是上次确认的共同基线和待应用记录, 不使用修改时间猜测新旧. 没有可信对齐记录且内容不同时, 必须选择版本.
+
+- 实际文件和 GitHub 都有不同修改时, 选择 Use Local 或 Use Remote. 无共同基线时不会猜测哪边更新.
+- 右侧固定使用 Local / Remote 术语. 升级后若有未应用旧修改, 额外展示 Legacy change 页签, 可选择 Restore legacy change. 每次修改选择都会生成新的计划并更新左侧动作, 当前文件仍保持选中; Sync now 只执行该计划.
+- 实际文件缺失时, 选择恢复 GitHub 内容或 Stop syncing. 不会把一次外部删除自动传播为跨设备删除.
+- Harness 或父目录缺失时, 配置仍可同步, 结果保留待应用状态. 创建目录后重新审阅, 不会自动创建目录.
+- Stop syncing 取消路径登记并同步停止记录, 各设备实际文件保留. 停止记录优先于另一设备的独立修改, 防止旧副本重新加入. 需要重新加入时, 先同步最新停止状态, 再通过 Add file 显式导入.
 
 远端配置为现行 Layer v1 时, 应用在候选中转换成 v3 后比较, 版本字段升级本身不会与远端实际配置编辑制造额外冲突. 预览仍保留远端原始文件, 提示格式升级并计入必要上传. Sync now 会把接受的配置保存为 v3, 包括首次采用远端配置; 打开预览不会升级远端存档. 旧应用可能无法读取同步后的 v3, 多台设备应使用支持当前格式的应用.
 
 处理完冲突后点击 Sync now. 合并结果必须通过完整配置校验, 引用错误会阻止同步. 应用不提供设备专属配置覆盖.
 
-预览后如果本地文件或远端分支发生变化, 需要重新预览. 同步不会覆盖其他设备抢先上传的提交. 分支保护或仓库规则拒绝提交时, 应用会报告失败.
+预览后如果配置源、实际文件、对齐基线或远端分支发生变化, 需要重新预览. Harness 的名称或目录选择发生变化时, 计划按最终配置读取并绑定目标, 不沿用旧目录的覆盖判断. 同步不会覆盖其他设备抢先上传的提交. 分支保护或仓库规则拒绝提交时, 应用会报告失败.
 
 ## 还原某项本地修改
 
-在合并模式下, upload 或 conflict 项旁的 Discard local changes 会立即将该项恢复为预览中的远端版本, 不需要再点 Sync now.
+在合并模式下, 选择待上传或冲突的配置项, 点击对比下方的 Discard Local changes 并确认, 会立即将该项恢复为预览中的 Remote 版本, 不需要再点 Sync now.
+
+Additional files 不提供这个即时操作, 请在文件计划中选择版本, 检查列表中的动作后统一确认.
 
 - 远端没有该项时, 删除本地项.
 - 本地删除而远端仍有文件时, 从远端恢复.
@@ -73,16 +83,16 @@ View versions 用于对照本地和远端文件. Local 中的删除行以 `-` �
 | `config.json` | 同步标题, Harness, Layer 选择和 Skills 来源 |
 | `rules/`, 包括 `shared/` | 同步配置源 |
 | `layers/`, `agents/` | 同步全部配置源, 保留空 Layer |
-| `harness-files/<harness>/` | 同步额外文件的同步源; 比较视图的 Local source 与 GitHub 分别显示本机同步源和远端版本, 不读取助手目录里的副本 |
+| `harness-files/<harness>/` | 云端保存已登记实际文件的原始内容; 本机只登记路径, 同步时比较并直接应用确认结果 |
 | 本地导入或来源不明的 Skills | 同步完整文件, 二进制资产和来源记录 |
 | GitHub 下载的 Skills | 只同步已安装清单和来源记录, 接收设备补齐内容 |
 | 配置目录中的 `AGENTS.md` | 不同步, 由本机应用维护编辑指引 |
-| `generated/` 和已部署的助手目录 | 不同步, 各设备自行生成和部署 |
+| `generated/` 和助手目录内未添加的文件 | 不同步, 生成结果由各设备自行生成和部署 |
 | 主题, 窗口位置, Token, 同步基线, 格式升级备份和恢复记录 | 只保留在本机 |
 
-存档位于仓库的 `harness-align/` 目录, README 等其他仓库文件会保留. `harness-align/sync.json` 记录同步格式和目录信息, 包括空 Layer, 请不要删除或手工修改. 这个标记保持版本 `1`.
+存档位于仓库的 `harness-align/` 目录, README 等其他仓库文件会保留. `harness-align/sync.json` 记录同步格式、目录信息和停止同步记录, 包括空 Layer, 请不要删除或手工修改. 确认新版同步后标记升级为版本 `3`, 即使最后一个额外文件停止同步也不会降级.
 
-没有额外文件时, 配置快照版本为 `1`. 包含 `harness-files` 时版本为 `2`, 旧版应用会拒绝这些路径. 额外文件按整个文件合并, 不与 Skill 分成一组. 同步不会读取助手目录. 文件内容按原样上传, 不隐藏其中的令牌或密钥. 助手目录中的副本要通过 Setup 或 Adopt target content 与同步源对齐, 再在同步预览里选择上传或保留远端.
+新版读取快照版本 `1` 至 `4`, 新同步结果使用版本 `4`; 本机登记格式为 `2`, 同步状态读 `1` 至 `3` 并写 `3`. 旧应用会拒绝新格式, 所有设备应升级后再继续同步. `.harness-align/.file-sync.json` 保存路径、停止记录及尚未解决的旧版修改, 由应用维护. 旧副本迁移前保留精确备份, 相同内容直接转为登记; 不同内容必须在预览中选择, 不会根据时间自动丢弃. Additional files 按整文件合并, 不与 Skill 分组. 文件按原样上传, 不隐藏令牌或密钥.
 
 ## Skills 如何同步
 
@@ -92,7 +102,7 @@ GitHub Skills 只上传来源记录. 接收设备会优先复用本机内容哈�
 
 GitHub Skill 的本地文件用于缓存, 其中的修改不会同步. 内容不匹配时会按来源重新下载并替换, 应用不会提示将其转为本地 Skill. 需要保留的自定义内容应作为本地 Skill 导入, 见 [Skills 管理](skills.md).
 
-下载或校验失败时, 应用保留现有工作区, 报告待重试的 Skill. 下次 Refresh preview 会重试未完成的同步. 所有下载内容通过完整配置校验后才会写入.
+下载或校验失败时, 应用保留现有工作区, 报告待重试的 Skill. 使用 Resume sync 重试已确认但未完成的同步. 所有下载内容通过完整配置校验后才会写入.
 
 应用仍可读取旧版完整快照. 后续成功同步会从远端当前版本移除可重新下载的 Skill 文件, Git 历史提交中的文件仍然保留.
 
@@ -106,7 +116,7 @@ GitHub Skill 的本地文件用于缓存, 其中的修改不会同步. 内容不
 
 ### 上传结果不确定
 
-上传响应丢失或程序退出后, 应用会保留待确认提交. 再次打开 Sync 或点击 Refresh preview, 会先查询提交是否已发布, 避免重复上传.
+上传响应丢失或程序退出后, 应用会保留待确认提交. 再次打开 Sync 会提示恢复, 点击 Resume sync 后查询提交是否已发布, 避免重复上传. Refresh 只查看状态.
 
 提交已发布且本地没有后续修改时, 应用会继续完成本地同步并刷新工作区. 如果检测到后续修改, 会保留它们并重新展示合并预览.
 
@@ -117,6 +127,8 @@ GitHub Skill 的本地文件用于缓存, 其中的修改不会同步. 内容不
 替换本地配置前, 应用保留最近一份 `.harness-align/.sync-backup.json` 备份, 并写入 `.sync-recovery.json` 恢复记录. 写入失败时尝试回滚, 程序中断后会在下次访问工作区时先恢复.
 
 如果中断后又有外部编辑, 应用会停止自动恢复, 报告冲突文件和恢复记录位置. 备份与恢复文件不会上传.
+
+GitHub 与本机路径登记更新成功后, Additional files 的实际应用作为独立阶段执行. 应用失败或目录缺失时会明确显示本机待应用, 保留已确认的文件内容与目标证据. Resume sync 只重试这些文件, 不重复上传, 不部署无关 Rules、Agents 或 Skills. 实际文件在失败后又被修改时, 重试保留外部修改并要求重新审阅. 已同步的云端基线与实际文件对齐基线分别维护, 因而不会把尚未应用的旧文件自动上传回去.
 
 ### 下载失败
 

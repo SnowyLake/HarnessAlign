@@ -7,8 +7,8 @@ import { app, ipcMain, safeStorage } from "electron";
 import { z } from "zod";
 import { HalignError } from "../../engine/Model.js";
 import { IPC_CHANNELS } from "../../shared/contracts/IpcChannels.js";
-import { SYNC_APPLY_SCHEMA, SYNC_CONNECTION_SCHEMA, SYNC_DISCARD_SCHEMA } from "../../shared/models/Schemas.js";
-import { applySync, checkSync, connectSync, discardSync, disconnectSync, getSyncEncryptedToken, getSyncStatus, inspectSync, previewSync } from "../services/GitHubSyncService.js";
+import { SYNC_APPLY_SCHEMA, SYNC_CONNECTION_SCHEMA, SYNC_DISCARD_SCHEMA, SYNC_PLAN_SCHEMA } from "../../shared/models/Schemas.js";
+import { applySync, checkSync, connectSync, discardSync, disconnectSync, getSyncEncryptedToken, getSyncStatus, inspectSync, planSync, previewSync, resumeSync } from "../services/GitHubSyncService.js";
 import { withWorkspace } from "../services/WorkspaceService.js";
 import { runIpc } from "../utils/Ipc.js";
 
@@ -32,7 +32,7 @@ export function registerSyncHandlers(): void
 {
     ipcMain.handle(IPC_CHANNELS.syncStatus, (event) => runIpc(event, async () =>
     {
-        return withWorkspace((root) => getSyncStatus(app.getPath("userData"), root));
+        return withWorkspace((root) => getSyncStatus(app.getPath("userData"), root), "Sync status", false);
     }));
     ipcMain.handle(IPC_CHANNELS.syncConnect, (event, input: unknown) => runIpc(event, async () =>
     {
@@ -41,11 +41,11 @@ export function registerSyncHandlers(): void
         {
             if (!safeStorage.isEncryptionAvailable()) throw new HalignError("Secure credential storage is unavailable on this device");
             return connectSync(app.getPath("userData"), connection, safeStorage.encryptString(connection.token).toString("base64"));
-        });
+        }, "Connect sync", false);
     }));
     ipcMain.handle(IPC_CHANNELS.syncDisconnect, (event) => runIpc(event, async () =>
     {
-        return withWorkspace(() => disconnectSync(app.getPath("userData")));
+        return withWorkspace(() => disconnectSync(app.getPath("userData")), "Disconnect sync", false);
     }));
     ipcMain.handle(IPC_CHANNELS.syncPreview, (event) => runIpc(event, async () =>
     {
@@ -53,19 +53,32 @@ export function registerSyncHandlers(): void
         {
             const directory = app.getPath("userData");
             return previewSync(root, directory, await syncToken(directory));
-        }, "Preview sync");
+        }, "Preview sync", false);
     }));
     ipcMain.handle(IPC_CHANNELS.syncCheck, (event) => runIpc(event, async () =>
     {
         const directory = app.getPath("userData");
         if (!(await getSyncStatus(directory)).connected) return { pending: false };
-        return withWorkspace(async (root) => checkSync(root, directory, await syncToken(directory)), "Check sync");
+        return withWorkspace(async (root) => checkSync(root, directory, await syncToken(directory)), "Check sync", false);
+    }));
+    ipcMain.handle(IPC_CHANNELS.syncPlan, (event, input: unknown) => runIpc(event, async () =>
+    {
+        const choices = SYNC_PLAN_SCHEMA.parse(input);
+        return withWorkspace((root) => planSync(root, app.getPath("userData"), choices), "Plan sync", false);
+    }));
+    ipcMain.handle(IPC_CHANNELS.syncResume, (event) => runIpc(event, async () =>
+    {
+        return withWorkspace(async (root) =>
+        {
+            const directory = app.getPath("userData");
+            return resumeSync(root, directory, await syncToken(directory));
+        }, "Resume sync");
     }));
     ipcMain.handle(IPC_CHANNELS.syncInspect, (event, previewId: unknown, key: unknown) => runIpc(event, async () =>
     {
         const id = z.uuid().parse(previewId);
         const change = z.string().min(1).max(241).parse(key);
-        return withWorkspace(async () => inspectSync(id, change));
+        return withWorkspace(async () => inspectSync(id, change), "Inspect sync", false);
     }));
     ipcMain.handle(IPC_CHANNELS.syncApply, (event, input: unknown) => runIpc(event, async () =>
     {
@@ -74,7 +87,7 @@ export function registerSyncHandlers(): void
         {
             const directory = app.getPath("userData");
             return applySync(root, directory, await syncToken(directory), decisions);
-        }, "Apply sync");
+        }, "Apply sync", false);
     }));
     ipcMain.handle(IPC_CHANNELS.syncDiscard, (event, input: unknown) => runIpc(event, async () =>
     {
@@ -83,6 +96,6 @@ export function registerSyncHandlers(): void
         {
             const directory = app.getPath("userData");
             return discardSync(root, directory, await syncToken(directory), change);
-        }, "Restore sync");
+        }, "Restore sync", false);
     }));
 }

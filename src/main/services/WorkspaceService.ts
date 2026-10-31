@@ -13,6 +13,7 @@ import {
     deleteSource,
     ensureUserWorkspace,
     loadWorkspace,
+    migrateHarnessFiles,
     removeHarness,
     removeLayer,
     removeLayerOption,
@@ -27,17 +28,16 @@ import {
     saveSharedRule,
     saveSkillContent,
     addHarnessFile,
-    adoptHarnessFile,
     removeHarnessFile,
-    saveHarnessFile,
     updateHarness,
     upgradeWorkspaceConfig,
 } from "../../engine/Edit.js";
-import { assertContained, ensureRegularSource, lstatIfExists } from "../../engine/FsSafe.js";
+import { assertContained, ensureRegularSource, lstatIfExists, resolveUserHome } from "../../engine/FsSafe.js";
 import { generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
 import { loadConfigSource } from "../../engine/Load.js";
 import { HalignError, valueText } from "../../engine/Model.js";
-import { inspectHarnessFileTargets, inspectHarnessRoots, previewSetup, reportSetup, resolveExistingHarnessRoot, setup } from "../../engine/Setup.js";
+import { inspectFileSyncTargets, inspectHarnessRoots, previewSetup, reportSetup, resolveExistingHarnessRoot, setup } from "../../engine/Setup.js";
+import { readSyncSnapshot } from "../../engine/Sync.js";
 import type { AppApi } from "../../shared/contracts/AppApi.js";
 import { assertSkillName, importUserSkills, listImportableUserSkills, loadSkills, readSkillContent, removeSkill } from "../../engine/Skills.js";
 import type { LayerSelection, WorkspaceItemTarget } from "../../shared/models/Workspace.js";
@@ -92,8 +92,8 @@ export async function withWorkspaceForUpdate<T>(work: () => Promise<T>, isInstal
     }
 }
 
-/** Serialize workspace operations and release the queue even when an operation fails. */
-export function withWorkspace<T>(work: (root: string) => Promise<T>, operation = "Workspace"): Promise<T>
+/** Serialize workspace operations; reviewed sync steps skip implicit recovery, upgrades and migration. */
+export function withWorkspace<T>(work: (root: string) => Promise<T>, operation = "Workspace", initialize = true): Promise<T>
 {
     if (isUpdateExclusive) return Promise.reject(new HalignError("workspace: application update is downloading or installing; retry after it finishes"));
     // ponytail: one workspace queue; split remote downloads only if UI latency becomes a measured problem.
@@ -105,38 +105,51 @@ export function withWorkspace<T>(work: (root: string) => Promise<T>, operation =
         let outcome = "failed";
         try
         {
-            const root = await ensureUserWorkspace();
-            if ((await loadConfigSource(root)).upgradedText !== undefined)
+            const root = resolveUserHome();
+            await ensureRegularSource(root, root);
+            if (!(await lstatIfExists(root))?.isDirectory()) throw new HalignError(`USERPROFILE must be an existing directory, got ${valueText(root)}`);
+            if (initialize)
             {
-                let upgradeDelay = "";
+                await ensureUserWorkspace();
+                if ((await loadConfigSource(root)).upgradedText !== undefined)
+                {
+                    let upgradeDelay = "";
+                    if (syncStateDirectory)
+                    {
+                        try
+                        {
+                            if ((await getSyncStatus(syncStateDirectory)).hasPendingUpload) upgradeDelay = "Recover the pending GitHub upload before automatically upgrading configuration format 1 to 3.";
+                        }
+                        catch (error)
+                        {
+                            upgradeDelay = "Automatic upgrade deferred: GitHub recovery state could not be read. Preserve it and repair it before retrying.\n"
+                                + (error instanceof Error ? error.message : String(error));
+                        }
+                    }
+                    if (upgradeDelay)
+                    {
+                        if (!upgradeDelayReported) appendLog({ level: "info", title: "Configuration upgrade deferred", details: upgradeDelay });
+                        upgradeDelayReported = true;
+                    }
+                    else
+                    {
+                        const backup = await upgradeWorkspaceConfig(root);
+                        if (backup) appendLog({
+                            level: "success", title: "Configuration upgraded: 1 -> 3",
+                            details: `The configuration was validated and upgraded. Original configuration: ${basename(backup)}\nGenerate and Setup remain manual.`,
+                        });
+                        upgradeDelayReported = false;
+                    }
+                }
+                else upgradeDelayReported = false;
+                let canMigrate = true;
                 if (syncStateDirectory)
                 {
-                    try
-                    {
-                        if ((await getSyncStatus(syncStateDirectory)).hasPendingUpload) upgradeDelay = "Recover the pending GitHub upload before automatically upgrading configuration format 1 to 3.";
-                    }
-                    catch (error)
-                    {
-                        upgradeDelay = "Automatic upgrade deferred: GitHub recovery state could not be read. Preserve it and repair it before retrying.\n"
-                            + (error instanceof Error ? error.message : String(error));
-                    }
+                    try { canMigrate = !(await getSyncStatus(syncStateDirectory)).hasPendingUpload; }
+                    catch { canMigrate = false; }
                 }
-                if (upgradeDelay)
-                {
-                    if (!upgradeDelayReported) appendLog({ level: "info", title: "Configuration upgrade deferred", details: upgradeDelay });
-                    upgradeDelayReported = true;
-                }
-                else
-                {
-                    const backup = await upgradeWorkspaceConfig(root);
-                    if (backup) appendLog({
-                        level: "success", title: "Configuration upgraded: 1 -> 3",
-                        details: `The configuration was validated and upgraded. Original configuration: ${basename(backup)}\nGenerate and Setup remain manual.`,
-                    });
-                    upgradeDelayReported = false;
-                }
+                if (canMigrate) await migrateHarnessFiles(root, root);
             }
-            else upgradeDelayReported = false;
             initializedAt = performance.now();
             const result = await work(root);
             outcome = "completed";
@@ -183,6 +196,7 @@ export async function resolveWorkspaceItemFolder(rootPath: string, target: Works
 /** Validate a native file selection and import its exact bytes while already holding the workspace queue. */
 export async function importSelectedHarnessFile(rootPath: string, harness: string, selectedPath: string, userProfile = process.env.USERPROFILE): Promise<string>
 {
+    if (syncStateDirectory && (await getSyncStatus(syncStateDirectory)).hasPendingUpload) throw new HalignError("Resume the confirmed sync before adding another file");
     if (!isAbsolute(selectedPath)) throw new HalignError(`Add harness file: expected an absolute selected file path, got ${valueText(selectedPath)}`);
     const harnessRoot = await resolveExistingHarnessRoot(rootPath, harness, userProfile);
     assertContained(harnessRoot, selectedPath, "Add harness file");
@@ -202,11 +216,17 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
             state: preview.changes.some((change) => change.status !== "unchanged" && change.status !== "skipped") ? "pending" as const : "current" as const,
             changes: preview.changes,
         })).catch((error: unknown) => ({ state: "error" as const, changes: [], error: error instanceof Error ? error.message : String(error) }));
-        const targetStates = workspace.harnessFiles.length === 0 ? [] : await inspectHarnessFileTargets(root);
-        const targetStateByFile = new Map(targetStates.map((item) => [`${item.harness}\0${item.path}`, item.targetState]));
+        const snapshot = await readSyncSnapshot(root);
+        const targetStates = await inspectFileSyncTargets(root, snapshot, root);
         return {
             ...workspace,
-            harnessFiles: workspace.harnessFiles.map((file) => ({ ...file, targetState: targetStateByFile.get(`${file.harness}\0${file.path}`) ?? "folder-missing" })),
+            harnessFiles: workspace.harnessFiles.map((file) =>
+            {
+                const target = targetStates.find((item) => item.harness === file.harness && item.filePath === file.path)!;
+                const syncState = snapshot.legacyFiles?.[target.key] ? "migration" as const : target.state === "ready" ? undefined : target.state;
+                return { ...file, ...(syncState ? { syncState } : {}), targetContent: target.content === null ? null : Buffer.from(target.content, "base64").toString("utf8"),
+                    targetState: target.state === "ready" ? "match" as const : target.state };
+            }),
             deploymentStatus,
             generationStatus: await inspectGenerated(root, generatedFiles),
             harnessRoots: await inspectHarnessRoots(root),
@@ -262,26 +282,12 @@ export const workspaceService: Omit<AppApi["workspace"], "openHarnessRoot" | "op
     /** Update a harness and cascade its name when necessary. */
     updateHarness: (from, harness) => withWorkspace((root) => updateHarness(root, from, harness), "Update Harness"),
 
-    /** Save exact text for one existing additional harness file. */
-    saveHarnessFile: (harness, path, content, guard) => withWorkspace(async (root) =>
-    {
-        setupReview = undefined;
-        await saveHarnessFile(root, harness, path, content, guard);
-    }, "Save harness file"),
-
     /** Delete one additional harness file source. */
     removeHarnessFile: (harness, path) => withWorkspace(async (root) =>
     {
         setupReview = undefined;
         await removeHarnessFile(root, harness, path);
     }, "Remove harness file"),
-
-    /** Copy a harness-folder file back into its sync source, or remove the source when the target is missing. */
-    adoptHarnessFile: (harness, path, guard) => withWorkspace(async (root) =>
-    {
-        setupReview = undefined;
-        await adoptHarnessFile(root, harness, path, guard);
-    }, "Adopt harness file"),
 
     /** Register a GitHub skill source URL. */
     addSkillSource: (input) => withWorkspace((root) => addSkillSource(root, input)),

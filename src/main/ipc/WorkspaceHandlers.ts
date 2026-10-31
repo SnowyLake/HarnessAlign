@@ -9,8 +9,8 @@ import { z } from "zod";
 import { HalignError } from "../../engine/Model.js";
 import { resolveExistingHarnessRoot } from "../../engine/Setup.js";
 import {
-    ADD_HARNESS_FILE_SCHEMA, ADOPT_HARNESS_FILE_SCHEMA, AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA,
-    RULE_INPUT_SCHEMA, SAVE_HARNESS_FILE_SCHEMA, SOURCE_GUARD_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA,
+    ADD_HARNESS_FILE_SCHEMA, AGENT_SCHEMA, CONFIG_SCHEMA, HARNESS_SCHEMA, LAYER_OPTION_INPUT_SCHEMA, LAYER_SELECTION_SCHEMA,
+    RULE_INPUT_SCHEMA, SOURCE_GUARD_SCHEMA, SKILL_IDS_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA,
 } from "../../shared/models/Schemas.js";
 import { importSelectedHarnessFile, resolveWorkspaceItemFolder, withWorkspace, workspaceService } from "../services/WorkspaceService.js";
 import { runIpc } from "../utils/Ipc.js";
@@ -118,22 +118,12 @@ export function registerWorkspaceHandlers(): void
         }, "Add harness file");
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceSaveHarnessFile, (event, input: unknown) => runIpc(event, async () =>
-    {
-        const parsed = SAVE_HARNESS_FILE_SCHEMA.parse(input);
-        await workspaceService.saveHarnessFile(parsed.harness, parsed.path, parsed.content, parsed.guard);
-    }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceRemoveHarnessFile, (event, harness: unknown, path: unknown) => runIpc(event, async () =>
     {
         await workspaceService.removeHarnessFile(z.string().min(1).parse(harness), z.string().min(1).parse(path));
     }));
 
-    ipcMain.handle(IPC_CHANNELS.workspaceAdoptHarnessFile, (event, input: unknown) => runIpc(event, async () =>
-    {
-        const parsed = ADOPT_HARNESS_FILE_SCHEMA.parse(input);
-        await workspaceService.adoptHarnessFile(parsed.harness, parsed.path, parsed.guard);
-    }));
 
     ipcMain.handle(IPC_CHANNELS.workspaceUpdateHarness, (event, from: unknown, harness: unknown) => runIpc(event, async () =>
     {

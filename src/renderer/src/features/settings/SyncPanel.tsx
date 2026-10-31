@@ -1,10 +1,10 @@
 /** Manual private-repository sync with reviewed first-use adoption and explicit conflict choices. */
 
-import { SyncOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Form, Input, Modal, Row, Select, Space, Spin, Table, Typography } from "antd";
+import { FileTextOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Col, Empty, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Spin, Tabs, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
-import type { SyncApplyInput, SyncChange, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileView } from "@shared/models/Sync";
+import type { SyncApplyInput, SyncChoice, SyncConnectionInput, SyncDetail, SyncFileChange, SyncFileChoice, SyncFileView } from "@shared/models/Sync";
 import { noteSyncPreview } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 import { showError, showSuccess } from "@/components/common/Feedback";
@@ -13,17 +13,20 @@ import { diffLines, type DiffLine } from "@/lib/TextDiff";
 
 const CREATE_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write";
 const MANAGE_TOKENS_URL = "https://github.com/settings/personal-access-tokens";
+const FILE_ACTION_LABELS: Record<SyncFileChange["action"], string> = {
+    unchanged: "Unchanged", upload: "Local → Remote", apply: "Remote → Local", "upload-apply": "Update both",
+    stop: "Stop syncing", conflict: "Resolve conflict", unavailable: "Pending",
+};
 
 /** Render bounded text and binary metadata without interpreting remote content as HTML. */
 function SyncFileContent({ label, value, lines }: { label: string; value: SyncFileView | null; lines?: DiffLine[] })
 {
     return (
-        <Card size="small" title={label}>
+        <Card size="small" title={label} className="sync-content-pane">
             {!value ? <Typography.Text type="secondary">Absent / deleted</Typography.Text> : (
                 <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-                    <Typography.Text type="secondary">{value.bytes.toLocaleString()} bytes</Typography.Text>
                     {value.text === null ? <Typography.Text>Binary file. SHA: {value.hash}</Typography.Text> : (
-                        lines ? <DiffText lines={lines} label={`${label} differences`} /> : <pre style={{ margin: 0, maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{value.text || "(empty file)"}</pre>
+                        lines ? <DiffText lines={lines} label={`${label} differences`} /> : <pre style={{ margin: 0, maxHeight: "none", overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{value.text || "(empty file)"}</pre>
                     )}
                     {value.truncated ? <Typography.Text type="warning">Preview limited to 16,000 characters.</Typography.Text> : null}
                 </Space>
@@ -53,14 +56,44 @@ export function SyncPanel()
     const preview = useAppStore((state) => state.syncPreview);
     const setPreview = useAppStore((state) => state.setSyncPreview);
     const [choices, setChoices] = useState<Record<string, SyncChoice>>({});
+    const [fileChoices, setFileChoices] = useState<Record<string, SyncFileChoice>>({});
     const [mode, setMode] = useState<SyncApplyInput["mode"]>("merge");
     const [detail, setDetail] = useState<{ key: string; content: SyncDetail }>();
     const [error, setError] = useState("");
+    const [selectedKey, setSelectedKey] = useState<string>();
+    const [showUnchanged, setShowUnchanged] = useState(false);
+    const [detailError, setDetailError] = useState("");
     const [isConnecting, setIsConnecting] = useState(false);
     const isBusy = useAppStore((state) => state.isBusy);
     const dirtyCount = useAppStore(workspaceChangeCount);
-    const unresolved = preview?.changes.filter((change) => change.direction === "conflict" && !choices[change.key]).length ?? 0;
+    const unresolved = preview?.unresolvedCount ?? 0;
     const isConnection = dialog === "connection" || !status?.connected;
+    const sourceChanges = preview?.changes.filter((change) => change.direction !== "same" && (!change.key.startsWith("harness-files/") || change.key.endsWith("/"))) ?? [];
+    const visibleFiles = preview?.fileChanges.filter((file) => showUnchanged || file.action !== "unchanged" || file.key === selectedKey) ?? [];
+    const unchangedCount = preview?.fileChanges.filter((file) => file.action === "unchanged").length ?? 0;
+    const reviewKeys = [...visibleFiles.map((file) => file.key), ...sourceChanges.map((change) => change.key)];
+    const activeKey = selectedKey && reviewKeys.includes(selectedKey) ? selectedKey : reviewKeys[0];
+    const activeFile = preview?.fileChanges.find((file) => file.key === activeKey);
+    const activeSource = sourceChanges.find((change) => change.key === activeKey);
+
+    useEffect(() =>
+    {
+        let cancelled = false;
+        setDetail(undefined);
+        setDetailError("");
+        if (dialog !== "review" || !preview || !activeKey) return;
+        void window.appApi.sync.inspect(preview.id, activeKey).then((content) =>
+        {
+            if (!cancelled) setDetail({ key: activeKey, content });
+        }).catch((cause: unknown) =>
+        {
+            if (cancelled) return;
+            setDetailError("Unable to load comparison. Refresh to try again.");
+            showError(cause, "Comparison unavailable");
+        });
+        return () => { cancelled = true; };
+    }, [dialog, preview?.id, activeKey]);
+
 
     useEffect(() =>
     {
@@ -110,8 +143,8 @@ export function SyncPanel()
         }
         catch (cause)
         {
-            setError("GitHub operation failed. See Console for details.");
-            showError(cause, "GitHub operation failed");
+            setError("Sync failed. See Console for details.");
+            showError(cause, "Sync failed");
         }
         finally
         {
@@ -125,17 +158,42 @@ export function SyncPanel()
         }
     }
 
-    /** Preview exact saved source versions, recovering an interrupted upload when necessary. */
+    /** Read current actual files and saved versions without recovering or writing sources. */
     async function handlePreview(): Promise<void>
     {
         if (workspaceChangeCount(useAppStore.getState())) throw new Error("Save or discard workspace drafts before syncing.");
         setPreview(undefined);
         const next = await window.appApi.sync.preview();
         noteSyncPreview(next);
-        if (next.notice) await reloadSyncedWorkspace();
         setPreview(next);
         setChoices({});
+        setFileChoices({});
         setMode(next.remoteEmpty ? "initialize" : "merge");
+    }
+
+    /** Ask Main to show the new final effects before allowing the changed decisions to execute. */
+    async function handlePlan(nextMode = mode, nextChoices = choices, nextFileChoices = fileChoices): Promise<void>
+    {
+        if (!preview) return;
+        const next = await window.appApi.sync.plan({ previewId: preview.id, mode: nextMode, choices: nextChoices, fileChoices: nextFileChoices });
+        setSelectedKey(activeKey);
+        setMode(nextMode);
+        setChoices(nextChoices);
+        setFileChoices(nextFileChoices);
+        setPreview(next);
+        noteSyncPreview(next);
+        setDetail(undefined);
+    }
+
+    /** Resume only previously confirmed work; the next preview remains a read-only operation. */
+    async function handleResume(): Promise<void>
+    {
+        const result = await window.appApi.sync.resume();
+        await reloadSyncedWorkspace();
+        setStatus(result.status);
+        if (result.applicationPending) setError(result.message);
+        else showSuccess("Confirmed sync resumed", result.message);
+        await handlePreview();
     }
 
     /** Apply only the reviewed preview and refresh the local editor's saved baseline. */
@@ -145,16 +203,26 @@ export function SyncPanel()
         if (workspaceChangeCount(useAppStore.getState())) throw new Error("Save or discard workspace drafts, then preview again.");
         try
         {
-            const result = await window.appApi.sync.apply({ previewId: preview.id, mode, choices });
-            showSuccess("GitHub Sync complete", result.message);
+            const result = await window.appApi.sync.apply({ previewId: preview.id });
             noteSyncPreview(undefined);
             await reloadSyncedWorkspace();
             setStatus(result.status);
-            setDialog(undefined);
+            if (result.applicationPending)
+            {
+                setError(result.message);
+                await handlePreview();
+            }
+            else
+            {
+                showSuccess("Sync complete", result.message);
+                setPreview(undefined);
+                setDialog(undefined);
+            }
         }
-        finally
+        catch (cause)
         {
             setPreview(undefined);
+            throw cause;
         }
     }
 
@@ -173,20 +241,23 @@ export function SyncPanel()
 
     return (
         <>
-            <Modal open={dialog !== undefined} title={isConnection ? "GitHub connection" : "Sync configuration"} width={isConnection ? 680 : 1000}
-                   forceRender onCancel={handleClose} closable={!isBusy} styles={{ body: { maxHeight: "65vh", overflowY: "auto" } }}
+            <Modal open={dialog !== undefined} title={isConnection ? "Remote connection" : `Sync · ${status?.owner}/${status?.repository} · ${status?.branch}`} width={isConnection ? 680 : 1280} centered
+                   forceRender onCancel={handleClose} closable={!isBusy} styles={{ body: { maxHeight: "78vh", overflowY: "auto" } }}
                    footer={!isConnection && status?.connected ? (
-                       <Space wrap>
-                           <Button disabled={isBusy} onClick={handleClose}>Close</Button>
-                           <Button disabled={isBusy || dirtyCount > 0} loading={isBusy} onClick={() => void run(handlePreview)}>Refresh preview</Button>
-                           <Button type="primary" icon={<SyncOutlined />} disabled={!preview || isBusy || dirtyCount > 0 || mode === "merge" && unresolved > 0}
+                       <Flex justify="space-between" align="center" gap={12} wrap>
+                           <Typography.Text type={unresolved ? "warning" : "secondary"}>{preview ? `${preview.uploadCount} uploads · ${preview.downloadCount} downloads${preview.applyCount ? ` · ${preview.applyCount} Local updates` : ""}${unresolved ? ` · ${unresolved} unresolved` : ""}` : ""}</Typography.Text>
+                           <Space wrap>
+                               <Button disabled={isBusy || dirtyCount > 0} icon={<ReloadOutlined />} loading={isBusy} onClick={() => void run(handlePreview)}>Refresh</Button>
+                               {status.hasPendingUpload || status.hasPendingApplication ? <Button disabled={isBusy || dirtyCount > 0} onClick={() => void run(handleResume)}>Resume sync</Button> : null}
+                               <Button type="primary" icon={<SyncOutlined />} disabled={!preview || isBusy || dirtyCount > 0 || unresolved > 0 || preview.recoveryRequired}
                                    onClick={() => void run(handleApply)}>{preview?.remoteEmpty ? "Initialize archive" : "Sync now"}</Button>
-                       </Space>
+                           </Space>
+                       </Flex>
                    ) : null}>
                 <div inert={isBusy} aria-busy={isBusy}>
                     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
                         {error ? <Alert type="error" showIcon title={error} /> : null}
-                        {status?.connected ? (
+                        {status?.connected && isConnection ? (
                             <Space orientation="vertical" size="small" style={{ width: "100%" }}>
                                 <Typography.Text strong>{status.owner}/{status.repository} · {status.branch}</Typography.Text>
                                 <Typography.Text type="secondary">Last synced: {status.lastSyncedAt ? new Date(status.lastSyncedAt).toLocaleString() : "Not yet synced"}</Typography.Text>
@@ -196,7 +267,7 @@ export function SyncPanel()
                                     {
                                         setStatus(await window.appApi.sync.disconnect());
                                         noteSyncPreview(undefined);
-                                        showSuccess("GitHub disconnected");
+                                        showSuccess("Remote disconnected");
                                         setPreview(undefined);
                                         setIsConnecting(false);
                                         form.setFieldValue("token", "");
@@ -211,7 +282,7 @@ export function SyncPanel()
                                 {
                                     setStatus(await window.appApi.sync.connect(values));
                                     noteSyncPreview(undefined);
-                                    showSuccess("GitHub connected", `${values.owner}/${values.repository} (${values.branch})`);
+                                    showSuccess("Remote connected", `${values.owner}/${values.repository} (${values.branch})`);
                                     setPreview(undefined);
                                     setIsConnecting(false);
                                     setDialog(undefined);
@@ -245,51 +316,86 @@ export function SyncPanel()
                             </Form>
                         ) : null}
                         {dirtyCount > 0 ? <Alert type="warning" showIcon title="Save or discard workspace drafts before previewing or applying sync." /> : null}
-                        {status?.hasPendingUpload ? <Alert type="warning" showIcon title="An earlier sync needs recovery. Open Sync from the top bar to check its remote result before retrying." /> : null}
+                        {status?.hasPendingUpload ? <Alert type="warning" showIcon title="An earlier confirmed sync needs recovery. Resume it before starting another sync." /> : null}
                         {!isConnection && preview ? (
                             <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-                                {preview.notice ? <Alert type="info" showIcon title="Sync recovery completed. See Console for details." /> : null}
+                                {preview.notice ? <Typography.Paragraph type="secondary" className="sync-notice">{preview.notice}</Typography.Paragraph> : null}
+                                {preview.planError ? <Alert type="error" showIcon title="The selected result is not a valid configuration" description={preview.planError} /> : null}
                                 {preview.remoteEmpty ? <Alert type="warning" showIcon title="No Harness Align archive exists in this repository."
                                     description="Initialize archive uploads this device's saved configuration to the selected repository. Other repository files are kept. Normal sync and local restoration are unavailable until initialization completes." /> : null}
                                 {preview.firstSync && !preview.remoteEmpty ? (
                                     <Form layout="vertical" requiredMark={false}>
                                         <Form.Item label="First sync" extra="Merge combines independent changes. Adopting one side also applies its deletions after you click Sync now.">
-                                            <Select value={mode} onChange={setMode} aria-label="First sync strategy" options={[
+                                            <Select value={mode} onChange={(value) => void run(() => handlePlan(value, choices, {}))} aria-label="First sync strategy" options={[
                                                 { value: "merge", label: "Merge local and remote" },
-                                                { value: "local", label: "Use this device's complete configuration" },
-                                                { value: "remote", label: "Use the remote's complete configuration" },
+                                                { value: "local", label: "Use Local configuration" },
+                                                { value: "remote", label: "Use Remote configuration" },
                                             ]} />
                                         </Form.Item>
                                     </Form>
                                 ) : null}
-                                <Typography.Text>{preview.uploadCount} to upload · {preview.downloadCount} to download · {unresolved} unresolved conflicts</Typography.Text>
-                                {!preview.remoteEmpty ? <Typography.Text type="secondary">
-                                    Discard local changes immediately restores that source to the remote version, or removes it if absent remotely. Skills and structural conflicts are restored as a group.
-                                </Typography.Text> : null}
                                 {mode === "local" || mode === "remote" ? <Alert type="warning" showIcon title={mode === "local"
-                                    ? "The remote configuration will be replaced by this device's configuration."
-                                    : "This device's configuration will be replaced by the remote configuration. A local backup is kept."} /> : null}
-                                <Table<SyncChange> size="small" rowKey="key" dataSource={preview.changes.filter((change) => change.direction !== "same")}
-                                                   locale={{ emptyText: "Configuration is up to date" }} pagination={false} scroll={{ x: 900, y: "min(400px, 45vh)" }} columns={[
-                                    { title: "Source", dataIndex: "key", render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
-                                    { title: "Change", dataIndex: "direction", align: "center", width: 100 },
-                                    { title: "Decision", align: "center", width: 190, render: (_, change) => change.direction === "conflict" ? (
-                                        <Select<SyncChoice> aria-label={`Resolve ${change.key}`} placeholder="Choose a version" value={choices[change.key] ?? null} disabled={mode !== "merge"}
-                                                            style={{ minWidth: 170 }} onChange={(value) => setChoices((current) => ({ ...current, [change.key]: value }))}
-                                                            options={[{ value: "local", label: change.key.startsWith("harness-files/") ? "Keep local source" : "Keep local" },
-                                                                      { value: "remote", label: "Keep remote" }]} />
-                                    ) : <Typography.Text type="secondary">Automatic</Typography.Text> },
-                                    { title: "Compare", align: "center", width: 140, render: (_, change) => (
-                                        <Button type="link" onClick={() => void run(async () => setDetail({ key: change.key, content: await window.appApi.sync.inspect(preview.id, change.key) }))}>
-                                            View versions
-                                        </Button>
-                                    ) },
-                                    { title: "Local changes", align: "center", width: 210, render: (_, change) => !preview.remoteEmpty && (change.direction === "upload" || change.direction === "conflict")
-                                        && (!change.key.endsWith("/") || change.paths.length > 0) ? (
-                                        <Button type="link" danger disabled={isBusy || dirtyCount > 0 || mode !== "merge"} aria-label={`Discard local changes for ${change.key}`}
-                                                onClick={() => void run(() => handleDiscard(change.key))}>Discard local changes</Button>
-                                    ) : null },
-                                ]} />
+                                    ? "Remote will be replaced with Local, including deletions."
+                                    : "Local will be replaced with Remote, including deletions. A backup is kept."} /> : null}
+                                <div className="sync-review">
+                                    <nav className="file-browser-list" aria-label="Sync changes">
+                                        {visibleFiles.length ? <div className="file-browser-group">Files</div> : null}
+                                        {visibleFiles.map((file) => <Button key={file.key} type="text" className={`file-browser-item${activeKey === file.key ? " is-selected" : ""}`}
+                                            aria-pressed={activeKey === file.key} onClick={() => setSelectedKey(file.key)} icon={<FileTextOutlined />}>
+                                            <span className="file-browser-item-text"><span>{file.target}</span>
+                                                <span className={`file-browser-item-status${file.needsChoice ? " needs-choice" : ""}`}>{FILE_ACTION_LABELS[file.action]}</span>
+                                            </span>
+                                        </Button>)}
+                                        {sourceChanges.length ? <div className="file-browser-group">Configuration</div> : null}
+                                        {sourceChanges.map((change) => <Button key={change.key} type="text" className={`file-browser-item${activeKey === change.key ? " is-selected" : ""}`}
+                                            aria-pressed={activeKey === change.key} onClick={() => setSelectedKey(change.key)} icon={<FileTextOutlined />}>
+                                            <span className="file-browser-item-text"><span>{change.key}</span><span className="file-browser-item-status">
+                                                {change.direction === "conflict" ? choices[change.key] ? `Use ${choices[change.key] === "local" ? "Local" : "Remote"}` : "Resolve conflict"
+                                                    : change.direction === "upload" ? "Local → Remote" : "Remote → Local"}
+                                            </span></span>
+                                        </Button>)}
+                                        {unchangedCount ? <Button type="link" className="file-browser-show" onClick={() =>
+                                        {
+                                            if (showUnchanged && activeFile?.action === "unchanged") setSelectedKey(undefined);
+                                            setShowUnchanged(!showUnchanged);
+                                        }}>
+                                            {showUnchanged ? "Hide unchanged" : `Show ${unchangedCount} unchanged`}
+                                        </Button> : null}
+                                    </nav>
+                                    <div className="sync-review-detail">
+                                        {activeKey ? <>
+                                            <Flex align="center" justify="space-between" gap={12} wrap className="file-browser-detail-header">
+                                                <Typography.Text strong className="file-browser-path">{activeFile?.target ?? activeKey}</Typography.Text>
+                                                {activeFile ? <Select<SyncFileChoice | "auto"> aria-label={`Version for ${activeKey}`} style={{ width: 180 }}
+                                                    value={fileChoices[activeKey.toLowerCase()] ?? "auto"} status={activeFile.needsChoice ? "error" : ""} onChange={(value) =>
+                                                    {
+                                                        const next = { ...fileChoices };
+                                                        if (value === "auto") delete next[activeKey.toLowerCase()]; else next[activeKey.toLowerCase()] = value;
+                                                        void run(() => handlePlan(mode, choices, next));
+                                                    }} options={[
+                                                        { value: "auto", label: activeFile.needsChoice ? "Choose a version" : "Automatic" },
+                                                        { value: "target", label: "Use Local", disabled: !activeFile.canUseTarget || mode === "remote" },
+                                                        { value: "remote", label: "Use Remote", disabled: !activeFile.canUseSource || activeFile.state === "unsafe" },
+                                                        ...(activeFile.hasLegacy ? [{ value: "legacy", label: "Restore legacy change" }] : []),
+                                                        { value: "stop", label: "Stop syncing" },
+                                                    ]} /> : activeSource?.direction === "conflict" ? <Select<SyncChoice> aria-label={`Version for ${activeKey}`} placeholder="Choose a version"
+                                                        value={choices[activeKey] ?? null} disabled={mode !== "merge"} style={{ width: 180 }}
+                                                        onChange={(value) => void run(() => handlePlan(mode, { ...choices, [activeKey]: value }))}
+                                                        options={[{ value: "local", label: "Use Local" }, { value: "remote", label: "Use Remote" }]} /> : null}
+                                            </Flex>
+                                            {activeFile?.error ? <Alert type="warning" showIcon title={activeFile.error} /> : null}
+                                            {activeFile?.action === "stop" ? <Typography.Paragraph type="secondary">Local files are kept on every device.</Typography.Paragraph> : null}
+                                            {detailError ? <Alert type="error" showIcon title={detailError} /> : detail?.key === activeKey ? <SyncComparison detail={detail} />
+                                                : <div className="sync-loading" role="status"><Spin /><span>Loading comparison...</span></div>}
+                                            {!preview.remoteEmpty && activeSource && !activeKey.startsWith("harness-files/") && (activeSource.direction === "upload" || activeSource.direction === "conflict")
+                                                && (!activeKey.endsWith("/") || activeSource.paths.length > 0) ? <Popconfirm title="Discard Local changes?"
+                                                    description="Restore Remote now. If absent remotely, the Local source is removed. This applies to the entire source group."
+                                                    okText="Discard" okButtonProps={{ danger: true }} onConfirm={() => run(() => handleDiscard(activeKey))}>
+                                                    <Button type="text" danger disabled={isBusy || dirtyCount > 0 || mode !== "merge"}>Discard Local changes</Button>
+                                                </Popconfirm> : null}
+                                        </> : <Empty className="file-browser-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description={preview.remoteEmpty ? "Ready to initialize" : "No changes"} />}
+                                    </div>
+                                </div>
                             </Space>
                         ) : null}
                     </Space>
@@ -298,34 +404,34 @@ export function SyncPanel()
                     <div className="sync-loading" role="status"><Spin /><Typography.Text type="secondary">Loading preview...</Typography.Text></div>
                 ) : null}
             </Modal>
-            <Modal open={Boolean(detail)} title={`Compare: ${detail?.key ?? ""}`} width={1000} footer={null} onCancel={() => setDetail(undefined)} destroyOnHidden>
-                <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-                    {!detail?.key.startsWith("harness-files/") ? (
-                        <Typography.Text type="secondary">- Local deletions and + Remote additions are highlighted. Conflict choices still apply to the entire source group.</Typography.Text>
-                    ) : null}
-                    {detail?.content.files.length === 0 ? <Typography.Text>This change adds or removes an empty directory.</Typography.Text> : null}
-                    {detail?.content.files.map((file) =>
-                    {
-                        const diff = (!file.local || file.local.text !== null) && (!file.remote || file.remote.text !== null)
-                            ? diffLines(file.local?.text ?? null, file.remote?.text ?? null) : undefined;
-                        return (
-                        <div key={file.path} style={{ width: "100%" }}>
-                            {file.path !== detail.key ? <Typography.Paragraph code>{file.path}</Typography.Paragraph> : null}
-                            <Row gutter={[12, 12]}>
-                                <Col xs={24} md={12}><SyncFileContent label={file.path.startsWith("harness-files/") ? "Local source" : "Local"}
-                                                                     value={file.local} {...diff ? { lines: diff.local } : {}} /></Col>
-                                <Col xs={24} md={12}><SyncFileContent label={file.path.startsWith("harness-files/") ? "GitHub" : "Remote"}
-                                                                     value={file.remote} {...diff ? { lines: diff.remote } : {}} /></Col>
-                            </Row>
-                            {diff?.limited ? <Typography.Text type="secondary">Large preview: the changed section is highlighted as a whole.</Typography.Text> : null}
-                        </div>
-                    );
-                    })}
-                    {detail?.content.omittedFiles ? (
-                        <Alert type="info" title={`${detail.content.omittedFiles} additional files omitted from this preview. The decision applies to the entire source group.`} />
-                    ) : null}
-                </Space>
-            </Modal>
         </>
     );
+}
+
+/** Show both sync endpoints in place without opening another dialog. */
+function SyncComparison({ detail }: { detail: { key: string; content: SyncDetail } })
+{
+    return <div className="sync-comparison">
+        {detail.content.files.length === 0 ? <Typography.Text type="secondary">Empty directory</Typography.Text> : null}
+        {detail.content.files.map((file) =>
+        {
+            const additional = file.path.startsWith("harness-files/");
+            const local = additional ? file.actual : file.local;
+            const diff = (!local || local.text !== null) && (!file.remote || file.remote.text !== null)
+                ? diffLines(local?.text ?? null, file.remote?.text ?? null) : undefined;
+            const comparison = <div className="sync-comparison-panes">
+                <SyncFileContent label="Local" value={local ?? null} {...diff ? { lines: diff.local } : {}} />
+                <SyncFileContent label="Remote" value={file.remote} {...diff ? { lines: diff.remote } : {}} />
+            </div>;
+            return <div key={file.path}>
+                {file.path !== detail.key ? <Typography.Paragraph code>{file.path}</Typography.Paragraph> : null}
+                {file.saved ? <Tabs items={[
+                    { key: "compare", label: "Local / Remote", children: comparison },
+                    { key: "legacy", label: "Legacy change", children: <SyncFileContent label="Legacy change" value={file.saved} /> },
+                ]} /> : comparison}
+                {diff?.limited ? <Typography.Text type="secondary">Large diff: changed sections are highlighted as a whole.</Typography.Text> : null}
+            </div>;
+        })}
+        {detail.content.omittedFiles ? <Alert type="info" title={`${detail.content.omittedFiles} files omitted. The choice applies to the entire group.`} /> : null}
+    </div>;
 }
