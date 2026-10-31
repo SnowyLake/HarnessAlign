@@ -29,6 +29,12 @@ export default defineConfig({
                 "@shared": resolve("src/shared"),
             },
         },
-        plugins: [react()],
+        plugins: [react(), {
+            name: "development-csp",
+            apply: "serve",
+            // Fast Refresh needs inline scripts and the Vite client needs a WebSocket during development only.
+            transformIndexHtml: (html) => html.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
+                .replace("connect-src 'none'", "connect-src 'self' ws: http://localhost:*"),
+        }],
     },
 });

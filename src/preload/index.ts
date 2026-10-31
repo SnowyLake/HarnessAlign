@@ -8,7 +8,7 @@ import { IPC_CHANNELS } from "../shared/contracts/IpcChannels.js";
 import type { AppUpdateStatus } from "../shared/models/AppUpdate.js";
 import type { AppSettings } from "../shared/models/AppSettings.js";
 import type { LogChange } from "../shared/models/Console.js";
-import type { Agent, Config, HarnessConfig, LayerOptionInput, RuleInput } from "../shared/models/Workspace.js";
+import type { HarnessConfig } from "../shared/models/Workspace.js";
 
 /** Renderer-facing capability API bridged onto `window.appApi`. */
 const appApi: AppApi = {

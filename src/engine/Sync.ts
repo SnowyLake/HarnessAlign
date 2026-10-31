@@ -269,7 +269,7 @@ export async function readSyncSnapshot(root: string): Promise<SyncSnapshot>
 /** Hash normalized bytes and directories to detect stale previews independently of clocks. */
 export function syncSnapshotHash(snapshot: SyncSnapshot): string
 {
-    const { version: _version, ...contents } = parseSyncSnapshot(snapshot);
+    const contents = { ...parseSyncSnapshot(snapshot), version: undefined };
     return createHash("sha256").update(JSON.stringify(contents)).digest("hex");
 }
 
