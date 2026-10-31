@@ -1,37 +1,14 @@
-/**
- * Additional harness-folder files edited as sync sources.
- * Setup copies these files; this panel never writes the harness folder or GitHub.
- */
+/** Register local files and inspect them in one list-and-content view. */
 
-import type { HarnessConfig, HarnessFileTargetState, SourceGuard, Workspace } from "@shared/models/Workspace";
-import { DeleteOutlined, FileTextOutlined, PlusOutlined } from "@ant-design/icons";
-import { Alert, Button, Drawer, Flex, Modal, Space, Tooltip, Typography } from "antd";
+import type { HarnessConfig, Workspace } from "@shared/models/Workspace";
+import { DisconnectOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { Alert, Button, Empty, Flex, Modal, Space, Tooltip, Typography } from "antd";
 import { useState } from "react";
 import { showSuccess } from "@/components/common/Feedback";
 import { SourceEditor, type SourceLanguage } from "@/components/common/SourceEditor";
-import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
-import { selectionKey, useAppStore, type Selection } from "@/stores/AppStore";
-
-/** Confirmation shared by the file list, file editor, and deployment review. */
-export interface AdoptHarnessFileRequest
-{
-    harness: string;
-    path: string;
-    targetLabel: string;
-    targetMissing: boolean;
-    dirty: boolean;
-}
-
-/** Explain one adopt confirmation, including an unsaved editor draft when one exists. */
-function adoptHarnessFileCopy(request: AdoptHarnessFileRequest): string
-{
-    const unsaved = request.dirty ? " Unsaved edits in the editor will also be discarded." : "";
-    if (request.targetMissing)
-    {
-        return `${request.targetLabel} is missing. Adopting it removes ${request.path} from the sync source. GitHub is not updated until you review sync.${unsaved}`;
-    }
-    return `This replaces the sync source for ${request.targetLabel} with the target file. The current source will be discarded. GitHub is not updated until you review sync.${unsaved}`;
-}
+import { fileSyncStateLabel } from "@/lib/Utils";
+import { refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { useAppStore } from "@/stores/AppStore";
 
 /** Choose the source editor language without adding a TOML mode. */
 function harnessFileLanguage(path: string): SourceLanguage
@@ -42,108 +19,15 @@ function harnessFileLanguage(path: string): SourceLanguage
     return "plain";
 }
 
-/** Keep a uniform CRLF or CR file intact. Mixed endings stay on the editor's LF join. */
-function harnessFileLineSeparator(content: string): "\r\n" | "\r" | undefined
-{
-    const withoutPairs = content.replaceAll("\r\n", "");
-    if (content.includes("\r\n") && !withoutPairs.includes("\n") && !withoutPairs.includes("\r")) return "\r\n";
-    if (!content.includes("\n") && content.includes("\r")) return "\r";
-    return undefined;
-}
-
-/** Label the comparison between a sync source and its harness-folder copy. */
-function harnessFileStatusLabel(state: HarnessFileTargetState | undefined): string
-{
-    switch (state)
-    {
-        case "match": return "Matches target";
-        case "changed": return "Target changed";
-        case "missing": return "Missing on target";
-        case "parent-missing": return "Parent folder missing";
-        case "unsafe": return "Folder unsafe";
-        default: return "Folder missing";
-    }
-}
-
-/** Format the deployed path shown in confirmations. */
-function harnessFileTargetLabel(configPath: string, path: string): string
-{
-    return `~/${configPath}/${path}`;
-}
-
-/** Return the managed source path used as a save guard. */
-function harnessFileSourcePath(harness: string, path: string): string
-{
-    return `.harness-align/harness-files/${harness}/${path}`;
-}
-
-/** Keep the revision captured when the draft was opened. */
-function harnessFileGuard(workspace: Workspace, harness: string, path: string): SourceGuard
-{
-    const sourcePath = harnessFileSourcePath(harness, path);
-    const draft = useAppStore.getState().editorDrafts[selectionKey({ kind: "harness-file", harness, path })];
-    const revisions = draft?.sourceRevisions ?? workspace.sourceRevisions;
-    return { path: sourcePath, revision: revisions[sourcePath] ?? null };
-}
-
-/** Confirm replacing a sync source with the current harness-folder file. */
-export function AdoptHarnessFileModal({ request, isBusy, onCancel, onConfirm }: {
-    request: AdoptHarnessFileRequest | undefined;
-    isBusy: boolean;
-    onCancel: () => void;
-    onConfirm: (request: AdoptHarnessFileRequest) => void;
-})
-{
-    return (
-        <Modal
-            open={Boolean(request)}
-            title="Adopt target content?"
-            okText="Adopt target content"
-            okButtonProps={{ danger: request?.targetMissing === true, disabled: isBusy }}
-            confirmLoading={isBusy}
-            onCancel={onCancel}
-            onOk={() => { if (request) onConfirm(request); }}
-        >
-            {request ? <Typography.Paragraph>{adoptHarnessFileCopy(request)}</Typography.Paragraph> : null}
-        </Modal>
-    );
-}
-
-/** List, add, edit, and remove additional files for one saved harness. */
-export function HarnessFiles({ workspace, harness }: { workspace: Workspace; harness: HarnessConfig })
+/** Keep file selection and content together; hand off to sync without stacking dialogs. */
+export function HarnessFiles({ workspace, harness, onReviewSync }: { workspace: Workspace; harness: HarnessConfig; onReviewSync: () => void })
 {
     const isBusy = useAppStore((state) => state.isBusy);
-    const drafts = useAppStore((state) => state.editorDrafts);
     const files = workspace.harnessFiles.filter((file) => file.harness === harness.name);
     const [removePath, setRemovePath] = useState<string>();
-    const [editingPath, setEditingPath] = useState<string>();
-    const [adoptRequest, setAdoptRequest] = useState<AdoptHarnessFileRequest>();
-    const editing = files.find((file) => file.path === editingPath);
-    const editingSelection: Selection | undefined = editing ? { kind: "harness-file", harness: harness.name, path: editing.path } : undefined;
-    const editingKey = editingSelection ? selectionKey(editingSelection) : "";
-    const editingDraft = editingKey ? drafts[editingKey] : undefined;
-    const targetLabel = (path: string): string => harnessFileTargetLabel(harness.configPath, path);
-
-    /** Store the sync-source draft without changing the open harness selection. */
-    const rememberContent = (content: string): void =>
-    {
-        if (!editing || !editingSelection) return;
-        const state = useAppStore.getState();
-        if (content === editing.content)
-        {
-            state.clearEditorDraft(editingKey);
-            return;
-        }
-        const existing = state.editorDrafts[editingKey];
-        state.setEditorDraft(editingKey, {
-            selection: editingSelection,
-            baseline: { content: [editing.content] },
-            current: { content: [content] },
-            sourceRevisions: existing?.sourceRevisions ?? workspace.sourceRevisions,
-        });
-    };
-
-    /** Choose an existing harness-folder file in Main and import its current content. */
+    const [selectedPath, setSelectedPath] = useState<string>();
+    const selected = files.find((file) => file.path === selectedPath) ?? files[0];
+    /** Register the selected local path and reveal its content. */
     const addFile = (): void =>
     {
         void runMutation(async () =>
@@ -151,25 +35,11 @@ export function HarnessFiles({ workspace, harness }: { workspace: Workspace; har
             const path = await window.appApi.workspace.addHarnessFile(harness.name);
             if (path === null) return;
             await refreshWorkspace();
-            showSuccess("Imported", `Imported ${path}`);
+            setSelectedPath(path);
+            showSuccess("File added", path);
         });
     };
-
-    /** Write the editor text to the sync source and leave deployment unchanged. */
-    const saveFile = (): void =>
-    {
-        if (!editing || !editingSelection || !editingDraft) return;
-        const content = editingDraft.current.content?.[0] ?? "";
-        void runMutation(async () =>
-        {
-            await persistEditorSnapshot(workspace, editingSelection, { content: [content] });
-            useAppStore.getState().clearEditorDraft(editingKey);
-            await refreshWorkspace();
-            showSuccess("Saved", `Saved ${editing.path}`);
-        });
-    };
-
-    /** Delete the sync source. Setup later deletes only the deployed file. */
+    /** Stop synchronization while retaining each device's local file. */
     const removeFile = (): void =>
     {
         if (!removePath) return;
@@ -177,130 +47,51 @@ export function HarnessFiles({ workspace, harness }: { workspace: Workspace; har
         void runMutation(async () =>
         {
             await window.appApi.workspace.removeHarnessFile(harness.name, path);
-            useAppStore.getState().clearEditorDraft(selectionKey({ kind: "harness-file", harness: harness.name, path }));
-            if (editingPath === path) setEditingPath(undefined);
             setRemovePath(undefined);
             await refreshWorkspace();
-            showSuccess("Removed", `Removed ${path} from ${harness.name}`);
+            showSuccess("Sync stopped locally", "Sync to update other devices. Local files are kept.");
         });
     };
 
-    /** Copy the harness-folder file back into the sync source. */
-    const adoptFile = (request: AdoptHarnessFileRequest): void =>
-    {
-        void runMutation(async () =>
-        {
-            await window.appApi.workspace.adoptHarnessFile(request.harness, request.path, harnessFileGuard(workspace, request.harness, request.path));
-            useAppStore.getState().clearEditorDraft(selectionKey({ kind: "harness-file", harness: request.harness, path: request.path }));
-            if (request.targetMissing) setEditingPath(undefined);
-            setAdoptRequest(undefined);
-            await refreshWorkspace();
-            showSuccess(`Adopted ${request.targetLabel} into the sync source.`, "Review sync to upload it.");
-        });
-    };
-
-    /** Open the shared adopt confirmation for one listed or edited file. */
-    const requestAdopt = (path: string, state: HarnessFileTargetState | undefined): void =>
-    {
-        setAdoptRequest({
-            harness: harness.name,
-            path,
-            targetLabel: targetLabel(path),
-            targetMissing: state === "missing",
-            dirty: Boolean(drafts[selectionKey({ kind: "harness-file", harness: harness.name, path })]),
-        });
-    };
-
-    const editorContent = editingDraft?.current.content?.[0] ?? editing?.content ?? "";
-    const editorLineSeparator = harnessFileLineSeparator(editorContent);
-    const canAdopt = editing?.targetState === "changed" || editing?.targetState === "missing";
     return (
         <section className="harness-files" aria-label="Additional files">
-            <Flex justify="space-between" align="center" gap={12} className="workspace-list-toolbar">
-                <Typography.Title level={5} style={{ margin: 0 }}>Additional files</Typography.Title>
-                <Button size="small" icon={<PlusOutlined aria-hidden="true" />} disabled={isBusy} onClick={addFile}>Add file...</Button>
+            <Flex justify="space-between" align="center" gap={12} wrap className="file-browser-toolbar">
+                <Typography.Text type="secondary" code>~/{harness.configPath}</Typography.Text>
+                <Space>
+                    <Tooltip title="Refresh" trigger={["hover", "focus"]}>
+                        <Button icon={<ReloadOutlined />} aria-label="Refresh files" disabled={isBusy} onClick={() => void runMutation(() => refreshWorkspace())} />
+                    </Tooltip>
+                    <Button icon={<PlusOutlined />} disabled={isBusy} onClick={addFile}>Add file</Button>
+                    <Button type="primary" icon={<SyncOutlined />} disabled={isBusy} onClick={onReviewSync}>Review sync</Button>
+                </Space>
             </Flex>
-            {files.length === 0 ? <Typography.Paragraph type="secondary" className="harness-files-empty">No files added.</Typography.Paragraph> : (
-                <ul className="harness-files-list">
-                    {files.map((file) => (
-                        <li key={file.path} className="app-list-row harness-file-row">
-                            <Button type="text" className="harness-file-open" icon={<FileTextOutlined />} disabled={isBusy}
-                                    aria-label={`Edit ${file.path}`} onClick={() => setEditingPath(file.path)}>{file.path}</Button>
-                            {file.targetState !== "match" ? <Typography.Text type="secondary" className="harness-file-status">
-                                {harnessFileStatusLabel(file.targetState)}
-                            </Typography.Text> : null}
-                            <Tooltip title="Remove file" trigger={["hover", "focus"]}>
-                                <Button type="text" size="small" danger icon={<DeleteOutlined />} disabled={isBusy}
-                                        aria-label={`Remove ${file.path}`} onClick={() => setRemovePath(file.path)} />
-                            </Tooltip>
-                        </li>
-                    ))}
-                </ul>
-            )}
-            <Typography.Paragraph type="secondary" className="harness-files-note">Synced to GitHub as-is. Keep secrets in environment variables.</Typography.Paragraph>
-            <Modal
-                open={Boolean(removePath)}
-                title={removePath ? `Remove ${removePath} from ${harness.name}?` : "Remove file?"}
-                okText="Remove"
-                okButtonProps={{ danger: true, disabled: isBusy }}
-                confirmLoading={isBusy}
-                onCancel={() => setRemovePath(undefined)}
-                onOk={removeFile}
-            >
-                <Typography.Paragraph>
-                    {removePath ? `This deletes the sync source. Setup will then delete ${targetLabel(removePath)}. The target stays until Setup runs.` : null}
-                </Typography.Paragraph>
+            {files.length === 0 ? <Empty className="file-browser-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description="No additional files" /> : <div className="file-browser">
+                <nav className="file-browser-list" aria-label="Files">
+                    {files.map((file) => <Button key={file.path} type="text" className={`file-browser-item${selected?.path === file.path ? " is-selected" : ""}`}
+                        aria-pressed={selected?.path === file.path} onClick={() => setSelectedPath(file.path)} icon={<FileTextOutlined />}>
+                        <span className="file-browser-item-text"><span>{file.path}</span>
+                            {file.targetState !== "match" || file.syncState === "migration" ? <span className="file-browser-item-status">{fileSyncStateLabel(file.syncState)}</span> : null}
+                        </span>
+                    </Button>)}
+                </nav>
+                <div className="file-browser-detail">
+                    {selected ? <>
+                        <Flex justify="space-between" align="center" gap={12} wrap className="file-browser-detail-header">
+                            <Typography.Text strong className="file-browser-path">{selected.path}</Typography.Text>
+                            <Button type="text" icon={<DisconnectOutlined />} disabled={isBusy} aria-label={`Stop syncing ${selected.path}`}
+                                    onClick={() => setRemovePath(selected.path)}>Stop syncing</Button>
+                        </Flex>
+                        {selected.syncState === "migration" ? <Alert type="warning" showIcon title="An unapplied legacy change needs review." /> : null}
+                        {selected.targetContent == null ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={fileSyncStateLabel(selected.syncState)} />
+                            : <SourceEditor key={`${selected.path}:${selected.targetContent}`} defaultValue={selected.targetContent} language={harnessFileLanguage(selected.path)} readOnly aria-label={`Local ${selected.path}`} />}
+                    </> : null}
+                </div>
+            </div>}
+            <Modal open={Boolean(removePath)} title="Stop syncing?" okText="Stop syncing" okButtonProps={{ disabled: isBusy }} confirmLoading={isBusy}
+                cancelButtonProps={{ disabled: isBusy }} closable={!isBusy} mask={{ closable: !isBusy }} keyboard={!isBusy} onCancel={() => setRemovePath(undefined)} onOk={removeFile}>
+                <Typography.Paragraph code>{removePath}</Typography.Paragraph>
+                <Typography.Paragraph>Local files are kept on every device. This takes effect on other devices after syncing.</Typography.Paragraph>
             </Modal>
-            <AdoptHarnessFileModal request={adoptRequest} isBusy={isBusy} onCancel={() => setAdoptRequest(undefined)} onConfirm={adoptFile} />
-            <Drawer
-                title={editing ? targetLabel(editing.path) : "Additional file"}
-                styles={{ title: { overflowWrap: "anywhere" } }}
-                open={Boolean(editing)}
-                size={900}
-                destroyOnHidden
-                footer={editing ? (
-                    <Flex justify="space-between" gap={12} wrap>
-                        <Button type="text" danger disabled={isBusy} onClick={() => setRemovePath(editing.path)}>Remove</Button>
-                        <Space>
-                            {canAdopt ? <Button disabled={isBusy} onClick={() => requestAdopt(editing.path, editing.targetState)}>Adopt target content</Button> : null}
-                            <Button type="primary" disabled={isBusy || !editingDraft} onClick={saveFile}>Save source</Button>
-                        </Space>
-                    </Flex>
-                ) : null}
-                onClose={() => setEditingPath(undefined)}
-            >
-                {editing ? (
-                    <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-                        {editing.targetState === "changed" ? (
-                            <Alert type="warning" showIcon title="Target changed. Setup will replace it with this source." />
-                        ) : null}
-                        {editing.targetState === "missing" ? (
-                            <Alert type="info" showIcon title="Missing on target. Setup will create it from this source." />
-                        ) : null}
-                        {editing.targetState === "parent-missing" ? (
-                            <Alert type="warning" showIcon title="Parent folder missing or unavailable. Setup will not create it." />
-                        ) : null}
-                        {editing.targetState === "unsafe" ? (
-                            <Alert type="error" showIcon title="Harness folder unsafe. Setup is blocked." />
-                        ) : null}
-                        {editing.targetState === "folder-missing" || editing.targetState === undefined ? (
-                            <Alert type="warning" showIcon title="Harness folder missing. Setup will skip this harness." />
-                        ) : null}
-                        <form inert={isBusy} aria-busy={isBusy}
-                              onSubmit={(event) => { event.preventDefault(); event.stopPropagation(); saveFile(); }}
-                              onInput={(event) => rememberContent(String(new FormData(event.currentTarget).get("content") ?? ""))}>
-                            <SourceEditor
-                                key={`${editing.path}:${editing.content}`}
-                                name="content"
-                                defaultValue={editorContent}
-                                language={harnessFileLanguage(editing.path)}
-                                {...(editorLineSeparator ? { lineSeparator: editorLineSeparator } : {})}
-                                aria-label={`Sync source for ${targetLabel(editing.path)}`}
-                            />
-                        </form>
-                    </Space>
-                ) : null}
-            </Drawer>
         </section>
     );
 }

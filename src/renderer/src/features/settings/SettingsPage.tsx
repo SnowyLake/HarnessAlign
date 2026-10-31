@@ -59,7 +59,7 @@ export function SettingsPage()
                 <Card title={<Space><FileTextOutlined />Generated instructions</Space>}>
                     {workspace ? <AgentDocumentTitleForm key={workspaceRevision} workspace={workspace} /> : <Typography.Text type="secondary">The user workspace is not loaded yet.</Typography.Text>}
                 </Card>
-                <Card title={<Space><GithubOutlined />GitHub connection</Space>}>
+                <Card title={<Space><GithubOutlined />Remote connection</Space>}>
                     <Flex align="center" justify="space-between" gap={24} wrap>
                         <Space orientation="vertical" size={4} style={{ minWidth: 0, flex: "1 1 280px" }}>
                             <Typography.Text strong style={{ overflowWrap: "anywhere" }}>
@@ -70,7 +70,7 @@ export function SettingsPage()
                                     : "Connect a private repository to sync configuration across devices."}
                             </Typography.Text>
                         </Space>
-                        <Button onClick={() => setSyncDialog("connection")}>{syncStatus?.connected ? "Manage connection" : "Connect GitHub"}</Button>
+                        <Button onClick={() => setSyncDialog("connection")}>{syncStatus?.connected ? "Manage connection" : "Connect Remote"}</Button>
                     </Flex>
                 </Card>
                 <AppUpdateCard />

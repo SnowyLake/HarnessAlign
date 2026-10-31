@@ -1,6 +1,25 @@
 /** Workspace labels and source paths with Windows-safe collision checks. */
 
 import type { LayerConfig, LayerSelection, ProjectSkill, RemoteSkill, SetupChange, SkillUpdate, Workspace } from "../../../shared/models/Workspace.js";
+import type { FileSyncState } from "../../../shared/models/Sync.js";
+
+/** Describe actual-file direction without implying that GitHub has already been checked. */
+export function fileSyncStateLabel(state: FileSyncState | undefined): string
+{
+    switch (state)
+    {
+        case "match": return "Unchanged";
+        case "local-changed": return "Local changed";
+        case "remote-changed": return "Remote changed";
+        case "migration": return "Legacy change";
+        case "conflict": return "Conflict";
+        case "missing": return "Local file missing";
+        case "folder-missing": return "Harness folder missing";
+        case "parent-missing": return "Parent folder missing";
+        case "unsafe": return "Local file unavailable";
+        default: return "Not checked";
+    }
+}
 
 /** Return whether a checked Skill has an actionable fixed-version update. */
 export function isSkillUpdateAvailable(update: SkillUpdate): boolean

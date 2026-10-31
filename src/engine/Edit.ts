@@ -31,8 +31,8 @@ import {
     valueText,
 } from "./Model.js";
 import { assertSkillName, hashSkillDirectory, loadSkillIndex, loadSkills, parseGitHubSkillSource, readSkillContent, serializeSkillIndex } from "./Skills.js";
-import { parseSyncSnapshot, readSyncSnapshot, syncSkillIndex, syncSnapshotHash, type SyncSnapshot } from "./Sync.js";
-import { readHarnessTargetFile, recoverDeployment } from "./Setup.js";
+import { FILE_SYNC_STATE, parseSyncSnapshot, readSyncSnapshot, stopSyncFile, syncFilePaths, syncSkillIndex, syncSnapshotHash, withoutFileContents, type SyncSnapshot } from "./Sync.js";
+import { ensureFileSyncCompatibility, inspectFileSyncTargets, readHarnessTargetFile, recoverDeployment } from "./Setup.js";
 
 /** Default candidates filtered by existing user configuration directories on first initialization. */
 const DEFAULT_USER_CONFIG = {
@@ -71,7 +71,7 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 | \`rules/shared/**/*.md\` | 供规则按需引用的独立共享文档, 不拼入助手 AGENTS.md. | 可以. |
 | \`layers/<layer>/<option>.md\` | 可切换的规则片段. config.json 的 \`layers\` 决定组顺序, \`selected\` 决定每组采用哪个选项; frontmatter 仅支持 \`targets\`. | 可以. |
 | \`agents/*.md\` | 子代理 (Subagent) 配置源. YAML frontmatter 保存 \`name\`, \`description\`, \`harnesses\` 下各助手的原生 metadata; Markdown 正文保存共享的子代理指令. | 可以. |
-| \`harness-files/<harness>/<path>\` | 部署到对应 Harness 文件夹的额外文件, 不参与 AGENTS.md 拼装. 内容按原样进入 GitHub 同步, 令牌和密钥应放在环境变量中. | 可以, 保持精确字节, 不转换换行. |
+| \`.file-sync.json\` | 额外实际文件的路径登记、停止决定及待处理旧版修改. | 不可以; 使用应用管理, 在助手或外部编辑器修改实际文件. |
 | \`skills/<id>/SKILL.md\` 及同目录资源 | 可复用技能的说明, 脚本和参考资料. | 本地或无来源记录的 Skill 可以; GitHub 来源的 Skill 不直接修改. |
 | \`skills/index.json\` | 应用维护的 Skill 来源记录, 可读取对应 id 的 \`origin\` 判断来源. | 不可以, 不手改来源或哈希. |
 | \`generated/<harness>/AGENTS.md\` | 为该助手拼装好的完整规则文档. | 不可以, 修改对应 Rules / Layer 源文件. |
@@ -86,7 +86,7 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 - 规则文档: 根 Rules 按 \`priority\` 升序排列, 同优先级按路径排序, 再追加按配置顺序选中的 Layer 正文; 各片段按 \`targets\` 筛选后拼成 \`generated/<harness>/AGENTS.md\`.
 - 子代理配置: \`agents/*.md\` 按其 \`harnesses\` 键选择输出助手, 将共享指令和对应 metadata 转成该助手要求的 TOML 或 YAML frontmatter + Markdown 文件, 写入 \`generated/<harness>/agents/\`.
 - 部署: 生成的规则文档和子代理配置写入用户主目录下对应的 \`config_path\`; 共享规则复制到 \`~/.agents/shared-rules/\`, Skills 按 id 复制到 \`~/.agents/skills/\`.
-- 额外文件: \`harness-files/<harness>/<path>\` 在 Setup 时复制到该 Harness 文件夹内的相同相对路径. 删除源文件后, 下一次 Setup 只删除目标文件, 不删除其父目录. Harness 文件夹不存在时跳过, 目标父目录不存在时不创建.
+- 额外文件: 通过 Sync 直接比较助手目录中的实际文件与 GitHub 并应用确认结果, 不参与 Generate / Setup. 旧保存副本迁移保留原始备份和未应用修改供审阅. Stop syncing 保留实际文件; Harness 或父目录缺失时保留待应用状态.
 
 ## 修改方式
 
@@ -251,7 +251,7 @@ function managedRelative(value: string, label: string): string
     {
         throw new HalignError(`${label}: path must stay inside managed .harness-align sources, got ${valueText(value)}`);
     }
-    if (value !== ".harness-align/config.json" && !value.startsWith(".harness-align/rules/") && !value.startsWith(".harness-align/layers/") && !value.startsWith(".harness-align/agents/") && !value.startsWith(".harness-align/skills/") && !value.startsWith(".harness-align/harness-files/"))
+    if (value !== ".harness-align/config.json" && value !== ".harness-align/.file-sync.json" && !value.startsWith(".harness-align/rules/") && !value.startsWith(".harness-align/layers/") && !value.startsWith(".harness-align/agents/") && !value.startsWith(".harness-align/skills/") && !value.startsWith(".harness-align/harness-files/"))
     {
         throw new HalignError(`${label}: path must stay inside managed .harness-align sources, got ${valueText(value)}`);
     }
@@ -684,14 +684,32 @@ export function upgradeSyncConfig(snapshot: SyncSnapshot): SyncSnapshot
     return parseSyncSnapshot(next);
 }
 
+/** Encode declarations and unresolved migration bytes without keeping a normal editable copy. */
+function fileRegistryBytes(snapshot: SyncSnapshot): Buffer
+{
+    return Buffer.from(`${JSON.stringify({ version: 2, files: snapshot.filePaths ?? [], stoppedFiles: snapshot.stoppedFiles ?? [],
+        ...(snapshot.legacyFiles ? { legacyFiles: snapshot.legacyFiles } : {}) })}\n`);
+}
+
 /** Materialize only snapshot-managed paths, preserving generated output and unrelated root files. */
 async function replaceSyncSources(root: string, before: SyncSnapshot, after: SyncSnapshot): Promise<void>
 {
+    const storedAfter = after;
+    if (before.version === 4) before = { ...before, directories: before.directories.filter((path) => path !== "harness-files" && !path.startsWith("harness-files/")) };
+    if (after.version === 4) after = { ...withoutFileContents(after), directories: after.directories.filter((path) => path !== "harness-files" && !path.startsWith("harness-files/")) };
     const sourceRoot = join(root, ".harness-align");
     await ensureRegularSource(root, sourceRoot);
     for (const path of [...Object.keys(before.files), ...Object.keys(after.files), ...before.directories, ...after.directories])
     {
         await ensureRegularSource(root, join(sourceRoot, ...path.split("/")));
+    }
+    const statePath = join(sourceRoot, FILE_SYNC_STATE);
+    await ensureRegularSource(root, statePath);
+    const afterPaths = new Set([...Object.keys(after.files), ...after.directories].map((path) => path.toLowerCase()));
+    if (before.stoppedFiles?.some((path) => afterPaths.has(path.toLowerCase())))
+    {
+        const stoppedFiles = before.stoppedFiles.filter((path) => !afterPaths.has(path.toLowerCase()));
+        await atomicWrite(statePath, Buffer.from(`${JSON.stringify({ version: 1, stoppedFiles })}\n`));
     }
     for (const path of Object.keys(before.files))
     {
@@ -714,12 +732,27 @@ async function replaceSyncSources(root: string, before: SyncSnapshot, after: Syn
     {
         await writeManaged(root, `.harness-align/${path}`, Buffer.from(content, "base64"));
     }
+    if (storedAfter.version === 4) await atomicWrite(statePath, fileRegistryBytes(storedAfter));
+    else if (after.version === 3) await atomicWrite(statePath, Buffer.from(`${JSON.stringify({ version: 1, stoppedFiles: after.stoppedFiles ?? [] })}\n`));
+    else if (await lstatIfExists(statePath)) await fs.unlink(statePath);
 }
 
 /** Validate a complete source candidate in an isolated temporary workspace before changing live data. */
 export async function validateSyncSources(snapshot: SyncSnapshot, allowRemoteSkills = false): Promise<void>
 {
     const checked = parseSyncSnapshot(snapshot);
+    if (checked.version === 4)
+    {
+        const config = parseConfigSource(Buffer.from(checked.files["config.json"] ?? "", "base64")).config;
+        for (const key of syncFilePaths(checked))
+        {
+            const [, name, ...parts] = key.split("/");
+            const harness = config.harnesses.find((item) => item.name === name);
+            if (!harness) throw new HalignError(`${key}: harness ${name} is not configured`);
+            assertHarnessFileScope(harness.configPath, parts.join("/"));
+            for (const content of [checked.files[key], checked.legacyFiles?.[key]]) if (content !== undefined) assertHarnessFileBytes(Buffer.from(content, "base64"), key);
+        }
+    }
     if (allowRemoteSkills && checked.files["skills/index.json"] !== undefined)
     {
         const index = syncSkillIndex(checked);
@@ -768,6 +801,27 @@ export async function recoverSyncSources(root: string): Promise<void>
         const before = parseSyncSnapshot(journal.before);
         const after = parseSyncSnapshot(journal.after);
         const current = await readSyncSnapshot(root);
+        if (current.version === 4 || before.version === 4 || after.version === 4)
+        {
+            for (const key of new Set([...current.filePaths ?? [], ...before.filePaths ?? [], ...after.filePaths ?? []]))
+            {
+                const present = current.filePaths?.includes(key) ?? false;
+                if (present !== (before.filePaths?.includes(key) ?? false) && present !== (after.filePaths?.includes(key) ?? false)) throw new HalignError(`${FILE_SYNC_STATE}: registration ${key} changed outside the interrupted update`);
+            }
+            for (const key of new Set([...Object.keys(current.legacyFiles ?? {}), ...Object.keys(before.legacyFiles ?? {}), ...Object.keys(after.legacyFiles ?? {})]))
+            {
+                const content = current.legacyFiles?.[key];
+                if (content !== before.legacyFiles?.[key] && content !== after.legacyFiles?.[key]) throw new HalignError(`${FILE_SYNC_STATE}: legacy recovery ${key} changed outside the interrupted update`);
+            }
+        }
+        for (const path of new Set([...current.stoppedFiles ?? [], ...before.stoppedFiles ?? [], ...after.stoppedFiles ?? []]))
+        {
+            const stopped = current.stoppedFiles?.includes(path) ?? false;
+            if (stopped !== (before.stoppedFiles?.includes(path) ?? false) && stopped !== (after.stoppedFiles?.includes(path) ?? false))
+            {
+                throw new HalignError(`${FILE_SYNC_STATE}: stop decision for ${path} changed outside the interrupted update`);
+            }
+        }
         for (const path of new Set([...Object.keys(current.files), ...Object.keys(before.files), ...Object.keys(after.files)]))
         {
             const value = current.files[path];
@@ -776,10 +830,14 @@ export async function recoverSyncSources(root: string): Promise<void>
                 throw new HalignError(`sync file ${path}: changed outside the interrupted update; preserve that edit before retrying recovery`);
             }
         }
-        for (const path of new Set([...current.directories, ...before.directories, ...after.directories]))
+        /** Direct-file parent paths are virtual registrations, not local source directories. */
+        const physicalDirectories = (snapshot: SyncSnapshot): string[] => snapshot.version === 4
+            ? snapshot.directories.filter((path) => path !== "harness-files" && !path.startsWith("harness-files/")) : snapshot.directories;
+        const [currentDirectories, beforeDirectories, afterDirectories] = [current, before, after].map(physicalDirectories);
+        for (const path of new Set([...currentDirectories!, ...beforeDirectories!, ...afterDirectories!]))
         {
-            const exists = current.directories.includes(path);
-            if (exists !== before.directories.includes(path) && exists !== after.directories.includes(path)) throw new HalignError(`sync directory ${path}: changed outside the interrupted update`);
+            const exists = currentDirectories!.includes(path);
+            if (exists !== beforeDirectories!.includes(path) && exists !== afterDirectories!.includes(path)) throw new HalignError(`sync directory ${path}: changed outside the interrupted update`);
         }
         await replaceSyncSources(root, current, before);
         await fs.unlink(journalPath);
@@ -794,11 +852,18 @@ export async function recoverSyncSources(root: string): Promise<void>
 export async function applySyncSources(root: string, expected: SyncSnapshot, snapshot: SyncSnapshot): Promise<void>
 {
     await recoverSyncSources(root);
-    const next = parseSyncSnapshot(snapshot);
-    await validateSyncSources(next);
+    const next = parseSyncSnapshot(snapshot.version === 4 ? withoutFileContents(snapshot) : snapshot);
+    await validateSyncSources(snapshot);
     const before = await readSyncSnapshot(root);
     if (syncSnapshotHash(before) !== syncSnapshotHash(expected)) throw new HalignError("sync: local sources changed; preview again before applying");
     if (syncSnapshotHash(before) === syncSnapshotHash(next)) return;
+    if (before.version < 4 && next.version === 4 && syncFilePaths(before).length)
+    {
+        const migrationBackup = join(root, ".harness-align", `.file-sync-migration-${syncSnapshotHash(before)}.json`);
+        await ensureRegularSource(root, migrationBackup);
+        await atomicWrite(migrationBackup, Buffer.from(`${JSON.stringify(before)}\n`));
+    }
+    if (next.version >= 3 || [...Object.keys(before.files), ...Object.keys(next.files)].some((path) => path.startsWith("harness-files/"))) await ensureFileSyncCompatibility(root);
     const journalPath = await syncRecordPath(root, ".sync-recovery.json");
     const backupPath = await syncRecordPath(root, ".sync-backup.json");
     await atomicWrite(backupPath, Buffer.from(`${JSON.stringify(before)}\n`));
@@ -814,6 +879,26 @@ export async function applySyncSources(root: string, expected: SyncSnapshot, sna
         await recoverSyncSources(root);
         throw new HalignError(`sync source update rolled back; backup: ${backupPath}: ${errorText(error)}`);
     }
+}
+
+/** Retire legacy editable copies only after preserving exact bytes and unresolved changes for review. */
+export async function migrateHarnessFiles(root: string, userProfile = process.env.USERPROFILE): Promise<void>
+{
+    await recoverSyncSources(root);
+    await recoverSourceEdits(root);
+    await recoverDeployment(root, userProfile);
+    const before = await readSyncSnapshot(root);
+    if (before.version === 4) return;
+    const keys = syncFilePaths(before);
+    if (!keys.length && !before.stoppedFiles?.length) return;
+    await loadWorkspace(root);
+    const observed = await inspectFileSyncTargets(root, before, userProfile);
+    const next = withoutFileContents(before);
+    next.legacyFiles = Object.fromEntries(keys.filter((key) => observed.find((target) => target.key === key)?.content !== before.files[key]).map((key) => [key, before.files[key]!]));
+    const backup = join(root, ".harness-align", `.file-sync-migration-${syncSnapshotHash(before)}.json`);
+    await ensureRegularSource(root, backup);
+    await atomicWrite(backup, Buffer.from(`${JSON.stringify(before)}\n`));
+    await applySyncSources(root, before, next);
 }
 
 /** Initialize the fixed workspace and its guide, migrating legacy data only when the destination is absent. */
@@ -1001,7 +1086,7 @@ export async function deleteSource(rootPath: string, relativePath: string): Prom
     if (relative === ".harness-align/config.json") throw new HalignError(`${relative}: config.json cannot be deleted`);
     if (relative.startsWith(".harness-align/layers/")) throw new HalignError(`${relative}: layer options are deleted with removeLayerOption`);
     if (relative.startsWith(".harness-align/skills/")) throw new HalignError(`${relative}: skills are deleted with removeSkill`);
-    if (relative.startsWith(".harness-align/harness-files/")) throw new HalignError(`${relative}: harness files are deleted with removeHarnessFile`);
+    if (relative === ".harness-align/.file-sync.json" || relative.startsWith(".harness-align/harness-files/")) throw new HalignError(`${relative}: harness files are deleted with removeHarnessFile`);
     const path = await resolveManaged(root, relative, relative);
     const stats = await lstatIfExists(path);
     if (!stats) throw new HalignError(`${relative}: file does not exist`);
@@ -1246,6 +1331,18 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
         }
     }
     const move = from === harness.name ? undefined : await harnessFilesDirectoryMove(root, from, harness.name);
+    const registry = await readSyncSnapshot(root);
+    if (registry.version === 4 && from !== harness.name)
+    {
+        const renamed = withoutFileContents(registry);
+        renamed.filePaths = registry.filePaths!.map((key) => key.startsWith(`harness-files/${from}/`) ? key.replace(`harness-files/${from}/`, `harness-files/${harness.name}/`) : key);
+        renamed.directories = renamed.directories.filter((key) => key !== `harness-files/${from}` && !key.startsWith(`harness-files/${from}/`));
+        if (renamed.legacyFiles) renamed.legacyFiles = Object.fromEntries(Object.entries(renamed.legacyFiles).map(([key, content]) => [key.startsWith(`harness-files/${from}/`) ? key.replace(`harness-files/${from}/`, `harness-files/${harness.name}/`) : key, content]));
+        if (from.toLowerCase() !== harness.name.toLowerCase()) renamed.stoppedFiles = [...renamed.stoppedFiles ?? [], ...registry.filePaths!.filter((key) => key.startsWith(`harness-files/${from}/`))];
+        const validated = parseSyncSnapshot(renamed);
+        writes.push({ path: ".harness-align/.file-sync.json", content: fileRegistryBytes(validated) });
+    }
+    if (harnessFiles.some((file) => file.harness === from)) await ensureFileSyncCompatibility(root);
     await writeManagedBatch(root, writes, move);
     return nextConfig;
 }
@@ -1292,8 +1389,13 @@ export async function removeHarness(rootPath: string, name: string): Promise<voi
     for (const agent of nextAgents) assertAgentInput(agent, nextConfig.harnesses);
     const backup = `.harness-align/.edit-backup-${randomUUID()}`;
     const move = await harnessFilesDirectoryMove(root, name, backup, true);
+    if (move) await ensureFileSyncCompatibility(root);
+    const registry = await readSyncSnapshot(root);
+    let stopped = registry;
+    if (registry.version === 4) for (const key of registry.filePaths!.filter((key) => key.startsWith(`harness-files/${name}/`))) stopped = stopSyncFile(stopped, key);
     await writeManagedBatch(root, [
         { path: ".harness-align/config.json", content: Buffer.from(`${JSON.stringify(configDocument(nextConfig), null, 2)}\n`, "utf8") },
+        ...(registry.version === 4 ? [{ path: ".harness-align/.file-sync.json", content: fileRegistryBytes(stopped) }] : []),
         ...nextRules.map((rule) => ({ path: rule.path, content: serializeFrontmatter({ priority: rule.priority, targets: rule.targets }, rule.body, rule.path) })),
         ...nextLayerOptions.map((option) => ({ path: option.path, content: serializeLayerOption(option.targets, option.body) })),
         ...nextAgents.map((agent) => ({ path: agent.path,
@@ -1322,38 +1424,11 @@ async function harnessFilesDirectoryMove(root: string, from: string, to: string,
     return remove ? { from: sourceRelative, to, remove: true } : { from: sourceRelative, to: `.harness-align/harness-files/${to}` };
 }
 
-/** Delete empty parents left by one harness file, never removing `.harness-align` itself. */
-async function removeEmptyHarnessFileParents(root: string, relativeFile: string): Promise<void>
-{
-    let current = posix.dirname(relativeFile);
-    while (current.startsWith(".harness-align/harness-files"))
-    {
-        const path = join(root, ...current.split("/"));
-        await ensureRegularSource(root, path);
-        const stats = await lstatIfExists(path);
-        if (!stats || stats.isSymbolicLink() || !stats.isDirectory()) return;
-        if ((await fs.readdir(path)).length > 0) return;
-        await fs.rmdir(path);
-        current = posix.dirname(current);
-    }
-}
-
-/** Unlink one harness file and drop empty parent directories through `harness-files`. */
-async function unlinkHarnessFile(root: string, sourceRelative: string): Promise<void>
-{
-    const path = await resolveManaged(root, sourceRelative, sourceRelative);
-    const stats = await lstatIfExists(path);
-    if (!stats) throw new HalignError(`${sourceRelative}: file does not exist`);
-    if (stats.isSymbolicLink()) throw reparseError(root, path, false);
-    if (!stats.isFile()) throw new HalignError(`${sourceRelative}: managed source must be a file`);
-    await fs.unlink(path);
-    await removeEmptyHarnessFileParents(root, sourceRelative);
-}
-
 /** Add one harness file, importing the target or creating an empty source when the target is absent. */
 export async function addHarnessFile(rootPath: string, harnessName: string, relativePath: string, importTarget: boolean, userProfile = process.env.USERPROFILE): Promise<void>
 {
     const root = resolve(rootPath);
+    await migrateHarnessFiles(root, userProfile);
     const config = await loadConfig(root);
     const harness = requireHarnessConfig(config, harnessName);
     assertHarnessFileScope(harness.configPath, relativePath);
@@ -1371,22 +1446,12 @@ export async function addHarnessFile(rootPath: string, harnessName: string, rela
     else if (present) throw new HalignError(`${target}: target file already exists; import it instead of adding an empty sync source`);
     const bytes = importTarget ? present! : Buffer.alloc(0);
     assertHarnessFileBytes(bytes, sourceRelative);
-    await writeManaged(root, sourceRelative, bytes);
-}
-
-/** Replace one existing harness file with exact UTF-8 bytes and no newline normalization. */
-export async function saveHarnessFile(rootPath: string, harnessName: string, relativePath: string, content: string, guard: SourceGuard): Promise<void>
-{
-    const root = resolve(rootPath);
-    const config = await loadConfig(root);
-    requireHarnessConfig(config, harnessName);
-    const sourceRelative = harnessFileSourceRelative(harnessName, relativePath);
-    if (guard.path !== sourceRelative) throw new HalignError(`${guard.path}: source guard must match ${sourceRelative}`);
-    const bytes = Buffer.from(content, "utf8");
-    assertHarnessFileBytes(bytes, sourceRelative);
-    const existing = await loadHarnessFiles(root, config.harnesses);
-    if (!existing.some((file) => file.harness === harnessName && file.path === relativePath)) throw new HalignError(`${sourceRelative}: file does not exist`);
-    await writeEditedSource(root, sourceRelative, bytes, guard);
+    const before = await readSyncSnapshot(root);
+    const key = sourceRelative.slice(".harness-align/".length);
+    const next = withoutFileContents(before);
+    next.stoppedFiles = (next.stoppedFiles ?? []).filter((path) => path.toLowerCase() !== key.toLowerCase());
+    next.filePaths = [...next.filePaths ?? [], key];
+    await applySyncSources(root, before, parseSyncSnapshot(next));
 }
 
 /** Delete one harness file source without deleting its deployed target. */
@@ -1395,27 +1460,10 @@ export async function removeHarnessFile(rootPath: string, harnessName: string, r
     const root = resolve(rootPath);
     const config = await loadConfig(root);
     requireHarnessConfig(config, harnessName);
-    await unlinkHarnessFile(root, harnessFileSourceRelative(harnessName, relativePath));
-}
-
-/** Replace the sync source with the target file, or delete the source when the target is missing. */
-export async function adoptHarnessFile(rootPath: string, harnessName: string, relativePath: string, guard?: SourceGuard, userProfile = process.env.USERPROFILE): Promise<void>
-{
-    const root = resolve(rootPath);
-    const config = await loadConfig(root);
-    const harness = requireHarnessConfig(config, harnessName);
-    const sourceRelative = harnessFileSourceRelative(harness.name, relativePath);
-    if (guard && guard.path !== sourceRelative) throw new HalignError(`${guard.path}: source guard must match ${sourceRelative}`);
-    const bytes = await readHarnessTargetFile(root, harness.name, relativePath, userProfile);
-    if (!bytes)
-    {
-        if (guard) await assertSourceGuard(root, guard);
-        await unlinkHarnessFile(root, sourceRelative);
-        return;
-    }
-    assertHarnessFileBytes(bytes, sourceRelative);
-    if (guard) await writeEditedSource(root, sourceRelative, bytes, guard);
-    else await writeManaged(root, sourceRelative, bytes);
+    const before = await readSyncSnapshot(root);
+    const key = harnessFileSourceRelative(harnessName, relativePath).slice(".harness-align/".length);
+    if (!syncFilePaths(before).includes(key)) throw new HalignError(`${key}: file is not registered`);
+    await applySyncSources(root, before, stopSyncFile(before, key));
 }
 
 /** Add a harness declaration to config. */

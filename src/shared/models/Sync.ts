@@ -18,12 +18,31 @@ export interface SyncStatus
     branch: string;
     lastSyncedAt: string | null;
     hasPendingUpload: boolean;
+    hasPendingApplication?: boolean;
     localState?: "current" | "changed" | "uninitialized" | "unknown";
     localError?: string;
 }
 
 /** Side chosen for an entire conflicting unit. */
 export type SyncChoice = "local" | "remote";
+/** Choose an actual, remote, or unresolved legacy version before confirmation. */
+export type SyncFileChoice = "target" | "remote" | "legacy" | "stop";
+/** Direction determined from actual bytes, the remote version and the common baseline. */
+export type FileSyncState = "match" | "local-changed" | "remote-changed" | "migration" | "conflict" | "missing" | "folder-missing" | "parent-missing" | "unsafe";
+
+/** One actual-file effect in the same reviewed GitHub operation. */
+export interface SyncFileChange
+{
+    key: string;
+    target: string;
+    state: FileSyncState;
+    action: "unchanged" | "upload" | "apply" | "upload-apply" | "stop" | "conflict" | "unavailable";
+    needsChoice: boolean;
+    canUseTarget: boolean;
+    canUseSource: boolean;
+    hasLegacy?: boolean;
+    error?: string;
+}
 
 /** A file, directory, or whole skill changed since the common baseline. */
 export interface SyncChange
@@ -44,6 +63,11 @@ export interface SyncPreview
     downloadCount: number;
     changes: SyncChange[];
     notice: string;
+    fileChanges: SyncFileChange[];
+    applyCount: number;
+    unresolvedCount: number;
+    recoveryRequired: boolean;
+    planError?: string;
 }
 
 /** Bounded content preview for a regular file or binary asset. */
@@ -58,7 +82,7 @@ export interface SyncFileView
 /** Side-by-side file content for a changed unit. */
 export interface SyncDetail
 {
-    files: { path: string; local: SyncFileView | null; remote: SyncFileView | null }[];
+    files: { path: string; local: SyncFileView | null; remote: SyncFileView | null; actual?: SyncFileView | null; saved?: SyncFileView | null; result?: SyncFileView | null }[];
     omittedFiles: number;
 }
 
@@ -68,6 +92,7 @@ export interface SyncApplyInput
     previewId: string;
     mode: "initialize" | "merge" | "local" | "remote";
     choices: Record<string, SyncChoice>;
+    fileChoices?: Record<string, SyncFileChoice> | undefined;
 }
 
 /** One source group selected from a retained preview for immediate local restoration. */
@@ -82,6 +107,7 @@ export interface SyncResult
 {
     status: SyncStatus;
     message: string;
+    applicationPending?: boolean;
 }
 
 /** Read-only startup result. `pending` means the Sync button should show work is waiting. */
@@ -91,7 +117,8 @@ export interface SyncCheckResult
 }
 
 /** Report whether a preview still needs review, initialization, or upload recovery. */
-export function syncPreviewHasWork(preview: Pick<SyncPreview, "remoteEmpty" | "uploadCount" | "downloadCount">, hasPendingUpload = false): boolean
+export function syncPreviewHasWork(preview: Pick<SyncPreview, "remoteEmpty" | "uploadCount" | "downloadCount"> & Partial<Pick<SyncPreview, "applyCount" | "unresolvedCount" | "recoveryRequired" | "fileChanges">>, hasPendingUpload = false): boolean
 {
-    return hasPendingUpload || preview.remoteEmpty || preview.uploadCount > 0 || preview.downloadCount > 0;
+    return hasPendingUpload || preview.recoveryRequired === true || preview.remoteEmpty || preview.uploadCount > 0 || preview.downloadCount > 0
+        || (preview.applyCount ?? 0) > 0 || (preview.unresolvedCount ?? 0) > 0 || preview.fileChanges?.some((file) => file.action === "unavailable") === true;
 }

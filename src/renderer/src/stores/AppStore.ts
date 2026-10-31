@@ -21,7 +21,6 @@ export type Selection =
     | { kind: "config" }
     | { kind: "harness"; name: string }
     | { kind: "harness-new" }
-    | { kind: "harness-file"; harness: string; path: string }
     | { kind: "layer"; name: string }
     | { kind: "layer-new" }
     | { kind: "layer-option"; path: string }
@@ -68,8 +67,6 @@ export function selectionKey(selection: Selection): string
             return `harness:${selection.name}`;
         case "harness-new":
             return "harness-new";
-        case "harness-file":
-            return `harness-file:${selection.harness}/${selection.path}`;
         case "layer":
             return `layer:${selection.name}`;
         case "layer-new":
@@ -102,8 +99,7 @@ function selectionMatchesView(view: WorkspaceView, selection: Selection, workspa
     {
         case "project":
             return selection.kind === "harness-new"
-                || (selection.kind === "harness" && workspace.config.harnesses.some((item) => item.name === selection.name))
-                || (selection.kind === "harness-file" && workspace.harnessFiles.some((file) => file.harness === selection.harness && file.path === selection.path));
+                || (selection.kind === "harness" && workspace.config.harnesses.some((item) => item.name === selection.name));
         case "rules":
             return (selection.kind === "rule-new" && selection.scope === "root")
                 || (selection.kind === "rule" && workspace.rootRules.some((item) => item.path === selection.path));

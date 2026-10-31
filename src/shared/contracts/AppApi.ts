@@ -40,9 +40,11 @@ export interface AppApi
         connect(input: SyncConnectionInput): Promise<SyncStatus>;
         disconnect(): Promise<SyncStatus>;
         preview(): Promise<SyncPreview>;
+        plan(input: SyncApplyInput): Promise<SyncPreview>;
+        resume(): Promise<SyncResult>;
         check(): Promise<SyncCheckResult>;
         inspect(previewId: string, key: string): Promise<SyncDetail>;
-        apply(input: SyncApplyInput): Promise<SyncResult>;
+        apply(input: { previewId: string }): Promise<SyncResult>;
         discard(input: SyncDiscardInput): Promise<SyncResult>;
     };
     app: {
@@ -80,9 +82,7 @@ export interface AppApi
         removeHarness(name: string): Promise<void>;
         updateHarness(from: string, harness: HarnessConfig): Promise<Config>;
         addHarnessFile(harness: string): Promise<string | null>;
-        saveHarnessFile(harness: string, path: string, content: string, guard: SourceGuard): Promise<void>;
         removeHarnessFile(harness: string, path: string): Promise<void>;
-        adoptHarnessFile(harness: string, path: string, guard?: SourceGuard): Promise<void>;
         openHarnessRoot(name: string): Promise<void>;
         openItemFolder(target: WorkspaceItemTarget): Promise<void>;
         addSkillSource(input: { url: string; branch?: string }): Promise<Config>;

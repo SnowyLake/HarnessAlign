@@ -3,6 +3,8 @@
  * These types must stay JSON-serializable and must not import the engine.
  */
 
+import type { FileSyncState } from "./Sync.js";
+
 /** Current configuration format accepted by editor writes; kept in step with the engine. */
 export const CONFIG_VERSION = 3;
 
@@ -179,16 +181,18 @@ export type WorkspaceItemTarget =
     | { kind: "generated"; path: string }
     | { kind: "skill"; id: string };
 
-/** Whether an additional harness file matches the copy in its harness folder. */
+/** Availability of the registered actual harness file. */
 export type HarnessFileTargetState = "match" | "changed" | "missing" | "parent-missing" | "folder-missing" | "unsafe";
 
-/** Additional file stored under `.harness-align/harness-files` and deployed by Setup. */
+/** Registered actual harness file; optional migration bytes are not editable sources. */
 export interface HarnessFile
 {
     harness: string;
     path: string;
     content: string;
     targetState?: HarnessFileTargetState;
+    syncState?: FileSyncState;
+    targetContent?: string | null;
 }
 
 /** One reviewed deployment change under a user harness, shared-rule, or skill directory. */

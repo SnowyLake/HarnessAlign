@@ -13,9 +13,12 @@ import { assertSkillName, parseSkillIndex, type SkillIndex } from "./Skills.js";
 /** Portable snapshot with base64 file bytes and explicit empty directories. */
 export interface SyncSnapshot
 {
-    version: 1 | 2;
+    version: 1 | 2 | 3 | 4;
     files: Record<string, string>;
     directories: string[];
+    stoppedFiles?: string[];
+    filePaths?: string[];
+    legacyFiles?: Record<string, string>;
 }
 
 /** Side selected for a conflicting file or complete skill. */
@@ -42,6 +45,8 @@ export const SYNC_MAX_FILE_BYTES = 8 * 1024 * 1024;
 export const SYNC_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 export const SYNC_MAX_ENTRIES = 5000;
 export const SYNC_SOURCE_DIRECTORIES = ["rules", "layers", "agents", "skills", "harness-files"] as const;
+/** Local copy of portable stop decisions; the remote stores them in its format marker. */
+export const FILE_SYNC_STATE = ".file-sync.json";
 
 /** Return whether a portable path is an additional harness file or one of its parent directories. */
 function isHarnessFileSyncPath(path: string): boolean
@@ -53,6 +58,18 @@ function isHarnessFileSyncPath(path: string): boolean
 export function emptySyncSnapshot(): SyncSnapshot
 {
     return { version: 1, files: {}, directories: [] };
+}
+
+/** Remove one declaration while retaining a portable stop decision and unrelated empty directories. */
+export function stopSyncFile(snapshot: SyncSnapshot, key: string): SyncSnapshot
+{
+    const next = parseSyncSnapshot({ ...snapshot, version: snapshot.version === 4 ? 4 : 3 });
+    for (const path of Object.keys(next.files)) if (path.toLowerCase() === key.toLowerCase()) delete next.files[path];
+    if (next.filePaths) next.filePaths = next.filePaths.filter((path) => path.toLowerCase() !== key.toLowerCase());
+    if (next.legacyFiles) for (const path of Object.keys(next.legacyFiles)) if (path.toLowerCase() === key.toLowerCase()) delete next.legacyFiles[path];
+    next.stoppedFiles = [...(next.stoppedFiles ?? []).filter((path) => path.toLowerCase() !== key.toLowerCase()), key];
+    next.directories = next.directories.filter((directory) => !key.startsWith(`${directory}/`) || Object.keys(next.files).some((file) => file.startsWith(`${directory}/`)));
+    return parseSyncSnapshot(next);
 }
 
 /** Reject unsafe or out-of-scope portable paths before any filesystem or network work. */
@@ -69,18 +86,18 @@ export function assertSyncPath(path: string, directory = false): void
 }
 
 /** Re-parse a constructed snapshot after assigning the version required by its paths. */
-function finalizeSyncSnapshot(snapshot: Pick<SyncSnapshot, "files" | "directories">): SyncSnapshot
+function finalizeSyncSnapshot(snapshot: Pick<SyncSnapshot, "files" | "directories"> & Partial<Pick<SyncSnapshot, "version" | "stoppedFiles" | "filePaths" | "legacyFiles">>): SyncSnapshot
 {
-    const version = [...Object.keys(snapshot.files), ...snapshot.directories].some(isHarnessFileSyncPath) ? 2 : 1;
+    const version = snapshot.version === 4 ? 4 : snapshot.version === 3 || snapshot.stoppedFiles?.length ? 3 : [...Object.keys(snapshot.files), ...snapshot.directories].some(isHarnessFileSyncPath) ? 2 : 1;
     return parseSyncSnapshot({ ...snapshot, version });
 }
 
 /** Normalize a snapshot and reject malformed bytes, casing collisions, and file/directory aliases. */
 export function parseSyncSnapshot(value: unknown): SyncSnapshot
 {
-    if (!isRecord(value) || (value.version !== 1 && value.version !== 2) || !isRecord(value.files) || !Array.isArray(value.directories))
+    if (!isRecord(value) || ![1, 2, 3, 4].includes(Number(value.version)) || typeof value.version !== "number" || !isRecord(value.files) || !Array.isArray(value.directories))
     {
-        throw new HalignError("sync snapshot: expected version 1 or 2, a files mapping, and a directories array");
+        throw new HalignError("sync snapshot: expected version 1, 2, 3 or 4, a files mapping, and a directories array");
     }
     if (Object.keys(value.files).length + value.directories.length > SYNC_MAX_ENTRIES) throw new HalignError(`sync snapshot: exceeds ${SYNC_MAX_ENTRIES} entries`);
     const files: Record<string, string> = {};
@@ -108,7 +125,7 @@ export function parseSyncSnapshot(value: unknown): SyncSnapshot
     {
         register(path, false);
         const encoded = value.files[path];
-        if (typeof encoded !== "string" || encoded.length > Math.ceil(SYNC_MAX_FILE_BYTES / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded))
+        if (typeof encoded !== "string" || encoded.length > Math.ceil(SYNC_MAX_FILE_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded))
         {
             throw new HalignError(`sync file ${path}: expected canonical base64 containing at most ${SYNC_MAX_FILE_BYTES} bytes`);
         }
@@ -118,15 +135,85 @@ export function parseSyncSnapshot(value: unknown): SyncSnapshot
         if (total > SYNC_MAX_TOTAL_BYTES) throw new HalignError(`sync snapshot: exceeds ${SYNC_MAX_TOTAL_BYTES} bytes`);
         files[path] = encoded;
     }
+    const filePaths: string[] = [];
+    if (value.filePaths !== undefined)
+    {
+        if (value.version !== 4 || !Array.isArray(value.filePaths) || value.filePaths.length > SYNC_MAX_ENTRIES) throw new HalignError("sync filePaths: expected a bounded array in version 4");
+        const identities = new Set<string>();
+        for (const path of value.filePaths)
+        {
+            if (typeof path !== "string" || !path.startsWith("harness-files/") || path.split("/").length < 3) throw new HalignError("sync filePaths: expected additional-file paths");
+            if (identities.has(path.toLowerCase())) throw new HalignError(`sync filePaths ${path}: duplicate declaration`);
+            identities.add(path.toLowerCase());
+            register(path, false);
+            filePaths.push(path);
+        }
+    }
+    if (value.version === 4)
+    {
+        for (const path of Object.keys(files).filter((path) => path.startsWith("harness-files/"))) if (!filePaths.includes(path)) filePaths.push(path);
+        filePaths.sort(codePointCompare);
+    }
+    const legacyFiles: Record<string, string> = {};
+    if (value.legacyFiles !== undefined)
+    {
+        if (value.version !== 4 || !isRecord(value.legacyFiles)) throw new HalignError("sync legacyFiles: expected migration recovery bytes in version 4");
+        const legacy = parseSyncSnapshot({ version: 2, files: value.legacyFiles, directories: [] });
+        for (const [path, content] of Object.entries(legacy.files))
+        {
+            if (!filePaths.includes(path)) throw new HalignError(`sync legacyFiles ${path}: expected a registered file`);
+            legacyFiles[path] = content;
+            total += Buffer.from(content, "base64").length;
+        }
+    }
     for (const path of directories)
     {
-        if (Object.hasOwn(files, path)) throw new HalignError(`sync path ${path}: cannot be both a file and a directory`);
+        if (Object.hasOwn(files, path) || filePaths.includes(path)) throw new HalignError(`sync path ${path}: cannot be both a file and a directory`);
     }
     if (Object.keys(files).length + directories.size > SYNC_MAX_ENTRIES) throw new HalignError(`sync snapshot: exceeds ${SYNC_MAX_ENTRIES} entries`);
     const directoriesOut = [...directories].sort(codePointCompare);
-    const version = [...Object.keys(files), ...directoriesOut].some(isHarnessFileSyncPath) ? 2 : 1;
+    const stoppedFiles: string[] = [];
+    if (value.stoppedFiles !== undefined)
+    {
+        if (value.version < 3 || !Array.isArray(value.stoppedFiles) || value.stoppedFiles.length > SYNC_MAX_ENTRIES)
+        {
+            throw new HalignError("sync stoppedFiles: expected a bounded array in snapshot version 3");
+        }
+        const identities = new Set<string>();
+        for (const path of value.stoppedFiles)
+        {
+            if (typeof path !== "string" || !path.startsWith("harness-files/") || path.split("/").length < 3) throw new HalignError("sync stoppedFiles: expected additional-file source paths");
+            assertSyncPath(path);
+            if (identities.has(path.toLowerCase()) || names.has(path.toLowerCase())) throw new HalignError(`sync stoppedFiles ${path}: duplicate or still present in source files/directories`);
+            identities.add(path.toLowerCase());
+            stoppedFiles.push(path);
+        }
+        stoppedFiles.sort(codePointCompare);
+        total += Buffer.byteLength(JSON.stringify(stoppedFiles));
+        if (total > SYNC_MAX_TOTAL_BYTES || Object.keys(files).length + directories.size + stoppedFiles.length > SYNC_MAX_ENTRIES)
+        {
+            throw new HalignError("sync snapshot: stopped files exceed the 32 MiB or 5000 entry limit");
+        }
+    }
+    if (total > SYNC_MAX_TOTAL_BYTES || names.size + stoppedFiles.length > SYNC_MAX_ENTRIES) throw new HalignError("sync snapshot: exceeds the 32 MiB or 5000 entry limit");
+    const version = value.version === 4 ? 4 : value.version === 3 ? 3 : [...Object.keys(files), ...directoriesOut].some(isHarnessFileSyncPath) ? 2 : 1;
     if (value.version === 1 && version === 2) throw new HalignError("sync snapshot: version 1 cannot contain harness-files");
-    return { version, files, directories: directoriesOut };
+    return { version, files, directories: directoriesOut, ...(stoppedFiles.length ? { stoppedFiles } : {}), ...(version === 4 ? { filePaths } : {}),
+        ...(Object.keys(legacyFiles).length ? { legacyFiles } : {}) };
+}
+
+/** List declarations from both legacy content snapshots and direct-file registries. */
+export function syncFilePaths(snapshot: SyncSnapshot): string[]
+{
+    return [...new Set([...(snapshot.filePaths ?? []), ...Object.keys(snapshot.files).filter((path) => path.startsWith("harness-files/"))])].sort(codePointCompare);
+}
+
+/** Keep file registrations while removing content from local sources and content-independent merge inputs. */
+export function withoutFileContents(snapshot: SyncSnapshot): SyncSnapshot
+{
+    const next = parseSyncSnapshot({ ...snapshot, version: 4, filePaths: syncFilePaths(snapshot) });
+    for (const key of syncFilePaths(next)) delete next.files[key];
+    return next;
 }
 
 /** Read only the managed source scopes, refusing links and oversized files before reading bytes. */
@@ -161,13 +248,29 @@ export async function readSyncSnapshot(root: string): Promise<SyncSnapshot>
         else throw new HalignError(`sync source ${absolute}: expected a regular file or directory`);
     };
     for (const path of ["config.json", ...SYNC_SOURCE_DIRECTORIES]) await visit(path);
+    const statePath = join(directory, FILE_SYNC_STATE);
+    await ensureRegularSource(root, statePath);
+    const stateStats = await lstatIfExists(statePath);
+    if (stateStats)
+    {
+        if (!stateStats.isFile() || stateStats.size > SYNC_MAX_TOTAL_BYTES * 2) throw new HalignError(`${statePath}: expected a registry of at most ${SYNC_MAX_TOTAL_BYTES * 2} bytes`);
+        const state: unknown = JSON.parse(await fs.readFile(statePath, "utf8"));
+        if (!isRecord(state) || (state.version !== 1 && state.version !== 2) || !Array.isArray(state.stoppedFiles)) throw new HalignError(`${statePath}: expected version 1 or 2 and stoppedFiles`);
+        snapshot.version = state.version === 2 ? 4 : 3;
+        snapshot.stoppedFiles = state.stoppedFiles as string[];
+        if (state.version === 2)
+        {
+            return parseSyncSnapshot({ ...snapshot, filePaths: state.files, legacyFiles: state.legacyFiles });
+        }
+    }
     return finalizeSyncSnapshot(snapshot);
 }
 
 /** Hash normalized bytes and directories to detect stale previews independently of clocks. */
 export function syncSnapshotHash(snapshot: SyncSnapshot): string
 {
-    return createHash("sha256").update(JSON.stringify(parseSyncSnapshot(snapshot))).digest("hex");
+    const { version: _version, ...contents } = parseSyncSnapshot(snapshot);
+    return createHash("sha256").update(JSON.stringify(contents)).digest("hex");
 }
 
 /** Read validated skill provenance from an in-memory snapshot. */
@@ -196,6 +299,7 @@ export function syncSkillHash(snapshot: SyncSnapshot, id: string): string
 export function portableSyncSnapshot(snapshot: SyncSnapshot): SyncSnapshot
 {
     const next = parseSyncSnapshot(snapshot);
+    delete next.legacyFiles;
     for (const [id, entry] of Object.entries(syncSkillIndex(next)))
     {
         if (entry.origin !== "github") continue;
@@ -213,6 +317,8 @@ interface SyncUnit
     files: Record<string, string>;
     directories: string[];
     provenance?: { id: string; value: unknown };
+    stopped?: string[];
+    registered?: string[];
 }
 
 /** Split sources into files and whole skills so provenance cannot drift from installed content. */
@@ -246,13 +352,15 @@ function syncUnits(snapshot: SyncSnapshot): Map<string, SyncUnit>
         else unit(keyFor(path, false)).files[path] = bytes;
     }
     for (const path of snapshot.directories) unit(keyFor(path, true)).directories.push(path);
+    for (const path of snapshot.stoppedFiles ?? []) unit(keyFor(path, false)).stopped = [path];
+    for (const path of snapshot.filePaths ?? []) unit(keyFor(path, false)).registered = [path];
     return units;
 }
 
 /** Group structural aliases with their descendants so either valid side remains selectable. */
 function structuralSyncUnits(snapshots: SyncSnapshot[]): Map<string, SyncUnit>[]
 {
-    const fileNames = new Set(snapshots.flatMap((snapshot) => Object.keys(snapshot.files).map((path) => path.toLowerCase())));
+    const fileNames = new Set(snapshots.flatMap((snapshot) => [...Object.keys(snapshot.files), ...snapshot.filePaths ?? []].map((path) => path.toLowerCase())));
     const directoryNames = new Map<string, Set<string>>();
     for (const path of snapshots.flatMap((snapshot) => snapshot.directories))
     {
@@ -281,6 +389,8 @@ function structuralSyncUnits(snapshots: SyncSnapshot[]): Map<string, SyncUnit>[]
             Object.assign(merged.files, value.files);
             merged.directories.push(...value.directories);
             if (value.provenance !== undefined) merged.provenance = value.provenance;
+            if (value.stopped) merged.stopped = [...merged.stopped ?? [], ...value.stopped];
+            if (value.registered) merged.registered = [...merged.registered ?? [], ...value.registered];
             units.set(group, merged);
         }
         for (const unit of units.values())
@@ -300,6 +410,10 @@ export function restoreSyncChange(base: SyncSnapshot, local: SyncSnapshot, remot
     const there = remoteUnits!.get(key);
     if (!here && !there) throw new HalignError(`sync change ${key}: expected an existing local or remote source group`);
     const result = parseSyncSnapshot(local);
+    result.stoppedFiles = (result.stoppedFiles ?? []).filter((path) => !here?.stopped?.includes(path));
+    if (there?.stopped) result.stoppedFiles.push(...there.stopped);
+    if (result.stoppedFiles.length) result.version = result.version === 4 ? 4 : 3;
+    else delete result.stoppedFiles;
     for (const path of Object.keys(here?.files ?? {})) delete result.files[path];
     Object.assign(result.files, there?.files);
     const removedDirectories = new Set(here?.directories);
@@ -323,6 +437,9 @@ export function mergeSyncSnapshots(base: SyncSnapshot, local: SyncSnapshot, remo
     const [baseUnits, localUnits, remoteUnits] = structuralSyncUnits([base, local, remote].map((snapshot) => parseSyncSnapshot(snapshot)));
     const keys = [...new Set([...baseUnits!.keys(), ...localUnits!.keys(), ...remoteUnits!.keys()])].sort(codePointCompare);
     const result = emptySyncSnapshot();
+    if ([base, local, remote].some((snapshot) => snapshot.version === 4)) { result.version = 4; result.filePaths = []; }
+    else if ([base, local, remote].some((snapshot) => snapshot.version === 3)) result.version = 3;
+    const stoppedFiles: string[] = [];
     const changes: SyncChange[] = [];
     const conflicts: string[] = [];
     const provenance = new Map<string, unknown>();
@@ -333,8 +450,11 @@ export function mergeSyncSnapshots(base: SyncSnapshot, local: SyncSnapshot, remo
         let chosen = here;
         if (l !== b || r !== b)
         {
-            const direction = l === r ? "same" : l === b ? "download" : r === b ? "upload" : "conflict";
-            const paths = [...new Set([...(here ? Object.keys(here.files) : []), ...(there ? Object.keys(there.files) : []), ...(before ? Object.keys(before.files) : [])])].sort(codePointCompare);
+            let direction = l === r ? "same" as const : l === b ? "download" as const : r === b ? "upload" as const : "conflict" as const;
+            const paths = [...new Set([...(here ? Object.keys(here.files) : []), ...(there ? Object.keys(there.files) : []), ...(before ? Object.keys(before.files) : []),
+                ...here?.stopped ?? [], ...there?.stopped ?? [], ...here?.registered ?? [], ...there?.registered ?? []])].sort(codePointCompare);
+            // A stop wins over an independent edit; actual files remain intact on both devices.
+            if (direction === "conflict" && !key.endsWith("/") && (here?.stopped || there?.stopped)) direction = here?.stopped ? "upload" : "download";
             changes.push({ key, paths, direction });
             if (direction === "download") chosen = there;
             if (direction === "conflict")
@@ -344,6 +464,8 @@ export function mergeSyncSnapshots(base: SyncSnapshot, local: SyncSnapshot, remo
             }
         }
         if (!chosen) continue;
+        if (chosen.stopped) stoppedFiles.push(...chosen.stopped);
+        if (chosen.registered) result.filePaths?.push(...chosen.registered);
         Object.assign(result.files, chosen.files);
         result.directories.push(...chosen.directories);
         if (chosen.provenance !== undefined) provenance.set(chosen.provenance.id, chosen.provenance.value);
@@ -353,5 +475,6 @@ export function mergeSyncSnapshots(base: SyncSnapshot, local: SyncSnapshot, remo
         result.files["skills/index.json"] = Buffer.from(`${JSON.stringify({ skills: Object.fromEntries(provenance) }, null, 2)}\n`).toString("base64");
     }
     // Parent directories are reconstituted when independent additions survive a directory deletion.
+    if (stoppedFiles.length) result.stoppedFiles = stoppedFiles;
     return { snapshot: finalizeSyncSnapshot(result), changes, conflicts };
 }

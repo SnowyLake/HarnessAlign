@@ -27,8 +27,14 @@ export const SYNC_CONNECTION_SCHEMA = z.strictObject({
 /** Accept decisions about an existing preview, never arbitrary source bytes or paths. */
 export const SYNC_APPLY_SCHEMA = z.strictObject({
     previewId: z.uuid(),
+});
+
+/** Recompute a retained plan from choices, without accepting renderer-provided file content. */
+export const SYNC_PLAN_SCHEMA = z.strictObject({
+    previewId: z.uuid(),
     mode: z.enum(["initialize", "merge", "local", "remote"]),
     choices: z.record(z.string().min(1).max(241), z.enum(["local", "remote"])).refine((choices) => Object.keys(choices).length <= 5000, "Too many conflict decisions"),
+    fileChoices: z.record(z.string().min(1).max(241), z.enum(["target", "remote", "legacy", "stop"])).refine((choices) => Object.keys(choices).length <= 5000, "Too many file decisions").optional(),
 });
 
 /** Restore only a server-owned preview entry, never renderer-supplied file contents. */
@@ -90,21 +96,6 @@ export const AGENT_SCHEMA = z.strictObject({
 /** Request a native file picker for one saved harness without accepting a renderer-selected path. */
 export const ADD_HARNESS_FILE_SCHEMA = z.strictObject({
     harness: z.string().min(1),
-});
-
-/** Replace one existing harness file with exact editor text. */
-export const SAVE_HARNESS_FILE_SCHEMA = z.strictObject({
-    harness: z.string().min(1),
-    path: z.string().min(1),
-    content: z.string().max(8 * 1024 * 1024),
-    guard: SOURCE_GUARD_SCHEMA,
-});
-
-/** Replace a harness file source from its target, with the opened revision when the editor has one. */
-export const ADOPT_HARNESS_FILE_SCHEMA = z.strictObject({
-    harness: z.string().min(1),
-    path: z.string().min(1),
-    guard: SOURCE_GUARD_SCHEMA.optional(),
 });
 
 /** Ordered layer choices for Generate and Setup. */
