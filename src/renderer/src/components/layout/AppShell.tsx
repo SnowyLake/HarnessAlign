@@ -22,7 +22,7 @@ import appIcon from "../../../../../build/icon.png";
 import { useAppStore, workspaceChangeCount, type AppView, type WorkspaceView } from "@/stores/AppStore";
 import { WorkflowStatus } from "./WorkflowStatus";
 import { SyncPanel } from "@/features/settings/SyncPanel";
-import { showError, showSuccess } from "@/components/common/Feedback";
+import { showError } from "@/components/common/Feedback";
 import type { SetupPreview } from "@shared/models/Workspace";
 import { filterSetupChanges, isSkillUpdateAvailable, setupExternalLabel } from "@/lib/Utils";
 

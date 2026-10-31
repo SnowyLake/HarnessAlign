@@ -19,7 +19,6 @@ import {
     installSkillFromDirectory,
     loadSkills,
     listSkillFiles,
-    readSkillContent,
     readSkillFrontmatter,
 } from "../../engine/Skills.js";
 import type { RemoteSkill, SkillFilePreview, SkillUpdate, SkillUpdateFilePreview, SkillUpdatePreview } from "../../shared/models/Workspace.js";

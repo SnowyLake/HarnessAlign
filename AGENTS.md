@@ -181,7 +181,7 @@ npm run build
 npm run dev
 ```
 
-- `npm run verify` 先编译引擎并类型检查 Main/Preload 与 Renderer, 再运行 `dist/tests/Halign.test.js`. 引擎只编译一次.
+- `npm run verify` 先运行 ESLint, 再编译引擎并类型检查 Main/Preload 与 Renderer, 再运行 `dist/tests/Halign.test.js`. 引擎只编译一次.
 - `npm run typecheck` 检查引擎, Main/Preload 和 Renderer. 引擎使用 `--noEmit`.
 - `npm run test` 会先编译引擎, 再使用 `node --test` 运行 `dist/tests/Halign.test.js`.
 - `npm run build` 使用 electron-vite 构建桌面壳. `npm run build:win` 再打 NSIS 安装包, 并固定 `--publish never`.

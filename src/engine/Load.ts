@@ -6,7 +6,7 @@
 import { promises as fs } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { assertContained, display, ensureRegularSource, isAtomicWriteTemporary, lstatIfExists, pathKey, readUtf8, reparseError, resolveUserHome } from "./FsSafe.js";
+import { assertContained, display, ensureRegularSource, lstatIfExists, pathKey, readUtf8, reparseError, resolveUserHome } from "./FsSafe.js";
 import { readSyncSnapshot, syncFilePaths, SYNC_MAX_FILE_BYTES } from "./Sync.js";
 import {
     AGENT_FIELDS,

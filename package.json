@@ -18,7 +18,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.engine.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "tsc -p tsconfig.engine.json && node --test dist/tests/Halign.test.js",
-    "verify": "tsc -p tsconfig.engine.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && node --test dist/tests/Halign.test.js",
+    "verify": "npm run lint && tsc -p tsconfig.engine.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && node --test dist/tests/Halign.test.js",
     "lint": "eslint .",
     "preinstall": "node -e \"if (!String(process.env.npm_config_user_agent || '').startsWith('npm/')) { process.stderr.write('This project uses npm. Run npm install.\\n'); process.exit(1) }\"",
     "postinstall": "node ./node_modules/electron/install.js",
@@ -43,7 +43,7 @@
     "remark-gfm": "^4.0.1",
     "smol-toml": "1.9.1",
     "yaml": "2.9.0",
-    "zod": "^4.0.17",
+    "zod": "^4.6.6",
     "zustand": "^5.0.8"
   },
   "devDependencies": {
@@ -70,7 +70,7 @@
     "fast-uri": "3.1.9",
     "http-cache-semantics": "4.3.0",
     "source-map-js": "1.2.2",
-    "undici@6": "6.28.1",
-    "undici@7": "7.29.1"
+    "undici@6": "6.29.1",
+    "undici@7": "7.30.1"
   }
 }

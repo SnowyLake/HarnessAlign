@@ -4,7 +4,7 @@
  */
 
 import assert from "node:assert/strict";
-import { withoutFileContents, syncFilePaths } from "../src/engine/Sync.js";
+import { withoutFileContents } from "../src/engine/Sync.js";
 import { migrateHarnessFiles } from "../src/engine/Edit.js";
 
 import { createHash } from "node:crypto";
@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { registerHooks } from "node:module";
 import test from "node:test";
+import { z } from "zod";
+import { createServer, loadConfigFromFile, resolveConfig, type UserConfig } from "vite";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parse as parseToml } from "smol-toml";
@@ -40,7 +42,7 @@ import { applySkillUpdates, checkSkillUpdates, discoverSkills, hydrateSyncSkills
 import { applySync as commitSync, checkSync, connectSync, discardSync, disconnectSync, getSyncStatus, inspectSync, planSync, previewSync, resumeSync } from "../src/main/services/GitHubSyncService.js";
 import type { SyncApplyInput, SyncResult } from "../src/shared/models/Sync.js";
 import { emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, SYNC_MAX_FILE_BYTES, syncSnapshotHash, type SyncSnapshot } from "../src/engine/Sync.js";
-import { SYNC_DISCARD_SCHEMA } from "../src/shared/models/Schemas.js";
+import { HARNESS_SCHEMA, HTTPS_URL_SCHEMA, SKILL_SOURCE_INPUT_SCHEMA, SOURCE_GUARD_SCHEMA, SYNC_APPLY_SCHEMA, SYNC_CONNECTION_SCHEMA, SYNC_DISCARD_SCHEMA, SYNC_PLAN_SCHEMA } from "../src/shared/models/Schemas.js";
 import { ADD_HARNESS_FILE_SCHEMA, AGENT_SCHEMA, CONFIG_SCHEMA, LAYER_SELECTION_SCHEMA, RULE_INPUT_SCHEMA, SKILL_IDS_SCHEMA, WORKSPACE_ITEM_TARGET_SCHEMA } from "../src/shared/models/Schemas.js";
 import { atomicWrite } from "../src/engine/FsSafe.js";
 import { buildOutputs, generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../src/engine/Generate.js";
@@ -81,6 +83,38 @@ async function applySync(root: string, directory: string, token: string, input: 
     const plan = await planSync(root, directory, input);
     return commitSync(root, directory, token, { previewId: plan.id });
 }
+
+test("renderer CSP is strict in builds and permits Fast Refresh only in development", async () =>
+{
+    const root = resolve("src/renderer");
+    const html = await readFile(join(root, "index.html"), "utf8");
+    const loaded = await loadConfigFromFile({ command: "serve", mode: "development" }, resolve("electron.vite.config.ts"));
+    assert.ok(loaded && "renderer" in loaded.config);
+    const renderer = { ...(loaded.config.renderer as UserConfig), root, configFile: false as const };
+    const policy = html.match(/content="([^"]+)"/u)![1]!;
+    assert.match(policy, /script-src 'self';/u);
+    assert.match(policy, /connect-src 'none'/u);
+    assert.match(policy, /object-src 'none'/u);
+    assert.match(policy, /base-uri 'none'/u);
+    assert.match(policy, /form-action 'none'/u);
+    assert.doesNotMatch(policy, /unsafe-eval|blob:|ws:|localhost/u);
+    const server = await createServer({ ...renderer, server: { middlewareMode: true, hmr: { host: "127.0.0.1", port: 0 }, watch: null } });
+    try
+    {
+        const development = await server.transformIndexHtml("/index.html", html);
+        assert.match(development, /script-src 'self' 'unsafe-inline'/u);
+        assert.match(development, /connect-src 'self' ws: http:\/\/localhost:\*/u);
+        assert.match(development, /@react-refresh/u);
+        assert.match(development, /@vite\/client/u);
+        assert.doesNotMatch(development, /unsafe-eval|blob:/u);
+    }
+    finally
+    {
+        await server.close();
+    }
+    const production = await resolveConfig(renderer, "build", "production");
+    assert.equal(production.plugins.some((plugin) => plugin.name === "development-csp"), false);
+});
 
 test("configuration formats share the current contract and read Layer v1 without changing bytes or meaning", async () =>
 {
@@ -2298,7 +2332,6 @@ test("GitHub sync round-trips two devices, binary skills, harness files, empty l
             await mkdir(join(first, ".harness-align/skills/demo"), { recursive: true });
             await writeFile(join(first, ".harness-align/skills/demo/SKILL.md"), "# Demo\n");
             await writeFile(join(first, ".harness-align/skills/demo/icon.bin"), Buffer.from([0, 255, 128]));
-            const harnessFile = "harness-files/codex/config.toml";
             await mkdir(join(first, ".codex"));
             await mkdir(join(second, ".codex"));
             await writeFile(join(first, ".codex/config.toml"), "model = 'local'\r\n");
@@ -4703,6 +4736,52 @@ test("IPC payload schemas reject coercion and incomplete editor shapes", () =>
     assert.equal(WORKSPACE_ITEM_TARGET_SCHEMA.safeParse({ kind: "skill", id: "demo" }).success, true);
 });
 
+test("Zod rejects oversized arrays before parsing elements or running refinements", () =>
+{
+    let parsedElements = 0;
+    let refinedArrays = 0;
+    const schema = z.array(z.string().transform((value) => { parsedElements += 1; return value; })).max(2)
+        .refine(() => { refinedArrays += 1; return true; });
+    const oversized = schema.safeParse(["first", "second", "third"]);
+    assert.equal(oversized.success, false);
+    if (oversized.success) assert.fail("Expected the array size guard to reject input");
+    assert.deepEqual(oversized.error.issues.map((issue) => issue.code), ["too_big"]);
+    assert.equal(parsedElements, 0);
+    assert.equal(refinedArrays, 0);
+    assert.deepEqual(schema.parse(["first", "second"]), ["first", "second"]);
+    assert.equal(parsedElements, 2);
+    assert.equal(refinedArrays, 1);
+    assert.equal(schema.safeParse([42]).success, false);
+});
+
+test("Zod upgrade preserves IPC transforms, strict records and sync validation", () =>
+{
+    const harness = { name: "助手", configPath: ".assistant", agentFormat: "toml", agentExtension: "toml" };
+    assert.deepEqual(HARNESS_SCHEMA.parse({ ...harness, instructionsField: undefined }), harness);
+    assert.deepEqual(HARNESS_SCHEMA.parse({ ...harness, instructionsField: "" }), { ...harness, instructionsField: "" });
+    assert.equal(HARNESS_SCHEMA.safeParse({ ...harness, extra: true }).success, false);
+    assert.deepEqual(SKILL_SOURCE_INPUT_SCHEMA.parse({ url: "https://github.com/example/skills", branch: undefined }), { url: "https://github.com/example/skills" });
+    assert.equal(HTTPS_URL_SCHEMA.parse("https://example.com/path?q=test"), "https://example.com/path?q=test");
+    for (const url of ["http://example.com", "javascript:alert(1)", "not a URL"]) assert.equal(HTTPS_URL_SCHEMA.safeParse(url).success, false);
+    assert.deepEqual(SOURCE_GUARD_SCHEMA.parse({ path: "rules/test.md", revision: null }), { path: "rules/test.md", revision: null });
+    assert.equal(SOURCE_GUARD_SCHEMA.safeParse({ path: "rules/test.md", revision: "invalid" }).success, false);
+    const previewId = "123e4567-e89b-42d3-a456-426614174000";
+    assert.deepEqual(SYNC_APPLY_SCHEMA.parse({ previewId }), { previewId });
+    assert.equal(SYNC_APPLY_SCHEMA.safeParse({ previewId, mode: "local" }).success, false);
+    assert.equal(SYNC_APPLY_SCHEMA.safeParse({ previewId: "not-a-uuid" }).success, false);
+    const plan = { previewId, mode: "merge", choices: { "rules/test.md": "remote" }, fileChoices: { "harness-files/test/config.json": "target" } };
+    assert.deepEqual(SYNC_PLAN_SCHEMA.parse(plan), plan);
+    assert.equal(SYNC_PLAN_SCHEMA.safeParse({ ...plan, choices: { "rules/test.md": "invalid" } }).success, false);
+    assert.equal(SYNC_PLAN_SCHEMA.safeParse({ ...plan, fileChoices: { "harness-files/test/config.json": "local" } }).success, false);
+    assert.equal(SYNC_PLAN_SCHEMA.safeParse({ ...plan, choices: Object.fromEntries(Array.from({ length: 5001 }, (_, index) => [`rules/${index}.md`, "local"])) }).success, false);
+    const connection = { owner: "example", repository: "settings", branch: "main", token: "test-token" };
+    assert.deepEqual(SYNC_CONNECTION_SCHEMA.parse(connection), connection);
+    assert.equal(SYNC_CONNECTION_SCHEMA.safeParse({ ...connection, token: "test token" }).success, false);
+    assert.equal(SYNC_CONNECTION_SCHEMA.safeParse({ ...connection, token: "x".repeat(1025) }).success, false);
+    const metadata = { path: "agent.md", name: "agent", description: "Agent", body: "", harnesses: { codex: { name: null, enabled: false, limit: 0, tags: ["one"] } } };
+    assert.deepEqual(AGENT_SCHEMA.parse(metadata), metadata);
+});
+
 test("repository-root skills survive batch installation, workspace reload, reinstall, and update checks", async (t) =>
 {
     await withProject(async (root) =>
@@ -5120,8 +5199,8 @@ test("startup sync check runs once after status is known and clears the dot when
     try
     {
         let checkCalls = 0;
-        let pending = true;
-        let checkError: Error | undefined;
+        const pending = true;
+        let checkError: Error | undefined = undefined;
         Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { sync: {
             check: () =>
             {

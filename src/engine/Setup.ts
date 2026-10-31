@@ -968,7 +968,6 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
         reports.push({ harness: target.harness, root: targetRoot, skipped: false, files });
     }
 
-    const skippedHarnesses = new Set(reports.filter((item) => item.skipped).map((item) => item.harness));
     const sourceSharedRules = await assertNoReparseComponents(root, join(root, ".harness-align", "rules", "shared"), "shared rules source");
     await assertRegularDirectory(sourceSharedRules, "shared rules source");
     await assertNoReparseTree(sourceSharedRules, "shared rules source");

@@ -29,7 +29,7 @@ npm run verify
 npm run build
 ```
 
-`npm run verify` 编译引擎, 检查桌面应用类型, 再运行测试. `npm run build` 构建桌面应用.
+`npm run verify` 先运行 ESLint, 再编译引擎, 检查桌面应用类型并运行测试. `npm run build` 构建桌面应用.
 
 如果要修改代码, 实现约束和改动流程见 [AGENTS.md](../AGENTS.md).
 
