@@ -18,12 +18,11 @@ import {
     WarningOutlined,
 } from "@ant-design/icons";
 import type { ProjectSkill, RemoteSkill, SkillFilePreview, SkillOrigin, SkillUpdateFilePreview, SkillUpdatePreview, UserSkill, Workspace } from "@shared/models/Workspace";
-import { Alert, Avatar, Button, Card, Checkbox, Col, Drawer, Dropdown, Empty, Flex, Form, Input, Listy, Modal, Row, Segmented, Select, Space, Splitter, Table, Tooltip, Typography, type MenuProps } from "antd";
+import { Alert, Avatar, Button, Card, Checkbox, Drawer, Dropdown, Empty, Flex, Form, Input, Listy, Modal, Segmented, Select, Space, Splitter, Table, Tooltip, Typography, type MenuProps } from "antd";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { showError, showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
-import { DiffText } from "@/components/common/DiffText";
-import { diffLines, type DiffLine } from "@/lib/TextDiff";
+import { SplitDiff, type DiffPane } from "@/components/common/SplitDiff";
 import { checkWorkspaceSkillUpdates, persistEditorSnapshot, refreshWorkspace, runCommand, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { TreeButton } from "@/features/workspace/WorkspaceTree";
 import { isSkillUpdateAvailable, selectableRemoteSkillIds } from "@/lib/Utils";
@@ -407,15 +406,12 @@ function DiscoveredSkillPane({ skill, isInstalled, canInstall, isBusy, onInstall
     );
 }
 
-/** Render one side of a Skill file comparison, including binary, absent, and empty files. */
-function SkillFileContent({ label, value, lines }: { label: string; value: SkillFilePreview | null; lines: DiffLine[] | undefined })
+/** Label one side of a Skill update. Installed is the current file and Reviewed is the replacement. */
+function skillDiffPane(label: string, role: string, value: SkillFilePreview | null): DiffPane
 {
-    return <Card size="small" title={label}>
-        {!value ? <Typography.Text type="secondary">Absent / deleted</Typography.Text>
-            : value.text === null ? <Typography.Text>Binary file ({value.bytes.toLocaleString()} bytes)</Typography.Text>
-            : value.text === "" ? <Typography.Text type="secondary">(empty file)</Typography.Text>
-            : <DiffText lines={lines ?? value.text.split("\n").map((text) => ({ text, kind: "same" }))} label={`${label} file differences`} />}
-    </Card>;
+    if (!value) return { label, role, status: "Absent", text: null };
+    if (value.text === null) return { label, role, text: null, binary: `Binary file (${value.bytes.toLocaleString()} bytes)` };
+    return { label, role, text: value.text, ...(value.truncated ? { status: "Truncated to 16,000 characters" } : {}) };
 }
 
 /** Load a single requested file and ignore responses after the comparison is closed. */
@@ -435,15 +431,12 @@ function SkillUpdateFileDialog({ previewId, id, path, onClose }: { previewId: st
         });
         return () => { cancelled = true; };
     }, [previewId, path]);
-    const diff = file && file.oldFile?.text !== null && file.newFile?.text !== null ? diffLines(file.oldFile?.text ?? null, file.newFile?.text ?? null) : undefined;
     return <Modal open title={`Compare: ${id}/${path}`} width={1000} centered loading={!file && !error}
         styles={{ body: { maxHeight: "65vh", overflowY: "auto" } }} footer={<Button onClick={onClose}>Back to file list</Button>} onCancel={onClose}>
         {error ? <Alert type="error" title="File preview failed" description={error} showIcon /> : file ? <Space orientation="vertical" style={{ width: "100%" }}>
-            <Row gutter={[12, 12]}>
-                <Col xs={24} md={12}><SkillFileContent label="Installed" value={file.oldFile} lines={diff?.local} /></Col>
-                <Col xs={24} md={12}><SkillFileContent label="Reviewed" value={file.newFile} lines={diff?.remote} /></Col>
-            </Row>
-            {file.oldFile?.truncated || file.newFile?.truncated || diff?.limited
+            <SplitDiff label={`Installed to Reviewed for ${id}/${path}`} summary="Reviewed version replaces Installed"
+                before={skillDiffPane("Installed", "Current", file.oldFile)} after={skillDiffPane("Reviewed", "After update", file.newFile)} />
+            {file.oldFile?.truncated || file.newFile?.truncated
                 ? <Alert type="info" title="Text preview is bounded; applying updates replaces the entire Skill." /> : null}
         </Space> : null}
     </Modal>;

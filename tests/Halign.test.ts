@@ -31,7 +31,8 @@ import type { ProjectSkill, RemoteSkill, SetupChange, SkillUpdate, Workspace, Wo
 import { CONFIG_VERSION as SHARED_CONFIG_VERSION } from "../src/shared/models/Workspace.js";
 import { useAppStore, workspaceChangeCount, type FormSnapshot, type Selection } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
-import { DiffText } from "../src/renderer/src/components/common/DiffText.js";
+import { SplitDiff } from "../src/renderer/src/components/common/SplitDiff.js";
+import { sourceDirectionLabel, syncDiffEnds } from "../src/renderer/src/lib/SyncDiff.js";
 import { diffLines } from "../src/renderer/src/lib/TextDiff.js";
 import { workflowStages } from "../src/renderer/src/lib/WorkflowStatus.js";
 import { appendLog, clearLogs, logMainError, readLogs, redactedLogText, subscribeLogs } from "../src/main/services/ConsoleService.js";
@@ -449,20 +450,69 @@ test("Skill update review lists changes and reads bounded per-file comparisons w
     });
 });
 
-test("text comparisons mark additions and deletions, preserve common lines, bound work and escape remote markup", () =>
+test("text comparisons align replacements, preserve common lines, bound work and escape markup", () =>
 {
     const diff = diffLines("first\nremoved\nlast", "first\nadded\nlast");
-    assert.deepEqual(diff.local.map((line) => line.kind), ["same", "removed", "same"]);
-    assert.deepEqual(diff.remote.map((line) => line.kind), ["same", "added", "same"]);
-    assert.equal(diffLines(null, "new").remote[0]!.kind, "added");
-    assert.equal(diffLines("gone", null).local[0]!.kind, "removed");
+    assert.deepEqual(diff.rows.map((row) => [row.before?.kind ?? null, row.after?.kind ?? null]), [["same", "same"], ["removed", "added"], ["same", "same"]]);
+    assert.equal(diff.rows[1]?.before?.line, 2);
+    assert.equal(diff.rows[1]?.after?.line, 2);
+    const added = diffLines(null, "new");
+    assert.equal(added.rows[0]?.before, null);
+    assert.equal(added.rows[0]?.after?.kind, "added");
+    const removed = diffLines("gone", null);
+    assert.equal(removed.rows[0]?.before?.kind, "removed");
+    assert.equal(removed.rows[0]?.after, null);
+    const extra = diffLines("keep\nonly-before", "keep");
+    assert.equal(extra.rows[1]?.before?.text, "only-before");
+    assert.equal(extra.rows[1]?.after, null);
+    const words = diffLines("model: grok-4.7", "model: gpt-6.1-sol");
+    assert.ok(words.rows[0]?.before?.spans.some((span) => !span.changed && span.text.startsWith("model:")));
+    assert.ok(words.rows[0]?.after?.spans.some((span) => span.changed && span.text.includes("gpt-6.1-sol")));
     const large = diffLines(Array(600).fill("before").join("\n"), Array(600).fill("after").join("\n"));
     assert.equal(large.limited, true);
-    assert.equal(large.local.length, 600);
-    const markup = renderToStaticMarkup(createElement(DiffText, { label: "Remote differences", lines: diffLines(null, "<script>remote()</script>").remote }));
+    assert.equal(large.rows.length, 600);
+    assert.equal(large.rows[0]?.before?.kind, "removed");
+    assert.equal(large.rows[0]?.after?.kind, "added");
+    const markup = renderToStaticMarkup(createElement(SplitDiff, {
+        label: "Remote differences",
+        before: { label: "Remote", text: null },
+        after: { label: "Local", text: "<script>remote()</script>" },
+    }));
     assert.ok(markup.includes('data-change="added"'));
+    assert.ok(markup.includes("split-diff-row"));
     assert.ok(markup.includes("&lt;script&gt;"));
     assert.equal(markup.includes("<script>"), false);
+    const unified = renderToStaticMarkup(createElement(SplitDiff, {
+        label: "Narrow differences", layout: "unified",
+        before: { label: "Before", text: "left-one\nleft-two\nkeep" },
+        after: { label: "After", text: "right-one\nright-two\nkeep" },
+    }));
+    assert.ok(unified.indexOf("left-one") < unified.indexOf("left-two"));
+    assert.ok(unified.indexOf("left-two") < unified.indexOf("right-one"));
+    assert.ok(unified.indexOf("right-two") < unified.indexOf("keep"));
+});
+
+test("sync review puts the version being written on the right", () =>
+{
+    assert.deepEqual(syncDiffEnds({ direction: "upload" }), { before: "remote", after: "local", summary: "Local replaces Remote", decisive: true, replacesBoth: false });
+    assert.equal(syncDiffEnds({ action: "apply" }).summary, "Remote replaces Local");
+    assert.equal(syncDiffEnds({ action: "conflict" }).decisive, false);
+    assert.equal(syncDiffEnds({ direction: "conflict", choice: "local" }).decisive, true);
+    assert.equal(syncDiffEnds({ direction: "conflict", choice: "remote", mode: "local" }).summary, "Local replaces Remote");
+    assert.equal(syncDiffEnds({ direction: "upload", mode: "remote" }).summary, "Remote replaces Local");
+    assert.equal(syncDiffEnds({ action: "apply", mode: "local" }).summary, "Remote replaces Local");
+    assert.equal(syncDiffEnds({ action: "upload-apply" }).replacesBoth, true);
+    assert.equal(sourceDirectionLabel("conflict", "remote", "local"), "Remote → Local");
+    assert.equal(sourceDirectionLabel("download", "merge", undefined), "Remote → Local");
+    assert.equal(sourceDirectionLabel("conflict", "merge", undefined), "Resolve conflict");
+    assert.equal(syncDiffEnds({ action: "upload" }).before, "remote");
+    const remote = "model: grok-4.7\neffort: high";
+    const local = "model: gpt-6.1-sol\neffort: xhigh";
+    const uploaded = diffLines(remote, local);
+    assert.equal(uploaded.rows[0]?.before?.text, "model: grok-4.7");
+    assert.equal(uploaded.rows[0]?.after?.text, "model: gpt-6.1-sol");
+    assert.equal(uploaded.rows[0]?.before?.kind, "removed");
+    assert.equal(uploaded.rows[0]?.after?.kind, "added");
 });
 
 test("source search combines name, path, body terms and strict Harness filters without treating empty targets as global", () =>
