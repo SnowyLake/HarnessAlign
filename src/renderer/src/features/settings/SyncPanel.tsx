@@ -8,8 +8,8 @@ import type { SyncApplyInput, SyncChoice, SyncConnectionInput, SyncDetail, SyncF
 import { noteSyncPreview } from "@/features/workspace/WorkspaceTasks";
 import { useAppStore, workspaceChangeCount } from "@/stores/AppStore";
 import { showError, showSuccess } from "@/components/common/Feedback";
-import { DiffText } from "@/components/common/DiffText";
-import { diffLines, type DiffLine } from "@/lib/TextDiff";
+import { SplitDiff, type DiffPane } from "@/components/common/SplitDiff";
+import { sourceDirectionLabel, syncDiffEnds, type SyncDiffEnds } from "@/lib/SyncDiff";
 
 const CREATE_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new?name=HarnessAlign-Sync&expires_in=90&contents=write";
 const MANAGE_TOKENS_URL = "https://github.com/settings/personal-access-tokens";
@@ -18,21 +18,29 @@ const FILE_ACTION_LABELS: Record<SyncFileChange["action"], string> = {
     stop: "Stop syncing", conflict: "Resolve conflict", unavailable: "Pending",
 };
 
-/** Render bounded text and binary metadata without interpreting remote content as HTML. */
-function SyncFileContent({ label, value, lines }: { label: string; value: SyncFileView | null; lines?: DiffLine[] })
+/** Render one legacy or non-diff file without interpreting its text as HTML. */
+function SyncFileContent({ label, value }: { label: string; value: SyncFileView | null })
 {
     return (
         <Card size="small" title={label} className="sync-content-pane">
             {!value ? <Typography.Text type="secondary">Absent / deleted</Typography.Text> : (
                 <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-                    {value.text === null ? <Typography.Text>Binary file. SHA: {value.hash}</Typography.Text> : (
-                        lines ? <DiffText lines={lines} label={`${label} differences`} /> : <pre style={{ margin: 0, maxHeight: "none", overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{value.text || "(empty file)"}</pre>
-                    )}
+                    {value.text === null ? <Typography.Text>Binary file. SHA: {value.hash}</Typography.Text>
+                        : <pre className="sync-plain-text">{value.text || "(empty file)"}</pre>}
                     {value.truncated ? <Typography.Text type="warning">Preview limited to 16,000 characters.</Typography.Text> : null}
                 </Space>
             )}
         </Card>
     );
+}
+
+/** Label one endpoint. Absent and binary sides stay in the aligned table instead of a separate card. */
+function syncDiffPane(label: string, role: string | undefined, value: SyncFileView | null): DiffPane
+{
+    const roleProp = role ? { role } : {};
+    if (!value) return { label, text: null, status: "Absent", ...roleProp };
+    if (value.text === null) return { label, text: null, binary: `Binary file. SHA: ${value.hash}`, ...roleProp };
+    return { label, text: value.text, ...roleProp, ...(value.truncated ? { status: "Truncated to 16,000 characters" } : {}) };
 }
 
 /** Replace renderer baselines after sync so incoming Layer choices are not retained as local drafts. */
@@ -75,6 +83,13 @@ export function SyncPanel()
     const activeKey = selectedKey && reviewKeys.includes(selectedKey) ? selectedKey : reviewKeys[0];
     const activeFile = preview?.fileChanges.find((file) => file.key === activeKey);
     const activeSource = sourceChanges.find((change) => change.key === activeKey);
+    const sourceChoice = activeSource ? choices[activeSource.key] : undefined;
+    const ends = syncDiffEnds({
+        mode,
+        ...(activeFile ? { action: activeFile.action } : {}),
+        ...(activeSource ? { direction: activeSource.direction } : {}),
+        ...(sourceChoice ? { choice: sourceChoice } : {}),
+    });
 
     useEffect(() =>
     {
@@ -350,8 +365,7 @@ export function SyncPanel()
                                         {sourceChanges.map((change) => <Button key={change.key} type="text" className={`file-browser-item${activeKey === change.key ? " is-selected" : ""}`}
                                             aria-pressed={activeKey === change.key} onClick={() => setSelectedKey(change.key)} icon={<FileTextOutlined />}>
                                             <span className="file-browser-item-text"><span>{change.key}</span><span className="file-browser-item-status">
-                                                {change.direction === "conflict" ? choices[change.key] ? `Use ${choices[change.key] === "local" ? "Local" : "Remote"}` : "Resolve conflict"
-                                                    : change.direction === "upload" ? "Local → Remote" : "Remote → Local"}
+                                                {sourceDirectionLabel(change.direction, mode, choices[change.key])}
                                             </span></span>
                                         </Button>)}
                                         {unchangedCount ? <Button type="link" className="file-browser-show" onClick={() =>
@@ -385,7 +399,7 @@ export function SyncPanel()
                                             </Flex>
                                             {activeFile?.error ? <Alert type="warning" showIcon title={activeFile.error} /> : null}
                                             {activeFile?.action === "stop" ? <Typography.Paragraph type="secondary">Local files are kept on every device.</Typography.Paragraph> : null}
-                                            {detailError ? <Alert type="error" showIcon title={detailError} /> : detail?.key === activeKey ? <SyncComparison detail={detail} />
+                                            {detailError ? <Alert type="error" showIcon title={detailError} /> : detail?.key === activeKey ? <SyncComparison detail={detail} ends={ends} />
                                                 : <div className="sync-loading" role="status"><Spin /><span>Loading comparison...</span></div>}
                                             {!preview.remoteEmpty && activeSource && !activeKey.startsWith("harness-files/") && (activeSource.direction === "upload" || activeSource.direction === "conflict")
                                                 && (!activeKey.endsWith("/") || activeSource.paths.length > 0) ? <Popconfirm title="Discard Local changes?"
@@ -408,28 +422,31 @@ export function SyncPanel()
     );
 }
 
-/** Show both sync endpoints in place without opening another dialog. */
-function SyncComparison({ detail }: { detail: { key: string; content: SyncDetail } })
+/** Show the reviewed write direction in one aligned diff, without opening another dialog. */
+function SyncComparison({ detail, ends }: { detail: { key: string; content: SyncDetail }; ends: SyncDiffEnds })
 {
+    const beforeLabel = ends.before === "local" ? "Local" : "Remote";
+    const afterLabel = ends.after === "local" ? "Local" : "Remote";
+    const beforeRole = ends.decisive ? "Current" : undefined;
+    const afterRole = ends.decisive ? "After sync" : undefined;
     return <div className="sync-comparison">
         {detail.content.files.length === 0 ? <Typography.Text type="secondary">Empty directory</Typography.Text> : null}
         {detail.content.files.map((file) =>
         {
-            const additional = file.path.startsWith("harness-files/");
-            const local = additional ? file.actual : file.local;
-            const diff = (!local || local.text !== null) && (!file.remote || file.remote.text !== null)
-                ? diffLines(local?.text ?? null, file.remote?.text ?? null) : undefined;
-            const comparison = <div className="sync-comparison-panes">
-                <SyncFileContent label="Local" value={local ?? null} {...diff ? { lines: diff.local } : {}} />
-                <SyncFileContent label="Remote" value={file.remote} {...diff ? { lines: diff.remote } : {}} />
-            </div>;
+            const local = file.path.startsWith("harness-files/") ? file.actual : file.local;
+            const beforeValue = ends.before === "local" ? local ?? null : file.remote;
+            const afterValue = ends.after === "local" ? local ?? null : file.remote;
+            const comparison = ends.replacesBoth && file.result ? <>
+                <SplitDiff label="Local to result" summary="Result replaces Local" before={syncDiffPane("Local", "Current", local ?? null)} after={syncDiffPane("Result", "After sync", file.result)} />
+                <SplitDiff label="Remote to result" summary="Result replaces Remote" before={syncDiffPane("Remote", "Current", file.remote)} after={syncDiffPane("Result", "After sync", file.result)} />
+            </> : <SplitDiff label={`${beforeLabel} to ${afterLabel}`} {...ends.summary ? { summary: ends.summary } : {}}
+                before={syncDiffPane(beforeLabel, beforeRole, beforeValue)} after={syncDiffPane(afterLabel, afterRole, afterValue)} />;
             return <div key={file.path}>
                 {file.path !== detail.key ? <Typography.Paragraph code>{file.path}</Typography.Paragraph> : null}
                 {file.saved ? <Tabs items={[
                     { key: "compare", label: "Local / Remote", children: comparison },
                     { key: "legacy", label: "Legacy change", children: <SyncFileContent label="Legacy change" value={file.saved} /> },
                 ]} /> : comparison}
-                {diff?.limited ? <Typography.Text type="secondary">Large diff: changed sections are highlighted as a whole.</Typography.Text> : null}
             </div>;
         })}
         {detail.content.omittedFiles ? <Alert type="info" title={`${detail.content.omittedFiles} files omitted. The choice applies to the entire group.`} /> : null}
