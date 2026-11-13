@@ -10,7 +10,8 @@ import { tmpdir } from "node:os";
 import { stringify as stringifyYaml } from "yaml";
 import { assertContained, assertNoReparseTree, atomicWrite, display, ensureRegularSource, isAtomicWriteTemporary, isTreeSubset,
          lstatIfExists, pathKey, reparseError, resolveUserHome } from "./FsSafe.js";
-import { assertHarnessFileBytes, assertHarnessFileParent, assertHarnessFileScope, harnessFileSourceRelative, loadAgents, loadConfig, loadHarnessFiles, loadLayerOptions, loadRules, loadSharedRules, parseConfigSource, type HarnessFileSource, type SharedRule, validateAgentHarnesses, validateConfig, validateTargets } from "./Load.js";
+import { assertHarnessFileBytes, assertHarnessFileParent, assertHarnessFileScope, harnessFileSourceRelative, loadAgents, loadConfig, loadConfigSource, loadHarnessFiles,
+         loadLayerOptions, loadRules, loadSharedRules, parseConfigSource, type HarnessFileSource, type SharedRule, validateAgentHarnesses, validateConfig, validateTargets } from "./Load.js";
 import {
     IDENTIFIER_NAME,
     type Agent,
@@ -40,10 +41,10 @@ const DEFAULT_USER_CONFIG = {
     name: "AGENTS",
     layers: [],
     harnesses: [
-        { name: "codex", config_path: ".codex", agent_format: "toml", agent_extension: "toml", instructions_field: "developer_instructions" },
-        { name: "cursor", config_path: ".cursor", agent_format: "yaml", agent_extension: "md" },
-        { name: "grok", config_path: ".grok", agent_format: "yaml", agent_extension: "md" },
-        { name: "opencode", config_path: ".config/opencode", agent_format: "yaml", agent_extension: "md" },
+        { name: "Codex", config_path: ".codex", agent_format: "toml", agent_extension: "toml", instructions_field: "developer_instructions" },
+        { name: "Cursor", config_path: ".cursor", agent_format: "yaml", agent_extension: "md" },
+        { name: "GrokBuild", config_path: ".grok", agent_format: "yaml", agent_extension: "md" },
+        { name: "OpenCode", config_path: ".config/opencode", agent_format: "yaml", agent_extension: "md" },
     ],
 };
 
@@ -66,33 +67,34 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 
 | 路径 | 内容与作用 | 是否可直接修改 |
 | --- | --- | --- |
-| \`config.json\` | 总配置: 版本 \`version: ${CONFIG_VERSION}\`, 输出标题 \`name\`, 有序 \`layers\` 选择, \`harnesses\` 的名称/部署路径/子代理格式, 可选 Skills 上游仓库 \`skill_sources\`. | 可以, 保持版本和字段约束. |
-| \`rules/**/*.md\` (排除 \`shared/\`) | 组成助手 AGENTS.md 的规则片段. YAML frontmatter 指定非负整数 \`priority\` 和 \`targets\`, Markdown 正文是实际规则. | 可以. |
-| \`rules/shared/**/*.md\` | 供规则按需引用的独立共享文档, 不拼入助手 AGENTS.md. | 可以. |
+| \`config.json\` | 总配置: 版本 \`version: ${CONFIG_VERSION}\`, 输出标题 \`name\`, 有序 \`layers\` 选择, \`harnesses\` 的名称/部署路径/输出路径/子代理格式, 可选 Skills 上游仓库 \`skill_sources\`. | 可以, 保持版本和字段约束. |
+| \`rules/**/*.md\` (排除 \`shared/\`) | 组成助手全局提示词的规则片段. YAML frontmatter 指定非负整数 \`priority\` 和 \`targets\`, Markdown 正文是实际规则. | 可以. |
+| \`rules/shared/**/*.md\` | 供规则按需引用的独立共享文档, 不拼入助手全局提示词. | 可以. |
 | \`layers/<layer>/<option>.md\` | 可切换的规则片段. config.json 的 \`layers\` 决定组顺序, \`selected\` 决定每组采用哪个选项; frontmatter 仅支持 \`targets\`. | 可以. |
 | \`agents/*.md\` | 子代理 (Subagent) 配置源. YAML frontmatter 保存 \`name\`, \`description\`, \`harnesses\` 下各助手的原生 metadata; Markdown 正文保存共享的子代理指令. | 可以. |
 | \`.file-sync.json\` | 额外实际文件的路径登记、停止决定及待处理旧版修改. | 不可以; 使用应用管理, 在助手或外部编辑器修改实际文件. |
 | \`skills/<id>/SKILL.md\` 及同目录资源 | 可复用技能的说明, 脚本和参考资料. | 本地或无来源记录的 Skill 可以; GitHub 来源的 Skill 不直接修改. |
 | \`skills/index.json\` | 应用维护的 Skill 来源记录, 可读取对应 id 的 \`origin\` 判断来源. | 不可以, 不手改来源或哈希. |
-| \`generated/<harness>/AGENTS.md\` | 为该助手拼装好的完整规则文档. | 不可以, 修改对应 Rules / Layer 源文件. |
-| \`generated/<harness>/agents/\` | 为该助手转换格式后的子代理配置, 格式和扩展名由 config.json 决定. | 不可以, 修改 \`agents/*.md\` 配置源. |
+| \`generated/<harness>/<instructions_file>\` | 为该助手拼装好的完整规则文档, 默认文件名为 \`AGENTS.md\`. | 不可以, 修改对应 Rules / Layer 源文件. |
+| \`generated/<harness>/<agents_dir>/\` | 为该助手转换格式后的子代理配置, 默认目录为 \`agents\`, 格式和扩展名由 config.json 决定. | 不可以, 修改 \`agents/*.md\` 配置源. |
 | \`generated/.manifest.json\` | 应用管理的生成文件清单. | 不可以; 整个 \`generated/\` 均不手改. |
 | \`AGENTS.md\` | 当前配置目录的自动生成指引, 不参与助手规则拼装, 部署或同步. | 不可以, 应用自动更新. |
 | \`.sync-backup.json\`, \`.sync-recovery.json\` | 同步时产生的本机备份和中断恢复记录, 由应用管理. | 不可以. |
-| \`.config-backup-v1-<hash>.json\`, \`.edit-recovery.json\` | 配置格式升级的原始配置备份和源编辑恢复记录, 不参与生成, 部署或同步. | 不可以. |
+| \`.config-backup-v<version>-<hash>.json\`, \`.edit-recovery.json\` | 配置格式升级的原始配置备份和源编辑恢复记录, 不参与生成, 部署或同步. | 不可以. |
 
 ## 生成与部署关系
 
-- 规则文档: 根 Rules 按 \`priority\` 升序排列, 同优先级按路径排序, 再追加按配置顺序选中的 Layer 正文; 各片段按 \`targets\` 筛选后拼成 \`generated/<harness>/AGENTS.md\`.
-- 子代理配置: \`agents/*.md\` 按其 \`harnesses\` 键选择输出助手, 将共享指令和对应 metadata 转成该助手要求的 TOML 或 YAML frontmatter + Markdown 文件, 写入 \`generated/<harness>/agents/\`.
-- 部署: 生成的规则文档和子代理配置写入用户主目录下对应的 \`config_path\`; 共享规则复制到 \`~/.agents/shared-rules/\`, Skills 按 id 复制到 \`~/.agents/skills/\`.
+- 规则文档: 根 Rules 按 \`priority\` 升序排列, 同优先级按路径排序, 再追加按配置顺序选中的 Layer 正文; 各片段按 \`targets\` 筛选后拼成 \`generated/<harness>/<instructions_file>\`.
+- 子代理配置: \`agents/*.md\` 按其 \`harnesses\` 键选择输出助手, 将共享指令和对应 metadata 转成该助手要求的 TOML 或 YAML frontmatter + Markdown 文件, 写入 \`generated/<harness>/<agents_dir>/\`. \`harnesses: {}\` 保留源文件但不输出 Agent.
+- 部署: \`instructions_file\` 和 \`agents_dir\` 是相对 \`config_path\` 的安全路径, 省略时分别为 \`AGENTS.md\` 和 \`agents\`. 子代理目录保留未受管内容, 仅清理此前生成而本次已移除的文件. 修改输出路径不会删除旧部署文件. 共享规则复制到 \`~/.agents/shared-rules/\`, Skills 按 id 复制到 \`~/.agents/skills/\`.
 - 额外文件: 通过 Sync 直接比较助手目录中的实际文件与 GitHub 并应用确认结果, 不参与 Generate / Setup. 旧保存副本迁移保留原始备份和未应用修改供审阅. Stop syncing 保留实际文件; Harness 或父目录缺失时保留待应用状态.
 
 ## 修改方式
 
 - 按上表的可编辑范围修改配置源, 先读 \`config.json\` 和现有同类文件, 保持现有格式及 UTF-8 without BOM, LF. 标为不可修改的文件也不手工创建, 删除或重命名. 需要定制 GitHub Skill 时, 使用新 id 建立本地 Skill, 保留原来源记录.
 - Rule / Layer 的 \`targets\` 必须显式列出目标 Harness 名称, 省略或空数组均不生效. 名称引用大小写须一致; 重命名时更新相关 \`targets\`, 子代理 \`harnesses\` 键和 Layer 选择.
-- 配置版本独立于应用版本. 当前 Layer 格式 v1 在完整校验后自动升级到 v3, 保留当前字段含义并备份原始配置; 待确认同步上传先恢复, 再升级. 历史 Profile v2 和未来格式不会自动转换, 不通过手改版本号绕过校验.
+- GUI 显式创建 Harness 时, 首次保存会为全部已有根 Rule、Layer Option 和 Agent 添加关联; 不改变全局 Layer 选择, 不复制其他助手的 metadata. 普通保存、加载、升级和同步不重新开启已关闭关联. 删除 Harness 清理关联, 无目标的 Agent 保留正文.
+- 配置版本独立于应用版本. Layer 格式 v1 和 v3 在完整校验后自动升级到 v${CONFIG_VERSION}, 保留当前字段含义并备份原始配置; 待确认同步上传先恢复, 再升级. 历史 Profile v2 和未来格式不会自动转换, 不通过手改版本号绕过校验.
 - 配置源修改不会立即改变助手已部署的配置. 完成后说明改了哪些源文件及影响, 由用户通过 Harness Align 的 Generate / Setup 生成和部署; 不要求当前 Agent 操作 GUI. 此目录没有 CLI 或 npm 项目.
 
 详细格式与约束见 [Harness Align 项目 README](https://github.com/SnowyLake/HarnessAlign#readme), 必要时查阅仓库 \`src/engine/\` 源码.
@@ -219,6 +221,8 @@ function configDocument(config: Config): Record<string, unknown>
                 agent_format: harness.agentFormat,
                 agent_extension: harness.agentExtension,
             };
+            if (harness.instructionsFile !== undefined) item.instructions_file = harness.instructionsFile;
+            if (harness.agentsDir !== undefined) item.agents_dir = harness.agentsDir;
             if (harness.instructionsField !== undefined) item.instructions_field = harness.instructionsField;
             return item;
         }),
@@ -474,7 +478,7 @@ async function writeManagedBatch(root: string, writes: Array<{ path: string; con
         const before = await fs.readFile(await resolveManaged(root, write.path, write.path));
         if (write.expectedRevision !== undefined && sourceRevision(before) !== write.expectedRevision)
         {
-            throw new HalignError(`${write.path}: content changed before configuration upgrade; expected revision ${write.expectedRevision}, got ${sourceRevision(before)}; reload before upgrading`);
+            throw new HalignError(`${write.path}: content changed before its source update; expected revision ${write.expectedRevision}, got ${sourceRevision(before)}; reload before saving`);
         }
         return { path: write.path, before: before.toString("base64"), after: write.content.toString("base64") };
     })) };
@@ -638,9 +642,10 @@ export async function loadWorkspace(rootPath: string): Promise<Workspace>
 /** Preserve the exact legacy config before any validated write can promote it to the current format. */
 async function backupConfigUpgrade(root: string, before: Buffer): Promise<string | undefined>
 {
-    if (parseConfigSource(before).upgradedText === undefined) return undefined;
+    const parsed = parseConfigSource(before);
+    if (parsed.upgradedText === undefined) return undefined;
     const revision = sourceRevision(before);
-    const backup = join(root, ".harness-align", `.config-backup-v1-${revision}.json`);
+    const backup = join(root, ".harness-align", `.config-backup-v${parsed.upgradedFrom}-${revision}.json`);
     await ensureRegularSource(root, backup);
     const stats = await lstatIfExists(backup);
     if (stats && (!stats.isFile() || !(await fs.readFile(backup)).equals(before)))
@@ -749,7 +754,7 @@ export async function validateSyncSources(snapshot: SyncSnapshot, allowRemoteSki
             const [, name, ...parts] = key.split("/");
             const harness = config.harnesses.find((item) => item.name === name);
             if (!harness) throw new HalignError(`${key}: harness ${name} is not configured`);
-            assertHarnessFileScope(harness.configPath, parts.join("/"));
+            assertHarnessFileScope(harness, parts.join("/"));
             for (const content of [checked.files[key], checked.legacyFiles?.[key]]) if (content !== undefined) assertHarnessFileBytes(Buffer.from(content, "base64"), key);
         }
     }
@@ -1064,10 +1069,16 @@ export async function saveSkillContent(rootPath: string, id: string, content: st
 export async function saveAgent(rootPath: string, agent: Agent, guard?: SourceGuard): Promise<void>
 {
     const root = resolve(rootPath);
-    const config = await loadConfig(root);
+    const source = await loadConfigSource(root);
+    const config = source.config;
     const path = managedRelative(agent.path, agent.path);
     const next: Agent = { ...agent, path, body: normalizedBody(agent.body) };
     assertAgentInput(next, config.harnesses);
+    if (Object.keys(next.harnesses).length === 0 && source.upgradedFrom !== undefined)
+    {
+        throw new HalignError(`${path}: empty harnesses requires configuration version ${CONFIG_VERSION}, got ${source.upgradedFrom}; ` +
+                              "upgrade .harness-align/config.json first and resume any pending GitHub sync before disabling all harnesses");
+    }
     const agents = await loadAgents(root, config.harnesses);
     const collision = agents.find((candidate) => candidate.name.toLowerCase() === next.name.toLowerCase() && pathKey(join(root, candidate.path)) !== pathKey(join(root, path)) && candidate.path !== guard?.path);
     if (collision) throw new HalignError(`${path}: name must be unique without case sensitivity, got ${valueText(next.name)} already used by ${collision.path}`);
@@ -1269,6 +1280,33 @@ function replaceHarnessName(targets: Harness[], from: string, to: string): Harne
     return targets.map((target) => (target === from ? to : target));
 }
 
+/** Serialize validated harness membership changes with the exact opened source revisions. */
+function harnessReferenceWrites(workspace: Workspace, config: Config, name: Harness, action: "add" | "remove"): Array<{ path: string; content: Buffer; expectedRevision: string }>
+{
+    /** Change only this harness membership without resetting any other target choices. */
+    const changeTargets = (targets: readonly Harness[]): Harness[] => action === "add" ? [...targets, name] : targets.filter((target) => target !== name);
+    const writes: Array<{ path: string; content: Buffer }> = [{ path: ".harness-align/config.json", content: Buffer.from(`${JSON.stringify(configDocument(config), null, 2)}\n`, "utf8") }];
+    for (const rule of workspace.rootRules)
+    {
+        const targets = validateTargets(changeTargets(rule.targets), rule.path, config.harnesses);
+        writes.push({ path: rule.path, content: serializeFrontmatter({ priority: rule.priority, targets }, rule.body, rule.path) });
+    }
+    for (const option of Object.values(workspace.layerOptions).flat())
+    {
+        const targets = validateTargets(changeTargets(option.targets), option.path, config.harnesses);
+        writes.push({ path: option.path, content: serializeLayerOption(targets, option.body) });
+    }
+    for (const agent of workspace.agents)
+    {
+        const harnesses = { ...agent.harnesses };
+        if (action === "add") harnesses[name] = {};
+        else delete harnesses[name];
+        assertAgentInput({ ...agent, harnesses }, config.harnesses);
+        writes.push({ path: agent.path, content: serializeFrontmatter({ name: agent.name, description: agent.description, harnesses }, agent.body, agent.path) });
+    }
+    return writes.map((write) => ({ ...write, expectedRevision: workspace.sourceRevisions[write.path]! }));
+}
+
 /** Update a harness and restore original sources if any cascaded write fails. */
 export async function updateHarness(rootPath: string, from: string, harness: HarnessConfig): Promise<Config>
 {
@@ -1291,7 +1329,7 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
     ]);
     for (const file of harnessFiles.filter((file) => file.harness === from))
     {
-        assertHarnessFileScope(harness.configPath, file.path);
+        assertHarnessFileScope(harness, file.path);
         harnessFileSourceRelative(harness.name, file.path);
     }
     const nextRules = rules.map((rule) => ({ ...rule, targets: replaceHarnessName(rule.targets, from, harness.name) }));
@@ -1351,42 +1389,14 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
 export async function removeHarness(rootPath: string, name: string): Promise<void>
 {
     const root = resolve(rootPath);
-    const config = await loadConfig(root);
+    const workspace = await loadWorkspace(root);
+    const config = workspace.config;
     if (!config.harnesses.some((harness) => harness.name === name))
     {
         throw new HalignError(`.harness-align/config.json: harness is not configured, got ${valueText(name)}`);
     }
-    const nextConfig: Config = { ...config, harnesses: config.harnesses.filter((harness) => harness.name !== name) };
-    validateConfig(configDocument(nextConfig));
-    const [rules, layerOptions, agents] = await Promise.all([
-        loadRules(root, config.harnesses),
-        loadLayerOptions(root, config),
-        loadAgents(root, config.harnesses),
-    ]);
-    const nextRules: RuleInput[] = [];
-    for (const rule of rules)
-    {
-        const targets = rule.targets.filter((target) => target !== name);
-        nextRules.push({ ...rule, targets });
-    }
-    const nextLayerOptions: LayerOptionInput[] = [];
-    for (const option of Object.values(layerOptions).flat())
-    {
-        const targets = option.targets.filter((target) => target !== name);
-        nextLayerOptions.push({ ...option, targets });
-    }
-    const nextAgents: Agent[] = [];
-    for (const agent of agents)
-    {
-        const harnesses = { ...agent.harnesses };
-        delete harnesses[name];
-        if (Object.keys(harnesses).length === 0)
-        {
-            throw new HalignError(`${agent.path}: at least one configured harness block is required`);
-        }
-        nextAgents.push({ ...agent, harnesses });
-    }
-    for (const agent of nextAgents) assertAgentInput(agent, nextConfig.harnesses);
+    const nextConfig = validateConfig(configDocument({ ...config, harnesses: config.harnesses.filter((harness) => harness.name !== name) }));
+    const writes = harnessReferenceWrites(workspace, nextConfig, name, "remove");
     const backup = `.harness-align/.edit-backup-${randomUUID()}`;
     const move = await harnessFilesDirectoryMove(root, name, backup, true);
     if (move) await ensureFileSyncCompatibility(root);
@@ -1394,12 +1404,8 @@ export async function removeHarness(rootPath: string, name: string): Promise<voi
     let stopped = registry;
     if (registry.version === 4) for (const key of registry.filePaths!.filter((key) => key.startsWith(`harness-files/${name}/`))) stopped = stopSyncFile(stopped, key);
     await writeManagedBatch(root, [
-        { path: ".harness-align/config.json", content: Buffer.from(`${JSON.stringify(configDocument(nextConfig), null, 2)}\n`, "utf8") },
+        ...writes,
         ...(registry.version === 4 ? [{ path: ".harness-align/.file-sync.json", content: fileRegistryBytes(stopped) }] : []),
-        ...nextRules.map((rule) => ({ path: rule.path, content: serializeFrontmatter({ priority: rule.priority, targets: rule.targets }, rule.body, rule.path) })),
-        ...nextLayerOptions.map((option) => ({ path: option.path, content: serializeLayerOption(option.targets, option.body) })),
-        ...nextAgents.map((agent) => ({ path: agent.path,
-            content: serializeFrontmatter({ name: agent.name, description: agent.description, harnesses: agent.harnesses }, agent.body, agent.path) })),
     ], move);
 }
 
@@ -1431,7 +1437,7 @@ export async function addHarnessFile(rootPath: string, harnessName: string, rela
     await migrateHarnessFiles(root, userProfile);
     const config = await loadConfig(root);
     const harness = requireHarnessConfig(config, harnessName);
-    assertHarnessFileScope(harness.configPath, relativePath);
+    assertHarnessFileScope(harness, relativePath);
     const sourceRelative = harnessFileSourceRelative(harness.name, relativePath);
     const existing = await loadHarnessFiles(root, config.harnesses);
     const identity = `${harness.name}/${relativePath}`.toLowerCase();
@@ -1466,12 +1472,14 @@ export async function removeHarnessFile(rootPath: string, harnessName: string, r
     await applySyncSources(root, before, stopSyncFile(before, key));
 }
 
-/** Add a harness declaration to config. */
+/** Add a harness and initialize all existing rule, layer, and agent memberships once. */
 export async function addHarness(rootPath: string, harness: HarnessConfig): Promise<Config>
 {
     const root = resolve(rootPath);
-    const config = await loadConfig(root);
-    return saveConfig(root, { ...config, harnesses: [...config.harnesses, harness] });
+    const workspace = await loadWorkspace(root);
+    const config = validateConfig(configDocument({ ...workspace.config, harnesses: [...workspace.config.harnesses, harness] }));
+    await writeManagedBatch(root, harnessReferenceWrites(workspace, config, harness.name, "add"));
+    return config;
 }
 
 /** Register a GitHub skill source URL in config. */

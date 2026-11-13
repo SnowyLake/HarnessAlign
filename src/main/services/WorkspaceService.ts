@@ -35,7 +35,7 @@ import {
 import { assertContained, ensureRegularSource, lstatIfExists, resolveUserHome } from "../../engine/FsSafe.js";
 import { generate, inspectGenerated, readGeneratedFiles, reportGenerate, safeOutputRelative } from "../../engine/Generate.js";
 import { loadConfigSource } from "../../engine/Load.js";
-import { HalignError, valueText } from "../../engine/Model.js";
+import { CONFIG_VERSION, HalignError, valueText } from "../../engine/Model.js";
 import { inspectFileSyncTargets, inspectHarnessRoots, previewSetup, reportSetup, resolveExistingHarnessRoot, setup } from "../../engine/Setup.js";
 import { readSyncSnapshot } from "../../engine/Sync.js";
 import type { AppApi } from "../../shared/contracts/AppApi.js";
@@ -111,14 +111,15 @@ export function withWorkspace<T>(work: (root: string) => Promise<T>, operation =
             if (initialize)
             {
                 await ensureUserWorkspace();
-                if ((await loadConfigSource(root)).upgradedText !== undefined)
+                const source = await loadConfigSource(root);
+                if (source.upgradedText !== undefined)
                 {
                     let upgradeDelay = "";
                     if (syncStateDirectory)
                     {
                         try
                         {
-                            if ((await getSyncStatus(syncStateDirectory)).hasPendingUpload) upgradeDelay = "Recover the pending GitHub upload before automatically upgrading configuration format 1 to 3.";
+                            if ((await getSyncStatus(syncStateDirectory)).hasPendingUpload) upgradeDelay = `Recover the pending GitHub upload before automatically upgrading configuration format ${source.upgradedFrom} to ${CONFIG_VERSION}.`;
                         }
                         catch (error)
                         {
@@ -135,7 +136,7 @@ export function withWorkspace<T>(work: (root: string) => Promise<T>, operation =
                     {
                         const backup = await upgradeWorkspaceConfig(root);
                         if (backup) appendLog({
-                            level: "success", title: "Configuration upgraded: 1 -> 3",
+                            level: "success", title: `Configuration upgraded: ${source.upgradedFrom} -> ${CONFIG_VERSION}`,
                             details: `The configuration was validated and upgraded. Original configuration: ${basename(backup)}\nGenerate and Setup remain manual.`,
                         });
                         upgradeDelayReported = false;

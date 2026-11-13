@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { atomicWrite, ensureRegularSource, isTreeSubset, lstatIfExists, pathKey, resolveUserHome } from "./FsSafe.js";
 import { buildOutputs, generate } from "./Generate.js";
 import { assertHarnessFileBytes, assertHarnessFileScope, loadConfig, loadHarnessFiles, parseConfigSource } from "./Load.js";
-import { type Harness, type LayerSelection, type OutputMap, assertWindowsSafeName, codePointCompare, errorText, HalignError, isRecord, valueText } from "./Model.js";
+import { type Harness, type HarnessConfig, type LayerSelection, type OutputMap, assertWindowsSafeName, codePointCompare, errorText, HalignError, harnessOutputPaths, isRecord, valueText } from "./Model.js";
 import { assertSkillName, copySkillTree, loadSkills } from "./Skills.js";
 import { parseSyncSnapshot, readSyncSnapshot, syncFilePaths, SYNC_MAX_FILE_BYTES, SYNC_MAX_TOTAL_BYTES, type SyncSnapshot } from "./Sync.js";
 
@@ -214,6 +214,9 @@ async function deployReplacements(root: string, userProfile: string, replacement
 interface SetupInstallation
 {
     agents: Array<[string, Buffer]>;
+    retainedAgents: Record<string, string>;
+    actualAgents: Record<string, string>;
+    ownedAgents: Record<string, string>;
     rules: Buffer;
     targetAgents: string;
     targetRules: string;
@@ -334,14 +337,14 @@ function deploymentRelative(value: unknown, label: string): string
 }
 
 /** Match one user-relative scope to an additional harness file, preferring the longest config path. */
-function extraHarnessScope(scope: string, harnesses: readonly { name: string; configPath: string }[]): { name: string; configPath: string; filePath: string } | undefined
+function extraHarnessScope(scope: string, harnesses: readonly Pick<HarnessConfig, "name" | "configPath" | "instructionsFile" | "agentsDir">[]): { name: string; configPath: string; filePath: string } | undefined
 {
     const matches = harnesses.filter((harness) => scope === harness.configPath || scope.startsWith(`${harness.configPath}/`))
         .sort((left, right) => right.configPath.length - left.configPath.length || codePointCompare(left.configPath, right.configPath));
     const harness = matches[0];
     if (!harness || scope === harness.configPath) return undefined;
     const filePath = scope.slice(harness.configPath.length + 1);
-    try { assertHarnessFileScope(harness.configPath, filePath); }
+    try { assertHarnessFileScope(harness, filePath); }
     catch { return undefined; }
     return { name: harness.name, configPath: harness.configPath, filePath };
 }
@@ -356,13 +359,28 @@ function recordedBaselineScopes(encoded: unknown, label: string): string[]
     return Object.keys(parseDeploymentBaseline(parsed, label).scopes);
 }
 
-/** Find a baseline tree, including a case-only spelling difference for the same path. */
+/** Combine ownership aliases while keeping conflicting legacy hashes explicitly unaligned. */
 function baselineTree(scopes: Record<string, Record<string, string>>, scope: string): Record<string, string> | undefined
 {
-    if (Object.hasOwn(scopes, scope)) return scopes[scope];
     const folded = scope.toLowerCase();
-    const key = Object.keys(scopes).find((candidate) => candidate.toLowerCase() === folded);
-    return key ? scopes[key] : undefined;
+    const matches = Object.entries(scopes).filter(([candidate]) => candidate.toLowerCase() === folded);
+    if (matches.length === 0) return undefined;
+    const entries = new Map<string, [string, string]>();
+    for (const [, tree] of matches) for (const [name, hash] of Object.entries(tree))
+    {
+        const identity = pathKey(name);
+        const previous = entries.get(identity);
+        // Ambiguous hashes prove ownership, but cannot authorize overwriting observed content.
+        entries.set(identity, [name, previous && previous[1] !== hash ? "" : hash]);
+    }
+    return Object.fromEntries(entries.values());
+}
+
+/** Replace every case-only alias with the current spelling of one ownership scope. */
+function setBaselineTree(scopes: Record<string, Record<string, string>>, scope: string, tree: Record<string, string>): void
+{
+    for (const key of Object.keys(scopes)) if (key.toLowerCase() === scope.toLowerCase()) delete scopes[key];
+    scopes[scope] = tree;
 }
 
 /** Parse recovery data only within currently declared harness and installed skill scopes. */
@@ -373,7 +391,8 @@ async function deploymentJournal(root: string, home: string, value: unknown, lab
     const config = await loadConfig(root);
     const agentsLockBefore = value.agentsLockBefore === undefined ? undefined : value.agentsLockBefore === null ? null : recoveryBytes(value.agentsLockBefore, label).toString("base64");
     const owned = agentsLockBefore ? parseAgentsLock(Buffer.from(agentsLockBefore, "base64"), `${label} ownership lock`).scopes : {};
-    const allowed = new Set([...config.harnesses.flatMap((harness) => [`${harness.configPath}/agents`, `${harness.configPath}/AGENTS.md`]), ".agents/shared-rules",
+    const instructionScopes = new Set(config.harnesses.map((harness) => `${harness.configPath}/${harnessOutputPaths(harness).instructionsFile}`));
+    const allowed = new Set([...config.harnesses.map((harness) => `${harness.configPath}/${harnessOutputPaths(harness).agentsDir}`), ...instructionScopes, ".agents/shared-rules",
         ...(await loadSkills(root)).map((skill) => `.agents/skills/${skill.id}`), ...Object.keys(owned), ...(agentsLockBefore !== undefined ? [AGENTS_LOCK] : [])]);
     const sourceScopes = (await loadHarnessFiles(root, config.harnesses)).flatMap((file) =>
     {
@@ -403,7 +422,7 @@ async function deploymentJournal(root: string, home: string, value: unknown, lab
         if (progress !== "pending" && progress !== "prepared" && progress !== "backed-up" && progress !== "installed" && progress !== "restored") throw new HalignError(`${label}: invalid progress ${valueText(progress)}`);
         const before = deploymentTree(item.before, `${label} ${target} before`);
         const after = deploymentTree(item.after, `${label} ${target} after`);
-        const isFile = target.endsWith("/AGENTS.md") || target === AGENTS_LOCK || fileFold.has(target.toLowerCase());
+        const isFile = instructionScopes.has(target) || target === AGENTS_LOCK || fileFold.has(target.toLowerCase());
         for (const [name, tree] of [["before", before], ["after", after]] as const)
         {
             if (Object.keys(tree).length === 0 && (name === "before" || (target.startsWith(".agents/skills/") && Object.hasOwn(owned, target)) || fileFold.has(target.toLowerCase()))) continue;
@@ -632,7 +651,7 @@ export async function inspectFileSyncTargets(root: string, snapshot: SyncSnapsho
         const harness = config.harnesses.find((item) => item.name === harnessName);
         if (!harness) throw new HalignError(`${key}: harness ${valueText(harnessName)} is not configured`);
         const filePath = parts.join("/");
-        assertHarnessFileScope(harness.configPath, filePath);
+        assertHarnessFileScope(harness, filePath);
         if (source !== undefined) assertHarnessFileBytes(Buffer.from(source, "base64"), key);
         const scope = `${harness.configPath}/${filePath}`;
         const hash = fileAlignment(baseline, scope);
@@ -702,8 +721,7 @@ export async function applyFileSyncTargets(root: string, applications: FileSyncA
         const hash = createHash("sha256").update(bytes).digest("hex");
         setFileAlignment(aligned, current.target, hash);
         if (current.content === content) continue;
-        for (const key of Object.keys(scopes)) if (key.toLowerCase() === current.target.toLowerCase()) delete scopes[key];
-        scopes[current.target] = { ".": hash };
+        setBaselineTree(scopes, current.target, { ".": hash });
         replacements.push({ target: join(home, ...current.target.split("/")), populate: (path: string) => fs.writeFile(path, bytes, { flag: "wx" }) });
         desired.push({ ".": hash });
     }
@@ -776,15 +794,29 @@ async function snapshotTree(root: string, path: string, skipHidden = false): Pro
     return tree;
 }
 
-/** Compare scopes deterministically, keeping deletions and skipped directories visible. */
+/** Compare platform file identities deterministically, retaining external-change protection. */
 function scopeChanges(path: string, before: Record<string, string>, after: Record<string, string>, previous?: Record<string, string>): SetupChange[]
 {
-    return [...new Set([...Object.keys(before), ...Object.keys(after), ...Object.keys(previous ?? {})])].sort(codePointCompare).map((name) =>
+    const entries = new Map<string, { name: string; before?: string; after?: string; previous?: string }>();
+    for (const [field, tree] of [["previous", previous], ["before", before], ["after", after]] as const)
     {
-        const status: SetupChange["status"] = !Object.hasOwn(before, name) ? Object.hasOwn(after, name) ? "added" : "unchanged" : !Object.hasOwn(after, name) ? "deleted" : before[name] === after[name] ? "unchanged" : "modified";
-        const external = previous && Object.hasOwn(previous, name) && previous[name] !== before[name] ? "Changed since last deployment"
-            : status === "deleted" && (!previous || !Object.hasOwn(previous, name)) ? "Extra path will be deleted"
-                : status === "modified" && (!previous || !Object.hasOwn(previous, name)) ? "Existing content has no deployment baseline" : undefined;
+        if (!tree) continue;
+        for (const [name, hash] of Object.entries(tree))
+        {
+            const identity = pathKey(name);
+            const entry = entries.get(identity) ?? { name };
+            entry.name = name;
+            entry[field] = hash;
+            entries.set(identity, entry);
+        }
+    }
+    return [...entries.values()].sort((left, right) => codePointCompare(left.name, right.name)).map(({ name, before: observed, after: desired, previous: prior }) =>
+    {
+        const status: SetupChange["status"] = observed === undefined ? desired === undefined ? "unchanged" : "added"
+            : desired === undefined ? "deleted" : observed === desired ? "unchanged" : "modified";
+        const external = prior !== undefined && prior !== observed ? "Changed since last deployment"
+            : status === "deleted" && prior === undefined ? "Extra path will be deleted"
+                : status === "modified" && prior === undefined ? "Existing content has no deployment baseline" : undefined;
         return { path: name === "." ? path : `${path}/${name}`, status, ...(external ? { external } : {}) };
     });
 }
@@ -870,7 +902,7 @@ export async function readHarnessTargetFile(rootPath: string, harnessName: strin
 {
     const harness = (await loadConfig(resolve(rootPath))).harnesses.find((item) => item.name === harnessName);
     if (!harness) throw new HalignError(`.harness-align/config.json: harness is not configured, got ${valueText(harnessName)}`);
-    assertHarnessFileScope(harness.configPath, relativePath);
+    assertHarnessFileScope(harness, relativePath);
     const home = resolveUserHome(userProfile);
     const harnessRoot = await assertNoReparseComponents(home, join(home, ...harness.configPath.split("/")), `${harness.name} target root`);
     const rootStats = await lstatIfExists(harnessRoot);
@@ -935,9 +967,10 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
     const agentsLock = await readAgentsLock(deploymentRoot);
     await assertNoReparseComponents(root, generatedRoot, "generated root");
 
-    const targets: Array<{ harness: Harness; root: string }> = config.harnesses.map((harness) => ({
+    const targets = config.harnesses.map((harness) => ({
         harness: harness.name,
         root: harnessDeploymentRoot(deploymentRoot, harness.configPath),
+        ...harnessOutputPaths(harness),
     }));
     const installations: SetupInstallation[] = [];
     const reports: SetupTargetReport[] = [];
@@ -952,19 +985,34 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
             continue;
         }
         await assertRegularDirectory(targetRoot, `${target.harness} target root`);
-        const targetAgents = await assertNoReparseComponents(deploymentRoot, join(targetRoot, "agents"), `${target.harness} target agents`);
-        const targetRules = await assertNoReparseComponents(deploymentRoot, join(targetRoot, "AGENTS.md"), `${target.harness} target AGENTS.md`);
+        const targetAgents = await assertNoReparseComponents(deploymentRoot, join(targetRoot, ...target.agentsDir.split("/")), `${target.harness} target agents`);
+        const targetRules = await assertNoReparseComponents(deploymentRoot, join(targetRoot, ...target.instructionsFile.split("/")), `${target.harness} target instructions`);
         const agentsStats = await lstatIfExists(targetAgents);
         if (agentsStats)
         {
             if (!agentsStats.isDirectory()) throw new HalignError(`${target.harness} target agents: expected a directory: ${targetAgents}`);
             await assertNoReparseTree(targetAgents, `${target.harness} target agents`);
         }
-        await assertRegularFileIfPresent(targetRules, `${target.harness} target AGENTS.md`);
-        const prefix = `${target.harness}/agents/`;
+        await assertRegularFileIfPresent(targetRules, `${target.harness} target instructions`);
+        const prefix = `${target.harness}/${target.agentsDir}/`;
         const agents: Array<[string, Buffer]> = [...outputs].filter(([path]) => path.startsWith(prefix)).map(([path, content]) => [path.slice(prefix.length), content]);
-        const files = ["AGENTS.md", ...agents.map(([path]) => `agents/${path}`)];
-        installations.push({ agents, rules: outputs.get(`${target.harness}/AGENTS.md`)!, targetAgents, targetRules });
+        const scope = relative(deploymentRoot, targetAgents).split(sep).join("/");
+        const previous = new Set(Object.keys(baselineTree(baseline.scopes, scope) ?? {}).map((path) => path.toLowerCase()));
+        const generatedNames = agents.map(([path]) => path.toLowerCase());
+        const actualAgents = await snapshotTree(deploymentRoot, targetAgents);
+        const retainedAgents = Object.fromEntries(Object.entries(actualAgents).filter(([path]) =>
+        {
+            const folded = path.toLowerCase();
+            return path !== "." && !previous.has(folded) && !generatedNames.some((name) => folded === name || folded.startsWith(`${name}/`));
+        }));
+        for (const path of Object.keys(retainedAgents))
+        {
+            const parts = path.split("/");
+            for (let end = 1; end < parts.length; end += 1) retainedAgents[parts.slice(0, end).join("/")] = "directory";
+        }
+        const files = [target.instructionsFile, ...agents.map(([path]) => `${target.agentsDir}/${path}`)];
+        installations.push({ agents, retainedAgents, actualAgents, ownedAgents: outputTree(agents),
+            rules: outputs.get(`${target.harness}/${target.instructionsFile}`)!, targetAgents, targetRules });
         reports.push({ harness: target.harness, root: targetRoot, skipped: false, files });
     }
 
@@ -1013,6 +1061,18 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
             { target: installation.targetAgents, populate: async (path: string): Promise<void> =>
             {
                 await fs.mkdir(path);
+                for (const [name, hash] of Object.entries(installation.retainedAgents).sort(([left], [right]) => codePointCompare(left, right)))
+                {
+                    const destination = join(path, ...name.split("/"));
+                    if (hash === "directory") await fs.mkdir(destination, { recursive: true });
+                    else
+                    {
+                        const source = await assertNoReparseComponents(deploymentRoot, join(installation.targetAgents, ...name.split("/")), "retained agent file");
+                        await assertRegularFileIfPresent(source, "retained agent file");
+                        await fs.mkdir(dirname(destination), { recursive: true });
+                        await fs.copyFile(source, destination);
+                    }
+                }
                 for (const [name, content] of installation.agents) await fs.writeFile(join(path, name), content, { flag: "wx" });
             } },
             { target: installation.targetRules, populate: (path: string) => fs.writeFile(path, installation.rules, { flag: "wx" }) },
@@ -1023,7 +1083,7 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
     ];
 
     const desired = [
-        ...installations.flatMap((installation) => [outputTree(installation.agents), { ".": createHash("sha256").update(installation.rules).digest("hex") }]),
+        ...installations.flatMap((installation) => [{ ...installation.retainedAgents, ...installation.ownedAgents }, { ".": createHash("sha256").update(installation.rules).digest("hex") }]),
         await snapshotTree(root, sourceSharedRules),
         ...await Promise.all(skillInstallations.map((skill) => snapshotTree(root, skill.source, true))),
         ...staleSkills.map(() => ({})),
@@ -1037,14 +1097,15 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
     if (lockContent.length > 8 * 1024 * 1024) throw new HalignError(`${join(deploymentRoot, AGENTS_LOCK)}: ownership lock must not exceed 8 MiB`);
     replacements.push({ target: join(deploymentRoot, AGENTS_LOCK), populate: (path: string) => fs.writeFile(path, lockContent, { flag: "wx" }) });
     desired.push({ ".": createHash("sha256").update(lockContent).digest("hex") });
-    const actual = await Promise.all(replacements.map((replacement) => snapshotTree(deploymentRoot, replacement.target)));
+    const agentsByTarget = new Map(installations.map((installation) => [pathKey(installation.targetAgents), installation]));
+    const actual = await Promise.all(replacements.map((replacement) => agentsByTarget.get(pathKey(replacement.target))?.actualAgents ?? snapshotTree(deploymentRoot, replacement.target)));
     const sources = await Promise.all(["config.json", "rules", "layers", "agents", "skills"].map((scope) => snapshotTree(root, join(root, ".harness-align", scope))));
     const scopeNames = replacements.map((replacement) => relative(deploymentRoot, replacement.target).split(sep).join("/"));
     const changes = replacements.flatMap((replacement, index) =>
     {
         const scope = scopeNames[index]!;
         const previous = scope === AGENTS_LOCK ? actual[index]
-            : scope === ".agents/shared-rules" || scope.startsWith(".agents/skills/") ? agentsLock.baseline.scopes[scope] : baseline.scopes[scope];
+            : scope === ".agents/shared-rules" || scope.startsWith(".agents/skills/") ? baselineTree(agentsLock.baseline.scopes, scope) : baselineTree(baseline.scopes, scope);
         return scopeChanges(`~/${scope}`, actual[index]!, desired[index]!, previous);
     });
     for (const target of reports.filter((item) => item.skipped)) changes.push({ path: `~/${relative(deploymentRoot, target.root).split(sep).join("/")}`, status: "skipped" });
@@ -1064,7 +1125,7 @@ async function prepareSetup(rootPath: string, selection?: readonly LayerSelectio
         },
     };
     const scopes = { ...baseline.scopes };
-    for (const [index, name] of scopeNames.entries()) scopes[name] = desired[index]!;
+    for (const [index, name] of scopeNames.entries()) setBaselineTree(scopes, name, agentsByTarget.get(pathKey(replacements[index]!.target))?.ownedAgents ?? desired[index]!);
     const aligned = { ...baseline.aligned };
     const nextBaseline: DeploymentBaseline = { version: 2, scopes: Object.fromEntries(Object.entries(scopes).sort(([left], [right]) => codePointCompare(left, right))), aligned };
     return { result, replacements, revision, changes, desired, nextBaseline, agentsLockBefore: agentsLock.content?.toString("base64") ?? null };

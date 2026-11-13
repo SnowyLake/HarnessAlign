@@ -11,7 +11,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEventHandler, ty
 import { showError, showSuccess } from "@/components/common/Feedback";
 import { SourceEditor } from "@/components/common/SourceEditor";
 import { HarnessFiles } from "@/features/workspace/HarnessFiles";
-import { persistEditorSnapshot, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { persistEditorSnapshot, refreshAfterHarnessCascade, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
+import { HARNESS_PRESETS, harnessPresetConflict, harnessPresetSnapshot } from "@/lib/HarnessPresets";
 import { fileName, harnessEffects, ruleDisplayName, type HarnessEffect } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
@@ -118,6 +119,12 @@ function useEditorForm(workspace: Workspace, selection: Selection, onDelete?: ()
         baselineRef.current = draft?.baseline ?? formSnapshot(formRef.current);
     }, [draft?.baseline, editorKey]);
 
+    useLayoutEffect(() =>
+    {
+        // Adopt rebased guards from the store rather than the last rendered workspace snapshot.
+        if (draft?.sourceRevisions) sourceRevisionsRef.current = draft.sourceRevisions;
+    }, [draft?.sourceRevisions]);
+
     /** Store a new draft after a native form control changes. */
     const handleChange: FormEventHandler<HTMLFormElement> = (event) =>
     {
@@ -165,11 +172,17 @@ function useEditorForm(workspace: Workspace, selection: Selection, onDelete?: ()
 /** Persist one mounted editor form and refresh it under the resulting selection. */
 async function persistEditorForm(workspace: Workspace, selection: Selection, snapshot: FormSnapshot): Promise<void>
 {
+    const before = useAppStore.getState().workspace ?? workspace;
     const result = await persistEditorSnapshot(workspace, selection, snapshot);
     const state = useAppStore.getState();
     state.clearEditorDraft(selectionKey(selection));
     state.clearEditorDraft(selectionKey(result.selection));
     showSuccess("Saved", `${result.message}\n${selectionKey(result.selection)}`);
+    if (selection.kind === "harness-new" && result.selection.kind === "harness")
+    {
+        await refreshAfterHarnessCascade(before, "add", result.selection.name, result.selection);
+        return;
+    }
     await refreshWorkspace(result.selection);
 }
 
@@ -234,7 +247,7 @@ function DeleteModal({ open, title, description, isBusy, onCancel, onConfirm }: 
     );
 }
 
-/** Render the generated AGENTS.md title setting backed by config.json. */
+/** Render the generated instructions title setting backed by config.json. */
 export function AgentDocumentTitleForm({ workspace }: { workspace: Workspace })
 {
     const isBusy = useAppStore((state) => state.isBusy);
@@ -255,14 +268,14 @@ export function AgentDocumentTitleForm({ workspace }: { workspace: Workspace })
             <Form component={false} layout="vertical" requiredMark={false}>
                 <FormError message={editor.formError} />
                 <Form.Item
-                    label="AGENTS.md title"
+                    label="Instructions title"
                     htmlFor="document-title"
-                    tooltip="The main heading in each generated AGENTS.md file."
+                    tooltip="The main heading in each generated instructions file."
                 >
                     <Space.Compact block>
                         <Input
                             id="document-title"
-                            aria-label="AGENTS.md title"
+                            aria-label="Instructions title"
                             name="name"
                             value={configName}
                             disabled={isBusy}
@@ -291,10 +304,31 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
     const editorKey = selectionKey(selection);
     const [isDeleteOpen, setIsDeleteOpen] = useState(false);
     const editor = useEditorForm(workspace, selection, original ? () => setIsDeleteOpen(true) : undefined, onDone);
-    const [harnessName, setHarnessName] = useState(draftText(editor.draft, "name", original ?? "new-harness"));
+    const [harnessName, setHarnessName] = useState(draftText(editor.draft, "name", original ?? ""));
     const [agentFileFormat, setAgentFileFormat] = useState<"toml" | "md">(
         draftText(editor.draft, "agentFileFormat", harness?.agentFormat === "toml" ? "toml" : "md") === "toml" ? "toml" : "md",
     );
+    const preset = draftText(editor.draft, "preset", "custom");
+    const presetNotice = HARNESS_PRESETS.find((item) => item.config.name === preset)?.notice;
+    const presetOptions = [
+        { label: "Custom (blank)", value: "custom" },
+        ...HARNESS_PRESETS.map((item) =>
+        {
+            const conflict = harnessPresetConflict(item.config, workspace.config.harnesses);
+            return { label: item.label, value: item.config.name, disabled: Boolean(conflict), ...(conflict ? { title: conflict } : {}) };
+        }),
+    ];
+
+    /** Replace the new harness form with a preset and keep one baseline for discarding it. */
+    const handlePresetChange = (value: string): void =>
+    {
+        if (!editor.formRef.current) return;
+        const current = harnessPresetSnapshot(value);
+        const baseline = editor.draft?.baseline ?? formSnapshot(editor.formRef.current);
+        useAppStore.getState().setEditorDraft(editorKey, snapshotsEqual(baseline, current)
+            ? undefined
+            : { selection, baseline, current, sourceRevisions: editor.draft?.sourceRevisions ?? workspace.sourceRevisions });
+    };
 
     return (
         <>
@@ -310,6 +344,20 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
             >
                 <Form component={false} layout="vertical" requiredMark={false}>
                     <FormError message={editor.formError} />
+                    {original ? null : (
+                        <>
+                            <input type="hidden" name="preset" value={preset} />
+                            <Form.Item label="Preset" htmlFor="harness-preset">
+                                <Select
+                                    id="harness-preset"
+                                    value={preset}
+                                    options={presetOptions}
+                                    onChange={handlePresetChange}
+                                />
+                            </Form.Item>
+                            {presetNotice ? <Alert className="editor-alert" type="info" showIcon title={presetNotice} /> : null}
+                        </>
+                    )}
                     <Form.Item label="Name" htmlFor="harness-name">
                         <Input
                             id="harness-name"
@@ -325,6 +373,12 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                     </Form.Item>
                     <Form.Item label="Config path" htmlFor="harness-config-path">
                         <Input id="harness-config-path" name="configPath" prefix="~/" placeholder=".config/opencode" defaultValue={draftText(editor.draft, "configPath", harness?.configPath ?? "")} />
+                    </Form.Item>
+                    <Form.Item label="Instructions file" htmlFor="harness-instructions-file" tooltip="Relative to the config path. Nested folders and separators are allowed.">
+                        <Input id="harness-instructions-file" name="instructionsFile" defaultValue={draftText(editor.draft, "instructionsFile", harness?.instructionsFile ?? "AGENTS.md")} />
+                    </Form.Item>
+                    <Form.Item label="Agents directory" htmlFor="harness-agents-dir" tooltip="Relative to the config path. Nested folders and separators are allowed.">
+                        <Input id="harness-agents-dir" name="agentsDir" defaultValue={draftText(editor.draft, "agentsDir", harness?.agentsDir ?? "agents")} />
                     </Form.Item>
                     <Form.Item label="Agent file format" htmlFor="harness-agent-format">
                         <input type="hidden" name="agentFileFormat" value={agentFileFormat} />
@@ -368,10 +422,11 @@ function HarnessForm({ workspace, harness, onDone }: { workspace: Workspace; har
                     if (!original) return;
                     editor.mutate(async () =>
                     {
+                        const before = useAppStore.getState().workspace ?? workspace;
                         await window.appApi.workspace.removeHarness(original);
                         const state = useAppStore.getState();
                         state.clearEditorDraft(editorKey);
-                        await refreshWorkspace();
+                        await refreshAfterHarnessCascade(before, "remove", original);
                         showSuccess("Harness deleted", `Deleted harness ${original}`);
                         onDone();
                     });
@@ -803,7 +858,12 @@ export function HarnessesPanel()
                 keyboard={!isBusy}
                 onClose={() => setIsEditorOpen(false)}
             >
-                <HarnessForm key={`${selectionKey(selection)}:${JSON.stringify(selectedHarness)}`} workspace={workspace} harness={selectedHarness} onDone={() => setIsEditorOpen(false)} />
+                <HarnessForm
+                    key={`${selectionKey(selection)}:${JSON.stringify(selectedHarness)}${selectedHarness ? "" : `:${drafts["harness-new"]?.current.preset?.[0] ?? "custom"}`}`}
+                    workspace={workspace}
+                    harness={selectedHarness}
+                    onDone={() => setIsEditorOpen(false)}
+                />
             </Drawer>
             <Modal title={`${fileOwner?.name ?? "Harness"} files`} open={Boolean(fileOwner)} width={1120} centered destroyOnHidden footer={null}
                    closable={!isBusy} mask={{ closable: !isBusy }} keyboard={!isBusy} onCancel={() => setFilesHarness(undefined)}>

@@ -107,7 +107,7 @@ export function renderMarkdownToc(bodies: string[], name: string): string
     return `## 目录\n\n${items.join("\n")}`;
 }
 
-/** Render one harness AGENTS.md from ordered root rules and selected layer files. */
+/** Render one harness instructions document from ordered root rules and selected layer files. */
 export function renderAgentsMarkdown(rules: Rule[], layers: LayerOption[], harness: Harness, name: string): Buffer
 {
     const rootBodies = rules

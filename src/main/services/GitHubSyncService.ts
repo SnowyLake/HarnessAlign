@@ -13,7 +13,7 @@ import { applySyncSources, upgradeSyncConfig, validateSyncSources } from "../../
 import { applyFileSyncTargets, ensureFileSyncCompatibility, inspectFileSyncTargets, type FileSyncApplication, type FileSyncTarget } from "../../engine/Setup.js";
 import { atomicWrite, ensureRegularSource, lstatIfExists } from "../../engine/FsSafe.js";
 import { parseConfigSource } from "../../engine/Load.js";
-import { HalignError } from "../../engine/Model.js";
+import { CONFIG_VERSION, HalignError } from "../../engine/Model.js";
 import {
     assertSyncPath, emptySyncSnapshot, mergeSyncSnapshots, parseSyncSnapshot, portableSyncSnapshot, readSyncSnapshot, restoreSyncChange, stopSyncFile, syncFilePaths, syncSnapshotHash, withoutFileContents,
     SYNC_MAX_ENTRIES, SYNC_MAX_FILE_BYTES, SYNC_MAX_TOTAL_BYTES, type SyncMerge, type SyncSnapshot,
@@ -568,10 +568,11 @@ async function readSyncRemote(state: SyncState, token: string): Promise<RemoteSn
     return remote;
 }
 
-/** True when the remote config.json bytes are still format 1 and would upload as format 3. */
-function remoteConfigNeedsUpgrade(remote: RemoteSnapshot): boolean
+/** Identify a supported legacy remote configuration without changing its raw snapshot. */
+function remoteConfigUpgradeVersion(remote: RemoteSnapshot): 1 | 3 | undefined
 {
-    return remote.snapshot.files["config.json"] !== upgradeSyncConfig(remote.snapshot).files["config.json"];
+    const content = remote.snapshot.files["config.json"];
+    return content === undefined ? undefined : parseConfigSource(Buffer.from(content, "base64")).upgradedFrom;
 }
 
 /** Upgrade legacy removals without confusing content-free declarations with missing files. */
@@ -702,7 +703,7 @@ async function buildFileSyncPlan(root: string, state: SyncState, retained: Retai
     const formatUpgrade = !retained.remote.empty && retained.remote.snapshot.version !== 4;
     const preview: SyncPreview = {
         ...retained.public, id: randomUUID(), changes,
-        uploadCount: changes.filter((change) => change.direction === "upload" || change.direction === "conflict").length + (formatUpgrade ? 1 : 0) + (remoteConfigNeedsUpgrade(retained.remote) && !changes.some((change) => change.key === "config.json" && (change.direction === "upload" || change.direction === "conflict")) ? 1 : 0),
+        uploadCount: changes.filter((change) => change.direction === "upload" || change.direction === "conflict").length + (formatUpgrade ? 1 : 0) + (remoteConfigUpgradeVersion(retained.remote) !== undefined && !changes.some((change) => change.key === "config.json" && (change.direction === "upload" || change.direction === "conflict")) ? 1 : 0),
         downloadCount: changes.filter((change) => change.direction === "download" || change.direction === "conflict").length,
         fileChanges, applyCount: fileChanges.filter((change) => change.action === "apply" || change.action === "upload-apply").length,
         unresolvedCount: unresolved.length + fileChanges.filter((change) => change.needsChoice).length + (planError ? 1 : 0),
@@ -723,9 +724,10 @@ async function prepareSyncReview(root: string, directory: string, token: string)
     const remote = await readSyncRemote(state, token);
     const local = await readSyncSnapshot(root);
     const base = state.base?.connectionKey === connectionKey(state.connection) ? state.base : null;
+    const remoteConfigVersion = remoteConfigUpgradeVersion(remote);
     const notice = [state.pending ? "An earlier confirmed sync needs recovery. Resume it before starting another sync." : "",
         state.applications?.length ? "Remote is synced. Local updates are pending; later edits are preserved." : "",
-        remoteConfigNeedsUpgrade(remote) ? "The remote configuration uses format 1. Confirming sync upgrades it to format 3." : "",
+        remoteConfigVersion !== undefined ? `The remote configuration uses format ${remoteConfigVersion}. Confirming sync upgrades it to format ${CONFIG_VERSION}.` : "",
         !remote.empty && remote.snapshot.version !== 4 ? "This sync upgrades the Remote archive. Update other devices before syncing them." : ""].filter(Boolean).join("\n");
     const retained: RetainedPreview = {
         public: { id: randomUUID(), head: remote.head, firstSync: base === null, remoteEmpty: remote.empty, uploadCount: 0, downloadCount: 0,

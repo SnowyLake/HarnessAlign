@@ -65,10 +65,17 @@ export const HTTPS_URL_SCHEMA = z.string().url().refine((value) => value.startsW
 export const HARNESS_SCHEMA = z.strictObject({
     name: z.string(),
     configPath: z.string(),
+    instructionsFile: z.string().optional(),
+    agentsDir: z.string().optional(),
     agentFormat: z.enum(["toml", "yaml"]),
     agentExtension: z.string(),
     instructionsField: z.string().optional(),
-}).transform(({ instructionsField, ...harness }) => instructionsField === undefined ? harness : { ...harness, instructionsField });
+}).transform(({ instructionsFile, agentsDir, instructionsField, ...harness }) => ({
+    ...harness,
+    ...(instructionsFile === undefined ? {} : { instructionsFile }),
+    ...(agentsDir === undefined ? {} : { agentsDir }),
+    ...(instructionsField === undefined ? {} : { instructionsField }),
+}));
 
 /** Complete editor config payload, validated before workspace initialization. */
 export const CONFIG_SCHEMA = z.strictObject({

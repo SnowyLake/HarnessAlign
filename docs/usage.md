@@ -39,7 +39,7 @@
 
 应用更新默认使用 Windows 系统代理. 启动时如果设置了 `HTTP_PROXY` 或 `HTTPS_PROXY`, 更新请求优先使用该代理, 并遵守 `NO_PROXY`.
 
-应用版本与配置格式版本分别管理. 当前配置格式是 v3, 现行 Layer 格式 v1 会在完整校验后自动升级并保留原始配置备份. 待确认 GitHub 上传先恢复, 再升级; 升级或延迟原因显示在 Console, 不自动生成或部署. 兼容范围和回退方法见[配置版本与自动升级](configuration.md#配置版本与自动升级).
+应用版本与配置格式版本分别管理. 当前配置格式是 v4, 现行 Layer 格式 v1 和 v3 会在完整校验后自动升级并保留原始配置备份. 待确认 GitHub 上传先恢复, 再升级; 升级或延迟原因显示在 Console, 不自动生成或部署. 兼容范围和回退方法见[配置版本与自动升级](configuration.md#配置版本与自动升级).
 
 ## 编辑和保存
 
@@ -80,7 +80,7 @@ Config, Rule, Layer Option, Shared Rule 和 Agent 保存会校验打开时的文
 
 树内对单个文件改名前需要先保存该文件的草稿. Layer Group 改名会保留并迁移其 Option 草稿和打开时的内容基线, 改名后可以继续保存; 后续外部修改仍会触发冲突. 编辑器内修改名称和正文可以一起保存, 冲突校验发生在改名之前. 新建 Layer Option 的名称不能与已有选项重名, 匹配时不区分大小写.
 
-Settings 中的 `AGENTS.md title` 只控制生成文档的一级标题, 随 Save all 一起保存.
+Settings 中的 `Instructions title` 控制生成指令文件的一级标题, 随 Save all 一起保存.
 
 ## 管理助手与规则
 
@@ -88,17 +88,25 @@ Settings 中的 `AGENTS.md title` 只控制生成文档的一级标题, 随 Save
 
 一个 Harness 对应一个编码助手的输出格式和配置目录. 点击 Add harness 新建, 或点击卡片上的 Edit 编辑. 路径填写 `.codex` 这样的相对用户主目录路径, 卡片会显示为 `~/.codex`. 点击路径可以打开已经存在的文件夹, 应用不会创建缺失目录.
 
+Add harness 的 Preset 提供 Codex, Claude Code, Antigravity, Cursor, Grok Build, GitHub Copilot CLI, Devin CLI 和 Factory, 也可以选 Custom (blank) 从空白配置开始. 选择预设会填入名称、路径和文件格式, 所有字段仍可修改; 切换预设或返回 Custom 会重置当前新建表单. 已与现有 Harness 同名或目录重叠的预设不可选, Custom 仍可填写其他合法配置. 具体路径和 Cursor、Devin 的限制见[内置 Harness 预设](configuration.md#内置-harness-预设).
+
+选择预设不保存文件, 不初始化助手目录, 不自动生成或部署, 也不改变首次启动的自动检测. 点击 Create harness 或 Save all 首次保存新 Harness 时, 所有已有 Root Rules 和 Layer Options 的 Targets 会加入它, 所有已有 Agents 会为它添加空 metadata 并启用, 不复制其他助手的模型或权限设置. 未启用的 Layer 和未选中的 Option 也会登记 Targets, 但当前 Layer 开关、选择和顺序保持不变. 关闭面板后继续新建草稿, 会保留所选预设及修改过的字段.
+
+上述自动启用只发生于显式创建 Harness, 不为尚未保存的新建源文件草稿添加关联. 之后可以分别关闭 Targets 或 Agent Enable; 普通保存、重新加载和同步不会重新开启. 新建或删除 Harness 时, 其他源文件的未保存草稿会保留, 并同步本次关联变化; 删除时也会清理新建草稿中的失效关联, 不自动保存草稿. 若文件另有外部改动, 保存仍会拒绝过期草稿.
+
+编辑面板中的 Instructions file 和 Agents directory 都相对 Config path, 默认分别是 `AGENTS.md` 和 `agents`, 可以填写嵌套目录. 它们决定生成和部署的规则文件与 Subagent 目录位置. TOML 的 Instructions field 是保存正文的 TOML 键, 与 Instructions file 不是同一项.
+
 Home 页标题为 Harness Align, 以双列卡片展示助手, 窄窗口下切换为单列. 每张卡片展示目录状态和纳入输出的 Rules, Layers 和 Agents 数量; Agent 文件格式在编辑面板中查看和配置. 数量使用已保存源内容和当前 Layer 选择, 包含被选中的空 Layer Option; 不表示已生成或已部署. 点击卡片底部 Explain effects 查看纳入或排除的具体原因. Ready 只表示配置目录可用.
 
 Save harness 只保存当前助手. 关闭编辑面板会保留草稿, 卡片用 Unsaved 标记未保存项. 新建草稿可以通过 Continue new harness 继续编辑. Discard changes 放弃当前草稿; 删除操作位于编辑面板内, 需要再次确认. 保存 Harness 后再执行 Generate 或 Setup.
 
-修改 Harness 名称或目录时, 已有额外文件必须仍满足路径和托管范围限制, 否则保留原配置并拒绝保存. 删除 Harness 会同时移除它的额外文件路径登记, 助手目录中的文件仍保留; 其他 Harness 的草稿不受影响.
+修改 Harness 名称, 目录或输出路径时, 已有额外文件必须仍满足路径和托管范围限制, 否则保留原配置并拒绝保存. 修改输出路径不会迁移或删除旧路径下已经部署的文件. 删除 Harness 会移除所有 Rule / Layer Targets 和 Agent metadata 中的关联, 并取消它的额外文件路径登记, 助手目录中的文件仍保留. Agent 没有任何关联后保留源文件和正文, 不再生成该 Agent; 其他 Harness 的草稿不受影响.
 
 某个额外文件需要处理时, 卡片提供 Files 入口. 文件面板显示实际内容、文件可用性和待处理的旧版修改; 云端差异在 Review sync 中检查. 助手目录缺失或不可用时, 卡片优先显示 Missing folder 或 Unsafe / unavailable.
 
 ### 额外文件
 
-首页 Harness 卡片的 Files 按钮打开独立的 Additional files 面板. 点击 Add file 打开系统文件选择器, 默认定位到该助手已保存配置的目录. 选择目录内已有文件并点击 Import, 应用只登记相对路径, 不创建可编辑的保存副本. 取消不会修改登记. 不接受目录外或重复文件.
+首页 Harness 卡片的 Files 按钮打开独立的 Additional files 面板. 点击 Add file 打开系统文件选择器, 默认定位到该助手已保存配置的目录. 选择目录内已有文件并点击 Import, 应用只登记相对路径, 不创建可编辑的保存副本. 取消不会修改登记. 不接受目录外, 重复或与规则文件和 Subagent 输出路径冲突的文件.
 
 日常操作是: 在助手或外部编辑器修改实际文件 → Review sync → 审阅上传、下载及冲突 → Sync now. 接收 GitHub 版本后直接更新本机实际文件, 不需要 Setup. 文件按原始字节同步, 保留换行.
 
@@ -114,7 +122,7 @@ Stop syncing 取消登记并保留实际文件. 确认 GitHub 同步后, 其他�
 
 ### Rules 与 Layers
 
-Rules 页通过 Root / Shared 切换规则类型. Root 规则参与生成各助手的 `AGENTS.md`, Shared 规则单独部署到用户共享规则目录. 切换时保留列表宽度和未保存草稿.
+Rules 页通过 Root / Shared 切换规则类型. Root 规则参与生成各助手的规则文件, Shared 规则单独部署到用户共享规则目录. 切换时保留列表宽度和未保存草稿.
 
 Rule 和 Layer Option 的 Targets 指定内容适用于哪些助手. 没有选择任何 Harness 时, 该内容不会生成到任何助手的配置中. 要应用到全部助手, 需要逐一选中它们.
 
@@ -126,13 +134,15 @@ Add layer 创建空 Group, 添加 Option 后才能启用. 关闭 Group 开关会
 
 在 Agents 页编辑 Subagent 的共享正文, 按 Harness 切换各自的 metadata, 用 Enable 选择需要生成该 Agent 的助手. OpenCode 标签页在 Enable 同行右侧提供相同样式的 Generate name field 勾选项, 默认勾选; 取消勾选后生成的 frontmatter 不包含 `name`. 切换 Agent 时会保持当前 Harness 标签页. 字段和文件格式见[配置参考](configuration.md).
 
+可以关闭全部 Harness 的 Enable 并保存, 以停用 Agent 而不删除正文. 配置仍为 v1 / v3 且自动升级被延迟时, 需先处理待确认同步并升级至 v4, 才能保存全部停用状态.
+
 Skills 页左侧在 Installed 和 Discover 间切换, 仅列出 Skill 名称; Discover 中已安装项的名称置灰, 仍可点击预览. 右侧显示所选项的 `SKILL.md`, Discover 在文件名旁提供来源仓库链接, 右上角提供当前项的安装按钮. GitHub 来源只读, 本地导入或来源不明的 Skill 可编辑并保存. Import 不列出当前项目已安装的同名 GitHub Skill. 具体操作见[Skills 管理](skills.md).
 
 ## 生成和部署
 
 Generate 和 Setup 使用当前 Layer 顺序与选项, 包括尚未保存的选择. 有未保存的源文件草稿时, 先用 Save all 或 `Ctrl+S` 保存, 再生成或部署.
 
-Generate 只更新 `%USERPROFILE%\.harness-align\generated`. 每个已声明 Harness 都会得到 `AGENTS.md` 和对应格式的 `agents/` 文件. 应用只删除自己管理过且本次不再生成的文件, 保留未知文件. Generated 页用于查看结果, 不要手工修改输出文件.
+Generate 只更新 `%USERPROFILE%\.harness-align\generated`. 每个已声明 Harness 都会得到 `generated/<harness>/<instructions_file>` 和 `<agents_dir>/` 下对应格式的 Subagent 文件, 默认是 `AGENTS.md` 和 `agents/`. 应用只删除自己管理过且本次不再生成的文件, 保留未知文件. Generated 页用于查看结果, 不要手工修改输出文件.
 
 Generated 的 Open in explorer 打开生成文件在 `generated/` 中所在的文件夹. 操作基于已有磁盘文件, 不会保存编辑预览或打开部署后的助手副本.
 
@@ -142,11 +152,13 @@ External changes 标记上次成功部署后被修改或删除的目标, 将被�
 
 | 目标 | 更新方式 |
 | --- | --- |
-| `%USERPROFILE%\<config_path>\AGENTS.md` | 替换为本次生成的规则 |
-| `%USERPROFILE%\<config_path>\agents\` | 整个目录替换为本次生成的 Subagent; 没有生成项时替换为空目录 |
+| `%USERPROFILE%\<config_path>\<instructions_file>` | 替换为本次生成的规则 |
+| `%USERPROFILE%\<config_path>\<agents_dir>\` | 写入本次生成的 Subagent, 删除上次由应用生成且本次源中已移除的文件, 保留用户或工具自己放入的文件; 没有生成项时也保留目录及其中未受管内容 |
 | `%USERPROFILE%\.agents\shared-rules\` | 整个目录替换为 `.harness-align/rules/shared/` 的内容 |
 | `%USERPROFILE%\.agents\skills\<id>\` | 按 Skill id 覆盖同名目录, 删除 lock 记录且源中已移除的 Skill, 保留无关 Skills, 不复制 `index.json` |
 | `%USERPROFILE%\.agents\.harness-align.lock.json` | 记录本应用部署的 Shared Rules 和 Skill 目录及内容哈希, 随部署更新 |
+
+自定义的 `instructions_file` 和 `agents_dir` 可以包含嵌套目录, Setup 会创建所需父目录, 但不会创建缺失的 Harness 根目录. 修改 `config_path`, `instructions_file` 或 `agents_dir` 后, 旧路径下已经部署的内容会保留, 不会自动迁移或删除; 请确认助手不再从旧路径加载后再自行清理. 新路径中的同名非管理文件仍会在预览中标记, 覆盖前需要明确确认.
 
 Setup 只处理配置中声明且根目录已存在的 Harness. 缺失的根目录会被跳过, 需要先由对应助手初始化. `generated/` 中的未知文件不会部署. 没有已安装 Skills 且 lock 中没有待清理 Skill 时会跳过 Skills 部署, shared-rules 仍然必需.
 
@@ -164,11 +176,13 @@ Generated 页面显示相对已保存源内容和已保存 Layer 选择的实际
 
 Windows 上的状态检查不区分路径大小写. Harness 名称与已有生成目录仅大小写不同时, 不会误报文件缺失; 文件内容和 manifest 内容仍按实际字节比较.
 
+部署路径仅大小写变化时也沿用同一份归属, 不会把已移除的生成 Agent 当作未受管文件保留. 既有基线中重复的大小写记录会在更新该目标时合并为当前拼写; 如果旧记录的内容哈希冲突, 预览仍要求明确确认覆盖或删除.
+
 Skills 的 Discover 和 Check updates 每次重新解析分支 commit, 同一个来源仓库与 commit 的已验证下载及解压内容在本次会话中复用, 缓存有总量限制. Apply updates 只安装本次检查已审阅的固定 commit, 不在执行时改装分支的新版本. 再次 Discover 或检查, 来源配置变化, 或已安装 provenance 变化会使旧预览失效; 请重新检查后应用.
 
 启动后会静默检测一次已安装 GitHub Skills 的更新, More > Check updates 可手动重新检测. 可用更新在 Skill 行和侧栏 Skills 图标上显示红色小圆点, 使用与 Settings 应用更新相同的 Badge 样式; 切换页面不会清除结果. 后台检测不安装或部署内容, 错误记录在 Console. 详细流程见 [Skills 管理](skills.md#从-github-安装).
 
-Harness 卡片的 Explain effects 按当前 Harness 列出 Rules, Layer Options 和 Agents 的 Included / Excluded 原因. 说明使用已保存源内容和当前 Layer 顺序与选择, 显示空 targets 未生效, 未启用 Layer, 未选中的选项及缺少 Harness Agent metadata. 点击源路径跳转到编辑器. Shared rules 和 Skills 独立部署, 不进入该 Harness 的 `AGENTS.md`.
+Harness 卡片的 Explain effects 按当前 Harness 列出 Rules, Layer Options 和 Agents 的 Included / Excluded 原因. 说明使用已保存源内容和当前 Layer 顺序与选择, 显示空 targets 未生效, 未启用 Layer, 未选中的选项及缺少 Harness Agent metadata. 点击源路径跳转到编辑器. Shared rules 和 Skills 独立部署, 不进入该 Harness 的规则文件.
 
 Rules, Agents 与 Skills 使用统一的紧凑搜索栏, 搜索在左, 筛选在右, 同行排列. Shared Rules 只显示搜索框. Rules 与 Agents 列表支持按名称, 源路径和已保存正文搜索, 多个空格分隔词同时匹配, 不区分大小写. Harness 筛选使用严格 targets 或 Agent metadata block, 空 targets 不会匹配任何 Harness. Shared Rules 只按文字搜索, 因为它们独立部署. 点击匹配项打开现有编辑器, 搜索不会清除草稿; 筛选时暂停 Rules 拖动排序, 清除筛选后可继续排序.
 
