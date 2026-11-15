@@ -24,8 +24,8 @@ import {
     assertUpdateDraftsSaved, importSelectedHarnessFile, resolveWorkspaceItemFolder, setUpdateDraftState, setWorkspaceSyncDirectory, withWorkspace, withWorkspaceForUpdate, workspaceService,
 } from "../src/main/services/WorkspaceService.js";
 import {
-    defaultLayerOption, filterSetupChanges, harnessEffects, isSkillUpdateAvailable, matchesWorkspaceSource, moveLayerSelection,
-    selectableRemoteSkillIds, setupExternalLabel, uniqueAgentPath, uniqueRulePath,
+    defaultLayerOption, filterSetupChanges, formatAgentMetadata, harnessEffects, isSkillUpdateAvailable, matchesWorkspaceSource, moveLayerSelection,
+    parseAgentMetadata, selectableRemoteSkillIds, setupExternalLabel, uniqueAgentPath, uniqueRulePath,
 } from "../src/renderer/src/lib/Utils.js";
 import { HARNESS_PRESETS, harnessPresetConflict, harnessPresetSnapshot } from "../src/renderer/src/lib/HarnessPresets.js";
 import type { ProjectSkill, RemoteSkill, SetupChange, SkillUpdate, Workspace, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
@@ -1685,15 +1685,15 @@ test("Renderer harness add and removal rebase existing drafts without losing use
             };
             retain({ kind: "rule", path: rule.path }, { body: [rule.body], targets: rule.targets }, { body: ["Draft rule"], targets: ["codex", "cursor"] });
             retain({ kind: "layer-option", path: option.path }, { body: [option.body], targets: option.targets }, { body: ["Draft option"], targets: [] });
-            retain({ kind: "agent", path: agent.path }, { body: [agent.body], enabledHarnesses: Object.keys(agent.harnesses), "meta-cursor": [JSON.stringify(agent.harnesses.cursor)] },
-                { body: ["Draft agent"], enabledHarnesses: ["codex", "cursor"], "meta-codex": ['{"model":"draft-codex"}'], "meta-cursor": ['{"model":"draft-cursor"}'] });
+            retain({ kind: "agent", path: agent.path }, { body: [agent.body], enabledHarnesses: Object.keys(agent.harnesses), "meta-cursor": [formatAgentMetadata(agent.harnesses.cursor ?? {})] },
+                { body: ["Draft agent"], enabledHarnesses: ["codex", "cursor"], "meta-codex": ["model: draft-codex"], "meta-cursor": ["model: draft-cursor"] });
             retain({ kind: "agent", path: fallback.path }, { body: [fallback.body] }, { body: ["Draft fallback"] });
             retain({ kind: "config" }, { name: [before.config.name] }, { name: ["Draft title"] });
             retain({ kind: "rule", path: before.sharedRules[0]!.path }, { body: ["Shared original"] }, { body: ["Shared draft"] });
             retain({ kind: "rule-new", scope: "root" }, {}, { name: ["unsaved"], body: ["Unsaved new rule"], targets: ["codex", "cursor"] });
             retain({ kind: "layer-option-new", layer: "soul" }, {}, { name: ["unsaved"], body: ["Unsaved new option"], targets: ["codex", "cursor"] });
             retain({ kind: "agent-new" }, {}, {
-                name: ["unsaved"], description: ["Unsaved agent"], body: ["Unsaved new agent"], enabledHarnesses: ["codex", "cursor"], "meta-codex": ["{}"], "meta-cursor": ["{}"],
+                name: ["unsaved"], description: ["Unsaved agent"], body: ["Unsaved new agent"], enabledHarnesses: ["codex", "cursor"], "meta-codex": [""], "meta-cursor": [""],
             });
             const drafts = useAppStore.getState().editorDrafts;
             Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
@@ -1720,8 +1720,8 @@ test("Renderer harness add and removal rebase existing drafts without losing use
             assert.deepEqual(state.editorDrafts[`layer-option:${option.path}`]!.current.targets, mode === "add" ? [name] : []);
             const agentDraft = state.editorDrafts[`agent:${agent.path}`]!;
             assert.deepEqual(agentDraft.current.enabledHarnesses, expectedTargets);
-            assert.deepEqual(agentDraft.current["meta-cursor"], ['{"model":"draft-cursor"}']);
-            assert.deepEqual(agentDraft.current[`meta-${name}`], mode === "add" ? ["{}"] : undefined);
+            assert.deepEqual(agentDraft.current["meta-cursor"], ["model: draft-cursor"]);
+            assert.deepEqual(agentDraft.current[`meta-${name}`], mode === "add" ? [""] : undefined);
             assert.equal(Object.hasOwn(state.editorDrafts[`agent:${fallback.path}`]!.current, "enabledHarnesses"), false);
             assert.deepEqual(state.editorDrafts.config!.current, { name: ["Draft title"] });
             assert.deepEqual(state.editorDrafts[`rule:${before.sharedRules[0]!.path}`], drafts[`rule:${before.sharedRules[0]!.path}`]);
@@ -1764,6 +1764,62 @@ test("Renderer harness add and removal rebase existing drafts without losing use
             assert.deepEqual(created.rootRules.find((item) => item.body === "Unsaved new rule\n")!.targets, mode === "add" ? ["codex", "cursor"] : ["cursor"]);
             assert.deepEqual(created.layerOptions.soul!.find((item) => item.name === "unsaved")!.targets, mode === "add" ? ["codex", "cursor"] : ["cursor"]);
             assert.deepEqual(Object.keys(created.agents.find((item) => item.name === "unsaved")!.harnesses), mode === "add" ? ["codex", "cursor"] : ["cursor"]);
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
+    });
+});
+
+test("Renderer agent metadata edits format empty blocks as blank and validate YAML mappings", async () =>
+{
+    assert.equal(formatAgentMetadata({}), "");
+    assert.equal(formatAgentMetadata({ model: "sonnet", nested: { retries: 2 } }), "model: sonnet\nnested:\n  retries: 2");
+    assert.deepEqual(parseAgentMetadata(""), {});
+    assert.deepEqual(parseAgentMetadata("  \n# comment only\n"), {});
+    assert.deepEqual(parseAgentMetadata("model: sonnet\nname: null\n"), { model: "sonnet", name: null });
+    for (const invalid of ["a: [unfinished", "null", "scalar", "- list", "---\na: 1\n---\nb: 2"])
+    {
+        assert.throws(() => parseAgentMetadata(invalid));
+    }
+    const { persistEditorSnapshot } = await loadRendererTasks();
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        try
+        {
+            const workspace = {
+                ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] },
+                deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [],
+            };
+            initial.resetWorkspace(workspace);
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                saveAgent: (agent: Parameters<typeof saveAgent>[1], guard: Parameters<typeof saveAgent>[2]) => saveAgent(root, agent, guard),
+            } } } });
+            const agent = workspace.agents[0]!;
+            const before = await readFile(join(root, agent.path));
+            await assert.rejects(persistEditorSnapshot(workspace, { kind: "agent", path: agent.path }, {
+                name: [agent.name], description: [agent.description], body: [agent.body],
+                enabledHarnesses: ["codex", "cursor"], "meta-codex": ["- not-a-mapping"], "meta-cursor": [""],
+            }), /codex metadata:/u);
+            assert.deepEqual(await readFile(join(root, agent.path)), before);
+            await persistEditorSnapshot(workspace, { kind: "agent", path: agent.path }, {
+                name: [agent.name], description: [agent.description], body: [agent.body],
+                enabledHarnesses: ["codex", "cursor", "opencode"],
+                "meta-codex": ["model: gpt-5\nreasoning: high"],
+                "meta-cursor": [""],
+                "meta-opencode": ["name: null\nmode: subagent"],
+            });
+            const saved = (await loadWorkspace(root)).agents.find((item) => item.path === agent.path)!;
+            assert.deepEqual(saved.harnesses, {
+                codex: { model: "gpt-5", reasoning: "high" },
+                cursor: {},
+                opencode: { name: null, mode: "subagent" },
+            });
         }
         finally
         {

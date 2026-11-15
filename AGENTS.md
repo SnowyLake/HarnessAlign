@@ -37,7 +37,7 @@
 
 - 支持 Node 24 与 npm 11. 当前 `engines` 范围是 Node `>=24 <25`, npm `>=11 <12`. 只使用 npm, 不引入其他包管理器.
 - 引擎仅使用 `yaml` 和 `smol-toml`, 不依赖 Electron, React, Ant Design, CodeMirror, Zod 或 `fflate`.
-- Renderer 的通用界面框架固定为 Ant Design 6 与 `@ant-design/icons`. 标准控件和主题优先使用官方组件与 Design Token, CodeMirror 仅用于 Markdown 和 JSON 源码编辑. 不引入第二套通用 UI 组件或主题系统.
+- Renderer 的通用界面框架固定为 Ant Design 6 与 `@ant-design/icons`. 标准控件和主题优先使用官方组件与 Design Token, CodeMirror 仅用于 Markdown, YAML 和 JSON 源码编辑. 不引入第二套通用 UI 组件或主题系统.
 - `fflate` 只允许 Electron Main 导入, 并且必须加入 `electron.vite.config.ts` 的 main `exclude`.
 - `electron-updater` 只允许 Electron Main 导入, 并且必须加入 `electron.vite.config.ts` 的 main `exclude`. 安装版用它检查固定的 GitHub Release, 不把更新地址或安装包路径交给 Renderer.
 - `src/shared/` 只保存可同时被 Main, Preload 和 Renderer 导入的契约. 不得导入 Electron, Node 副作用, DOM 或 React.

@@ -15,6 +15,7 @@ function harnessFileLanguage(path: string): SourceLanguage
 {
     const lower = path.toLowerCase();
     if (lower.endsWith(".json")) return "json";
+    if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
     if (lower.endsWith(".md")) return "markdown";
     return "plain";
 }

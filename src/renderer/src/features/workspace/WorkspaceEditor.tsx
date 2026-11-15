@@ -13,7 +13,7 @@ import { SourceEditor } from "@/components/common/SourceEditor";
 import { HarnessFiles } from "@/features/workspace/HarnessFiles";
 import { persistEditorSnapshot, refreshAfterHarnessCascade, refreshWorkspace, runMutation } from "@/features/workspace/WorkspaceTasks";
 import { HARNESS_PRESETS, harnessPresetConflict, harnessPresetSnapshot } from "@/lib/HarnessPresets";
-import { fileName, harnessEffects, ruleDisplayName, type HarnessEffect } from "@/lib/Utils";
+import { fileName, formatAgentMetadata, harnessEffects, parseAgentMetadata, ruleDisplayName, type HarnessEffect } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 
 /** Form bindings that preserve drafts and respond to tree commands. */
@@ -69,13 +69,12 @@ function draftValues(draft: EditorDraft | undefined, name: string, fallback: str
     return draft ? draft.current[name] : fallback;
 }
 
-/** Parse one agent metadata JSON object, or `undefined` when the text is not a mapping. */
-function parseAgentMetadata(text: string): Record<string, unknown> | undefined
+/** Parse one agent metadata YAML mapping, or `undefined` when the draft text is invalid. */
+function tryParseAgentMetadata(text: string): Record<string, unknown> | undefined
 {
     try
     {
-        const value: unknown = JSON.parse(text);
-        return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+        return parseAgentMetadata(text);
     }
     catch
     {
@@ -650,7 +649,7 @@ function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessCha
                     <Form.Item label="Description" htmlFor="agent-description">
                         <Input id="agent-description" name="description" defaultValue={draftText(editor.draft, "description", existing?.description ?? "")} />
                     </Form.Item>
-                    <Form.Item label="Metadata (JSON)">
+                    <Form.Item label="Metadata (YAML)">
                         <input type="hidden" name="enabledHarnesses" value="" />
                         <Tabs
                             activeKey={selectedMetadataName}
@@ -658,9 +657,9 @@ function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessCha
                             items={workspace.config.harnesses.map((harness) =>
                             {
                                 const metadataField = `meta-${harness.name}`;
-                                const metadataText = draftText(editor.draft, metadataField, JSON.stringify(existing?.harnesses[harness.name] ?? {}, null, 2));
-                                const metadata = parseAgentMetadata(metadataText);
+                                const metadataText = editor.draft?.current[metadataField]?.[0] ?? formatAgentMetadata(existing?.harnesses[harness.name] ?? {});
                                 const isOpenCode = harness.name.toLowerCase() === "opencode";
+                                const metadata = isOpenCode ? tryParseAgentMetadata(metadataText) : undefined;
                                 return {
                                     key: harness.name,
                                     label: harness.name,
@@ -679,7 +678,7 @@ function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessCha
                                                         if (!metadata) return;
                                                         if (event.target.checked) delete metadata.name;
                                                         else metadata.name = null;
-                                                        editor.handleValueChange(metadataField, JSON.stringify(metadata, null, 2));
+                                                        editor.handleValueChange(metadataField, formatAgentMetadata(metadata));
                                                         setMetadataRevision((revision) => revision + 1);
                                                     }}
                                                 >
@@ -690,8 +689,8 @@ function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessCha
                                         <SourceEditor
                                             key={isOpenCode ? metadataRevision : 0}
                                             name={metadataField}
-                                            language="json"
-                                            aria-label={`${harness.name} metadata JSON`}
+                                            language="yaml"
+                                            aria-label={`${harness.name} metadata YAML`}
                                             resizeKey={selectedMetadataName}
                                             defaultValue={metadataText}
                                         />

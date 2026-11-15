@@ -4,7 +4,7 @@
  */
 
 import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
-import { fileName, hasLayerChanges, isSkillUpdateAvailable, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { fileName, hasLayerChanges, isSkillUpdateAvailable, parseAgentMetadata, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
 import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 import { syncPreviewHasWork, type SyncPreview } from "@shared/models/Sync";
 import type { AgentFormat, Config, HarnessConfig, LayerOption, Metadata, RuleInput, Workspace } from "@shared/models/Workspace";
@@ -224,8 +224,20 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             for (const harness of workspace.config.harnesses)
             {
                 if (!enabledHarnesses.includes(harness.name)) continue;
-                const metadata = snapshotText(snapshot, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}));
-                harnesses[harness.name] = JSON.parse(metadata) as Record<string, unknown>;
+                const metadata = snapshot[`meta-${harness.name}`]?.[0];
+                if (metadata === undefined)
+                {
+                    harnesses[harness.name] = existing?.harnesses[harness.name] ?? {};
+                    continue;
+                }
+                try
+                {
+                    harnesses[harness.name] = parseAgentMetadata(metadata);
+                }
+                catch (error)
+                {
+                    throw new Error(`${harness.name} metadata: ${errorMessage(error)}`);
+                }
             }
             const path = uniqueAgentPath(existing?.path, snapshotText(snapshot, "name", existing?.name), workspace.agents.map((agent) => agent.path));
             const agent = {
@@ -412,7 +424,7 @@ function cascadeDraftSnapshot(snapshot: FormSnapshot, selection: Selection, mode
     else if (selection.kind === "agent" || selection.kind === "agent-new")
     {
         const metadata = `meta-${name}`;
-        if (mode === "add") next[metadata] = ["{}"];
+        if (mode === "add") next[metadata] = [""];
         else delete next[metadata];
         const enabled = next.enabledHarnesses;
         if (enabled) next.enabledHarnesses = changeHarnessTargets(enabled, mode, name);

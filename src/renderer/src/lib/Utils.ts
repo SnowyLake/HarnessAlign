@@ -1,6 +1,7 @@
 /** Workspace labels and source paths with Windows-safe collision checks. */
 
-import type { LayerConfig, LayerSelection, ProjectSkill, RemoteSkill, SetupChange, SkillUpdate, Workspace } from "../../../shared/models/Workspace.js";
+import { parseDocument, stringify as stringifyYaml } from "yaml";
+import type { LayerConfig, LayerSelection, Metadata, ProjectSkill, RemoteSkill, SetupChange, SkillUpdate, Workspace } from "../../../shared/models/Workspace.js";
 import type { FileSyncState } from "../../../shared/models/Sync.js";
 
 /** Describe actual-file direction without implying that GitHub has already been checked. */
@@ -166,4 +167,25 @@ export function matchesWorkspaceSource(source: { path: string; body: string; nam
     if (harness && !(source.targets?.includes(harness) || source.harnesses && Object.hasOwn(source.harnesses, harness))) return false;
     const content = [source.name ?? "", source.description ?? "", source.path, source.body].join("\n").toLowerCase();
     return query.trim().toLowerCase().split(/\s+/u).filter(Boolean).every((term) => content.includes(term));
+}
+
+/** Parse one agent metadata YAML mapping, treating an empty or comment-only document as `{}`. */
+export function parseAgentMetadata(text: string): Metadata
+{
+    const document = parseDocument(text);
+    if (document.errors.length > 0) throw document.errors[0]!;
+    if (document.contents === null) return {};
+    const value: unknown = document.toJS();
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+    {
+        throw new Error("Agent metadata must be a YAML mapping");
+    }
+    return value as Metadata;
+}
+
+/** Format one agent metadata mapping as YAML, keeping empty mappings blank for editor forms. */
+export function formatAgentMetadata(metadata: Metadata): string
+{
+    if (Object.keys(metadata).length === 0) return "";
+    return stringifyYaml(metadata, { lineWidth: 0, sortMapEntries: false }).trimEnd();
 }
