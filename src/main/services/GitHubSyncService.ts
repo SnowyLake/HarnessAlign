@@ -569,7 +569,7 @@ async function readSyncRemote(state: SyncState, token: string): Promise<RemoteSn
 }
 
 /** Identify a supported legacy remote configuration without changing its raw snapshot. */
-function remoteConfigUpgradeVersion(remote: RemoteSnapshot): 1 | 3 | undefined
+function remoteConfigUpgradeVersion(remote: RemoteSnapshot): 1 | 3 | 4 | undefined
 {
     const content = remote.snapshot.files["config.json"];
     return content === undefined ? undefined : parseConfigSource(Buffer.from(content, "base64")).upgradedFrom;

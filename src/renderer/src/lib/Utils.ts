@@ -155,16 +155,21 @@ export function harnessEffects(workspace: Workspace, harness: string, selection:
     }
     for (const agent of workspace.agents)
     {
-        const active = Object.hasOwn(agent.harnesses, harness);
-        effects.push({ kind: "Agent", path: agent.path, active, reason: active ? "Harness metadata block is present" : "No Harness metadata block" });
+        const active = agent.targets.includes(harness);
+        effects.push({
+            kind: "Agent",
+            path: agent.path,
+            active,
+            reason: agent.targets.length === 0 ? "No targets selected" : active ? "Included in targets" : "Harness is outside targets",
+        });
     }
     return effects;
 }
 
 /** Match all query terms across source identity and body, plus an optional strict Harness filter. */
-export function matchesWorkspaceSource(source: { path: string; body: string; name?: string; description?: string; targets?: string[]; harnesses?: Record<string, unknown> }, query: string, harness = ""): boolean
+export function matchesWorkspaceSource(source: { path: string; body: string; name?: string; description?: string; targets?: string[] }, query: string, harness = ""): boolean
 {
-    if (harness && !(source.targets?.includes(harness) || source.harnesses && Object.hasOwn(source.harnesses, harness))) return false;
+    if (harness && !source.targets?.includes(harness)) return false;
     const content = [source.name ?? "", source.description ?? "", source.path, source.body].join("\n").toLowerCase();
     return query.trim().toLowerCase().split(/\s+/u).filter(Boolean).every((term) => content.includes(term));
 }

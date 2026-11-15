@@ -120,7 +120,7 @@ test("renderer CSP is strict in builds and permits Fast Refresh only in developm
 
 test("configuration formats share the current contract and read Layer v1 without changing bytes or meaning", async () =>
 {
-    assert.equal(CONFIG_VERSION, 4);
+    assert.equal(CONFIG_VERSION, 5);
     assert.equal(SHARED_CONFIG_VERSION, CONFIG_VERSION);
     await withProject(async (root) =>
     {
@@ -180,12 +180,12 @@ test("configuration upgrade rejects invalid versions and incomplete sources befo
     await withProject(async (root) =>
     {
         const path = join(root, ".harness-align/config.json");
-        for (const version of [0, -1, 1.5, "1", null, 2, 5, 99])
+        for (const version of [0, -1, 1.5, "1", null, 2, 6, 99])
         {
             await writeFile(path, JSON.stringify({ ...config, version }));
             const before = await snapshot(join(root, ".harness-align"));
             await assert.rejects(upgradeWorkspaceConfig(root), version === 2 ? /legacy Profile format version 2/u
-                : typeof version === "number" && version > CONFIG_VERSION ? /newer than supported version 4/u : /version must be integer 4/u);
+                : typeof version === "number" && version > CONFIG_VERSION ? /newer than supported version 5/u : /version must be integer 5/u);
             assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
         }
         const { version: omitted, ...missing } = config;
@@ -296,12 +296,12 @@ test("workspace queue automatically upgrades supported sources and defers only p
             clearLogs();
             await withWorkspace((home) => loadWorkspace(home));
             assert.equal(JSON.parse(await readFile(path, "utf8")).version, CONFIG_VERSION);
-            const notice = readLogs().entries.find((entry) => entry.title === "Configuration upgraded: 1 -> 4")!;
+            const notice = readLogs().entries.find((entry) => entry.title === "Configuration upgraded: 1 -> 5")!;
             assert.ok(notice.details.includes(".config-backup-v1-"));
             assert.equal(notice.details.includes(root), false);
             const before = await snapshot(join(root, ".harness-align"));
             const invalid = Object.assign({}, await loadConfig(root), { version: 99 });
-            await assert.rejects(saveConfig(root, invalid), /newer than supported version 4/u);
+            await assert.rejects(saveConfig(root, invalid), /newer than supported version 5/u);
             assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
             await mkdir(state);
             await writeFile(join(state, "github-sync.json"), "invalid sync state");
@@ -354,6 +354,9 @@ test("Layer v3 upgrades preserve omitted output paths and exact backups while ol
                 { ...config.harnesses[0], [field]: field === "instructions_file" ? "CLAUDE.md" : "droids" },
             ] })), /requires configuration version 4/u);
         }
+        const v4Custom = { ...config, version: 4, harnesses: [{ ...config.harnesses[0], instructions_file: "CLAUDE.md", agents_dir: "droids" }] };
+        assert.equal(parseConfigSource(JSON.stringify(v4Custom)).upgradedFrom, 4);
+        assert.equal(parseConfigSource(JSON.stringify(v4Custom)).config.harnesses[0]!.instructionsFile, "CLAUDE.md");
     });
 });
 
@@ -579,7 +582,7 @@ test("source search combines name, path, body terms and strict Harness filters w
     assert.equal(matchesWorkspaceSource(rule, "REVIEW security", "codex"), true);
     assert.equal(matchesWorkspaceSource(rule, "deep absent"), false);
     assert.equal(matchesWorkspaceSource({ ...rule, targets: [] }, "security", "codex"), false);
-    const agent = { path: ".harness-align/agents/check.md", name: "Inspector", description: "Review helper", body: "Read all callers", harnesses: { codex: {} } };
+    const agent = { path: ".harness-align/agents/check.md", name: "Inspector", description: "Review helper", body: "Read all callers", targets: ["codex"], harnesses: { codex: {} } };
     assert.equal(matchesWorkspaceSource(agent, "inspector callers", "codex"), true);
     assert.equal(matchesWorkspaceSource(agent, "", "cursor"), false);
     assert.equal(matchesWorkspaceSource(agent, "", "toString"), false);
@@ -1208,7 +1211,7 @@ test("new source paths colliding with manually created deployment files always r
         await setup(root, undefined, home);
         const targets = [".codex/agents/worker.toml", ".agents/shared-rules/worker.md", ".agents/skills/demo/worker.md"];
         for (const path of targets) await writeFile(join(home, path), "Hand-written target");
-        await saveAgent(root, { path: ".harness-align/agents/worker.md", name: "worker", description: "Worker", harnesses: { codex: {} }, body: "Generated worker" });
+        await saveAgent(root, { path: ".harness-align/agents/worker.md", name: "worker", description: "Worker", targets: ["codex"], harnesses: { codex: {} }, body: "Generated worker" });
         await saveSharedRule(root, ".harness-align/rules/shared/worker.md", "Generated shared");
         await writeFile(join(root, ".harness-align", "skills", "demo", "worker.md"), "Generated Skill asset");
         const preview = await previewSetup(root, undefined, home);
@@ -1659,7 +1662,7 @@ test("Renderer harness add and removal rebase existing drafts without losing use
     for (const mode of ["add", "remove"] as const) await withProject(async (root) =>
     {
         await saveSharedRule(root, ".harness-align/rules/shared/common.md", "Shared original");
-        await saveAgent(root, { path: ".harness-align/agents/fallback.md", name: "fallback", description: "Fallback", body: "Original fallback", harnesses: { cursor: {} } });
+        await saveAgent(root, { path: ".harness-align/agents/fallback.md", name: "fallback", description: "Fallback", body: "Original fallback", targets: ["cursor"], harnesses: { cursor: {} } });
         await mkdir(join(root, ".harness-align/layers/noop"));
         await writeFile(join(root, ".harness-align/layers/noop/newline.md"), "\n");
         await writeFile(join(root, ".harness-align/layers/noop/whitespace.md"), "---\ntargets: [codex]\n---\n\n \t\r\n");
@@ -1750,8 +1753,9 @@ test("Renderer harness add and removal rebase existing drafts without losing use
             assert.deepEqual(saved.rootRules[0]!.targets, expectedTargets);
             assert.equal(saved.layerOptions.soul![0]!.body, "Draft option\n");
             assert.equal(saved.agents.find((item) => item.name === "explorer")!.body, "Draft agent\n");
+            assert.deepEqual(saved.agents.find((item) => item.name === "explorer")!.targets, expectedTargets);
             assert.deepEqual(saved.agents.find((item) => item.name === "explorer")!.harnesses.cursor, { model: "draft-cursor" });
-            assert.equal(Object.hasOwn(saved.agents.find((item) => item.name === "explorer")!.harnesses, "opencode"), false);
+            assert.deepEqual(saved.agents.find((item) => item.name === "explorer")!.harnesses.opencode, agent.harnesses.opencode);
             assert.equal(saved.agents.find((item) => item.name === "fallback")!.body, "Draft fallback\n");
             assert.equal(saved.config.name, "Draft title");
             assert.equal(Object.hasOwn(saved.agents[0]!.harnesses, name), mode === "add");
@@ -1763,7 +1767,7 @@ test("Renderer harness add and removal rebase existing drafts without losing use
             const created = await loadWorkspace(root);
             assert.deepEqual(created.rootRules.find((item) => item.body === "Unsaved new rule\n")!.targets, mode === "add" ? ["codex", "cursor"] : ["cursor"]);
             assert.deepEqual(created.layerOptions.soul!.find((item) => item.name === "unsaved")!.targets, mode === "add" ? ["codex", "cursor"] : ["cursor"]);
-            assert.deepEqual(Object.keys(created.agents.find((item) => item.name === "unsaved")!.harnesses), mode === "add" ? ["codex", "cursor"] : ["cursor"]);
+            assert.deepEqual(created.agents.find((item) => item.name === "unsaved")!.targets, mode === "add" ? ["codex", "cursor"] : ["cursor"]);
         }
         finally
         {
@@ -2280,7 +2284,7 @@ test("GitHub sync upgrades legacy candidates without mutating raw baselines or c
     });
 });
 
-test("GitHub remote adoption and config restoration persist format 4 and retain the raw local backup", async (t) =>
+test("GitHub remote adoption and config restoration persist format 5 and retain the raw local backup", async (t) =>
 {
     await withProject(async (root) =>
     {
@@ -2391,11 +2395,11 @@ test("GitHub sync rejects unsupported config versions retained in a baseline bef
             await applySync(root, state, input.token, { previewId: first.id, mode: "remote", choices: {} });
             const path = join(state, "github-sync.json");
             const saved = JSON.parse(await readFile(path, "utf8"));
-            saved.base.snapshot.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 5, future_field: true })).toString("base64");
+            saved.base.snapshot.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: CONFIG_VERSION + 1, future_field: true })).toString("base64");
             await writeFile(path, JSON.stringify(saved));
             await connectSync(state, input, "encrypted");
             const before = await snapshot(join(root, ".harness-align"));
-            await assert.rejects(previewSync(root, state, input.token), /newer than supported version 4/u);
+            await assert.rejects(previewSync(root, state, input.token), /newer than supported version 5/u);
             assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
             assert.equal(remote.controls.patchCount, 1);
         }
@@ -3508,7 +3512,7 @@ test("mixed-case names survive editing and generation while folded duplicates re
         await addLayer(root, "CustomLayer");
         await addLayerOption(root, "CustomLayer", "DefaultOption");
         await saveLayerOption(root, { path: ".harness-align/layers/CustomLayer/DefaultOption.md", targets: ["codex"], body: "Mixed case layer." });
-        await saveAgent(root, { path: ".harness-align/agents/MixedAgent.md", name: "MixedAgent", description: "Mixed case agent.", body: "Read evidence.", harnesses: { codex: {} } });
+        await saveAgent(root, { path: ".harness-align/agents/MixedAgent.md", name: "MixedAgent", description: "Mixed case agent.", body: "Read evidence.", targets: ["codex"], harnesses: { codex: {} } });
         const current = await loadConfig(root);
         await updateHarness(root, "codex", { ...current.harnesses[0]!, name: "Codex" });
         const outputs = await generate(root, [{ name: "CustomLayer", option: "DefaultOption" }]);
@@ -4414,7 +4418,7 @@ test("adding a harness initializes every existing membership once without changi
         await addLayerOption(root, "inactive", "off");
         await saveLayerOption(root, { path: ".harness-align/layers/inactive/off.md", targets: ["cursor"], body: "Inactive layer." });
         await addLayerOption(root, "inactive", "empty");
-        await saveAgent(root, { path: ".harness-align/agents/standby.md", name: "standby", description: "Disabled agent", body: "Preserved instructions.", harnesses: {} });
+        await saveAgent(root, { path: ".harness-align/agents/standby.md", name: "standby", description: "Disabled agent", body: "Preserved instructions.", targets: [], harnesses: {} });
         const sharedPath = join(root, ".harness-align/rules/shared/keep.md");
         await mkdir(join(sharedPath, ".."), { recursive: true });
         await writeFile(sharedPath, "Shared original\r\n");
@@ -4436,7 +4440,11 @@ test("adding a harness initializes every existing membership once without changi
         }
         for (const agent of before.agents)
         {
-            assert.deepEqual(added.agents.find((item) => item.path === agent.path), { ...agent, harnesses: { ...agent.harnesses, [harness.name]: {} } });
+            assert.deepEqual(added.agents.find((item) => item.path === agent.path), {
+                ...agent,
+                targets: [...agent.targets, harness.name],
+                harnesses: { ...agent.harnesses, [harness.name]: {} },
+            });
         }
         assert.deepEqual(await readFile(sharedPath), shared);
         await assert.rejects(readFile(join(root, ".harness-align/generated/.manifest.json")), /ENOENT/u);
@@ -4451,18 +4459,19 @@ test("adding a harness initializes every existing membership once without changi
         const agent = added.agents.find((item) => item.name === "standby")!;
         await saveRule(root, { ...rule, targets: rule.targets.filter((name) => name !== harness.name) });
         await saveLayerOption(root, { ...option, targets: option.targets.filter((name) => name !== harness.name) });
-        await saveAgent(root, { ...agent, harnesses: {} });
+        await saveAgent(root, { ...agent, targets: [], harnesses: {} });
         await updateHarness(root, harness.name, { ...harness, instructionsFile: "RULES.md" });
         const updated = await loadWorkspace(root);
         assert.equal(updated.rootRules.find((item) => item.path === rule.path)!.targets.includes(harness.name), false);
         assert.equal(updated.layerOptions.soul!.find((item) => item.name === option.name)!.targets.includes(harness.name), false);
+        assert.deepEqual(updated.agents.find((item) => item.path === agent.path)!.targets, []);
         assert.deepEqual(updated.agents.find((item) => item.path === agent.path)!.harnesses, {});
         await removeHarness(root, harness.name);
         await addHarness(root, harness);
         const readded = await loadWorkspace(root);
         assert.equal(readded.rootRules.every((item) => item.targets.includes(harness.name)), true);
         assert.equal(Object.values(readded.layerOptions).flat().every((item) => item.targets.includes(harness.name)), true);
-        assert.equal(readded.agents.every((item) => Object.hasOwn(item.harnesses, harness.name)), true);
+        assert.equal(readded.agents.every((item) => item.targets.includes(harness.name) && Object.hasOwn(item.harnesses, harness.name)), true);
         assert.deepEqual(readded.config.layers, before.config.layers);
         assert.deepEqual(await readFile(sharedPath), shared);
     });
@@ -4479,13 +4488,15 @@ test("removing the last harness retains disabled agent sources and empty members
         assert.deepEqual(disabled.config.layers, before.config.layers);
         assert.equal(disabled.rootRules.every((rule) => rule.targets.length === 0), true);
         assert.equal(Object.values(disabled.layerOptions).flat().every((option) => option.targets.length === 0), true);
-        assert.deepEqual(disabled.agents, before.agents.map((agent) => ({ ...agent, harnesses: {} })));
+        assert.deepEqual(disabled.agents, before.agents.map((agent) => ({ ...agent, targets: [], harnesses: {} })));
+        assert.match(await readFile(join(root, disabled.agents[0]!.path), "utf8"), /targets: \[\]/u);
         assert.match(await readFile(join(root, disabled.agents[0]!.path), "utf8"), /harnesses: \{\}/u);
         assert.deepEqual([...await buildOutputs(root)].map(([path]) => path), [".manifest.json"]);
         await validateSyncSources(await readSyncSnapshot(root));
         await saveAgent(root, { ...disabled.agents[0]!, body: "Edited while disabled." });
         assert.equal((await loadWorkspace(root)).agents[0]!.body, "Edited while disabled.\n");
         await addHarness(root, { name: "NewTool", configPath: ".new-tool", agentFormat: "yaml", agentExtension: "md" });
+        assert.deepEqual((await loadWorkspace(root)).agents[0]!.targets, ["NewTool"]);
         assert.deepEqual((await loadWorkspace(root)).agents[0]!.harnesses, { NewTool: {} });
         assert.match(output(await buildOutputs(root), "NewTool/agents/explorer.md"), /Edited while disabled/u);
     });
@@ -4500,13 +4511,32 @@ test("saving a disabled agent waits for legacy configuration persistence rather 
         const original = Buffer.from(`${JSON.stringify({ ...config, version })}\r\n`);
         await writeFile(path, original);
         const before = await snapshot(join(root, ".harness-align"));
-        await assert.rejects(saveAgent(root, { ...agent, harnesses: {} }), /empty harnesses requires configuration version/u);
+        await assert.rejects(saveAgent(root, { ...agent, targets: [], harnesses: {} }), /empty harnesses requires configuration version/u);
         assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
         const backup = await upgradeWorkspaceConfig(root);
         assert.ok(backup);
         assert.deepEqual(await readFile(backup), original);
-        await saveAgent(root, { ...agent, harnesses: {} });
+        await saveAgent(root, { ...agent, targets: [], harnesses: {} });
+        assert.deepEqual((await loadWorkspace(root)).agents[0]!.targets, []);
         assert.deepEqual((await loadWorkspace(root)).agents[0]!.harnesses, {});
+        assert.equal(JSON.parse(await readFile(path, "utf8")).version, CONFIG_VERSION);
+    });
+    await withProject(async (root) =>
+    {
+        const agent = (await loadWorkspace(root)).agents[0]!;
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(`${JSON.stringify({ ...config, version: 4 })}\r\n`);
+        await writeFile(path, original);
+        const before = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(saveAgent(root, { ...agent, targets: [] }), /requires configuration version 5/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+        const backup = await upgradeWorkspaceConfig(root);
+        assert.ok(backup);
+        assert.deepEqual(await readFile(backup), original);
+        await saveAgent(root, { ...agent, targets: [] });
+        const saved = (await loadWorkspace(root)).agents[0]!;
+        assert.deepEqual(saved.targets, []);
+        assert.deepEqual(saved.harnesses, agent.harnesses);
         assert.equal(JSON.parse(await readFile(path, "utf8")).version, CONFIG_VERSION);
     });
 });
@@ -4600,6 +4630,7 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
             path: ".harness-align/agents/explorer.md",
             name: "explorer",
             description: "Read only.",
+            targets: [...renamed.agents[0]!.targets, "nova"],
             harnesses: {
                 ...renamed.agents[0]!.harnesses,
                 nova: { model: "test-nova" },
@@ -5802,7 +5833,7 @@ test("Zod upgrade preserves IPC transforms, strict records and sync validation",
     assert.deepEqual(SYNC_CONNECTION_SCHEMA.parse(connection), connection);
     assert.equal(SYNC_CONNECTION_SCHEMA.safeParse({ ...connection, token: "test token" }).success, false);
     assert.equal(SYNC_CONNECTION_SCHEMA.safeParse({ ...connection, token: "x".repeat(1025) }).success, false);
-    const metadata = { path: "agent.md", name: "agent", description: "Agent", body: "", harnesses: { codex: { name: null, enabled: false, limit: 0, tags: ["one"] } } };
+    const metadata = { path: "agent.md", name: "agent", description: "Agent", body: "", targets: ["codex"], harnesses: { codex: { name: null, enabled: false, limit: 0, tags: ["one"] } } };
     assert.deepEqual(AGENT_SCHEMA.parse(metadata), metadata);
 });
 
@@ -5974,12 +6005,19 @@ test("prototype-named harnesses initialize own metadata and still require an exp
         await addHarness(root, { name: "constructor", configPath: ".constructor", agentFormat: "yaml", agentExtension: "md" });
         const agent = (await loadWorkspace(root)).agents[0]!;
         assert.equal(Object.hasOwn(agent.harnesses, "constructor"), true);
+        assert.equal(agent.targets.includes("constructor"), true);
         assert.deepEqual(agent.harnesses.constructor, {});
-        const disabled = { ...agent.harnesses };
-        Reflect.deleteProperty(disabled, "constructor");
-        await saveAgent(root, { ...agent, harnesses: disabled });
+        await saveAgent(root, {
+            ...agent,
+            targets: agent.targets.filter((target) => target !== "constructor"),
+            harnesses: { ...agent.harnesses, constructor: { enabled: true } },
+        });
         assert.equal((await buildOutputs(root)).has("constructor/agents/explorer.md"), false);
-        await saveAgent(root, { ...agent, harnesses: { ...agent.harnesses, constructor: { enabled: true } } });
+        await saveAgent(root, {
+            ...agent,
+            targets: [...agent.targets],
+            harnesses: { ...agent.harnesses, constructor: { enabled: true } },
+        });
         assert.match(output(await buildOutputs(root), "constructor/agents/explorer.md"), /enabled: true/u);
         const directory = join(root, ".harness-align", "skills", "constructor");
         await mkdir(directory, { recursive: true });
@@ -7422,5 +7460,141 @@ test("sync refuses unrecovered local state before preview, replanning or remote 
             assert.equal(await readFile(path, "utf8"), "unrecovered operation");
             await unlink(path);
         }
+    });
+});
+
+test("subagent targets separate enablement from retained per-harness metadata and upgrade cleanly from v4", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const configPath = join(root, ".harness-align/config.json");
+        const legacyAgentPath = join(root, ".harness-align/agents/explorer.md");
+        const legacyAgentBytes = Buffer.from("---\nname: explorer\ndescription: Read only.\nharnesses:\n  codex:\n    model: o3\n---\n\nRead evidence.\n", "utf8");
+        await writeFile(configPath, JSON.stringify({ ...config, version: 4 }));
+        await writeFile(legacyAgentPath, legacyAgentBytes);
+
+        const loadedLegacy = await loadWorkspace(root);
+        assert.deepEqual(loadedLegacy.agents[0]!.targets, ["codex"]);
+        assert.deepEqual(loadedLegacy.agents[0]!.harnesses, { codex: { model: "o3" } });
+        const backup = await upgradeWorkspaceConfig(root);
+        assert.ok(backup?.includes(".config-backup-v4-"));
+        assert.deepEqual(await readFile(legacyAgentPath), legacyAgentBytes);
+
+        await saveAgent(root, {
+            ...loadedLegacy.agents[0]!,
+            targets: ["codex"],
+            harnesses: {
+                codex: { model: "o3" },
+                cursor: { mode: "subagent", readonly: true },
+            },
+        });
+        const disabledCursor = await loadWorkspace(root);
+        assert.deepEqual(disabledCursor.agents[0]!.targets, ["codex"]);
+        assert.deepEqual(disabledCursor.agents[0]!.harnesses.cursor, { mode: "subagent", readonly: true });
+        const outputsWithoutCursor = await buildOutputs(root);
+        assert.equal(outputsWithoutCursor.has("codex/agents/explorer.toml"), true);
+        assert.equal(outputsWithoutCursor.has("cursor/agents/explorer.md"), false);
+        assert.equal(matchesWorkspaceSource(disabledCursor.agents[0]!, "", "cursor"), false);
+        const asDto = (workspace: Awaited<ReturnType<typeof loadWorkspace>>): Workspace => ({
+            ...workspace,
+            generatedFiles: [],
+            generationStatus: { state: "missing", changes: [] },
+            deploymentStatus: { state: "pending", changes: [] },
+            harnessRoots: [],
+        });
+        assert.equal(harnessEffects(asDto(disabledCursor), "cursor", [{ name: "soul", option: "arona" }]).find((item) => item.kind === "Agent")?.active, false);
+
+        await updateHarness(root, "cursor", { name: "atlas", configPath: ".atlas", agentFormat: "yaml", agentExtension: "md" });
+        const renamed = await loadWorkspace(root);
+        assert.deepEqual(renamed.agents[0]!.targets, ["codex"]);
+        assert.deepEqual(renamed.agents[0]!.harnesses.atlas, { mode: "subagent", readonly: true });
+        assert.equal(renamed.agents[0]!.harnesses.cursor, undefined);
+
+        await addHarness(root, { name: "nova", configPath: ".nova", agentFormat: "yaml", agentExtension: "md" });
+        const added = await loadWorkspace(root);
+        assert.deepEqual(added.agents[0]!.targets, ["codex", "nova"]);
+        assert.deepEqual(added.agents[0]!.harnesses.atlas, { mode: "subagent", readonly: true });
+
+        const { persistEditorSnapshot } = await loadRendererTasks();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+            saveAgent: (input: Parameters<typeof saveAgent>[1], guard: Parameters<typeof saveAgent>[2]) => saveAgent(root, input, guard),
+        } } } });
+        try
+        {
+            await persistEditorSnapshot(asDto(added), { kind: "agent", path: ".harness-align/agents/explorer.md" }, {
+                name: ["explorer"],
+                description: ["Read only."],
+                enabledHarnesses: ["atlas"],
+                "meta-codex": ["model: o3"],
+                "meta-atlas": ["mode: subagent\nreadonly: true"],
+                "meta-nova": ["retries: 2"],
+                body: ["Read evidence."],
+            });
+        }
+        finally
+        {
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else delete (globalThis as { window?: unknown }).window;
+        }
+
+        const reenabled = await loadWorkspace(root);
+        assert.deepEqual(reenabled.agents[0]!.targets, ["atlas"]);
+        assert.deepEqual(reenabled.agents[0]!.harnesses, {
+            codex: { model: "o3" },
+            atlas: { mode: "subagent", readonly: true },
+            nova: { retries: 2 },
+        });
+        const outputsWithAtlas = await buildOutputs(root);
+        assert.equal(outputsWithAtlas.has("codex/agents/explorer.toml"), false);
+        assert.equal(outputsWithAtlas.has("nova/agents/explorer.md"), false);
+        assert.match(output(outputsWithAtlas, "atlas/agents/explorer.md"), /mode: subagent/u);
+    });
+});
+
+test("editor snapshot saves under deferred v4 config omit empty disabled harness metadata", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await writeFile(join(root, ".harness-align/config.json"), JSON.stringify({ ...config, version: 4 }));
+        const legacyAgentPath = join(root, ".harness-align/agents/explorer.md");
+        await writeFile(legacyAgentPath, "---\nname: explorer\ndescription: Read only.\nharnesses:\n  codex:\n    model: o3\n---\n\nRead evidence.\n", "utf8");
+
+        const loaded = await loadWorkspace(root);
+        const { persistEditorSnapshot } = await loadRendererTasks();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+            saveAgent: (input: Parameters<typeof saveAgent>[1], guard: Parameters<typeof saveAgent>[2]) => saveAgent(root, input, guard),
+        } } } });
+        try
+        {
+            const dto: Workspace = {
+                ...loaded,
+                generatedFiles: [],
+                generationStatus: { state: "missing", changes: [] },
+                deploymentStatus: { state: "pending", changes: [] },
+                harnessRoots: [],
+            };
+            await persistEditorSnapshot(dto, { kind: "agent", path: ".harness-align/agents/explorer.md" }, {
+                name: ["explorer"],
+                description: ["Read only."],
+                enabledHarnesses: ["codex"],
+                "meta-codex": ["model: o3"],
+                "meta-cursor": [""],
+                "meta-opencode": [""],
+                body: ["Updated body under v4."],
+            });
+        }
+        finally
+        {
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else delete (globalThis as { window?: unknown }).window;
+        }
+
+        const savedText = await readFile(legacyAgentPath, "utf8");
+        assert.doesNotMatch(savedText, /^targets:/mu);
+        assert.doesNotMatch(savedText, /cursor:|opencode:/u);
+        assert.deepEqual((await loadWorkspace(root)).agents[0]!.harnesses, { codex: { model: "o3" } });
+        assert.equal((await loadWorkspace(root)).agents[0]!.body, "Updated body under v4.\n");
     });
 });

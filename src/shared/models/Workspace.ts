@@ -6,7 +6,7 @@
 import type { FileSyncState } from "./Sync.js";
 
 /** Current configuration format accepted by editor writes; kept in step with the engine. */
-export const CONFIG_VERSION = 4;
+export const CONFIG_VERSION = 5;
 
 /** Subagent metadata format declared by a harness. */
 export type AgentFormat = "toml" | "yaml";
@@ -158,6 +158,7 @@ export interface Agent
     path: string;
     name: string;
     description: string;
+    targets: string[];
     harnesses: Record<string, Metadata>;
     body: string;
 }

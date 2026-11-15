@@ -97,6 +97,7 @@ export const LAYER_OPTION_INPUT_SCHEMA = z.strictObject({ path: z.string(), targ
 /** Agent write shape retaining arbitrary per-harness metadata keys. */
 export const AGENT_SCHEMA = z.strictObject({
     path: z.string(), name: z.string(), description: z.string(), body: z.string(),
+    targets: z.array(z.string()),
     harnesses: z.record(z.string(), z.record(z.string(), z.unknown())),
 });
 

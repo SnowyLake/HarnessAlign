@@ -71,7 +71,7 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 | \`rules/**/*.md\` (排除 \`shared/\`) | 组成助手全局提示词的规则片段. YAML frontmatter 指定非负整数 \`priority\` 和 \`targets\`, Markdown 正文是实际规则. | 可以. |
 | \`rules/shared/**/*.md\` | 供规则按需引用的独立共享文档, 不拼入助手全局提示词. | 可以. |
 | \`layers/<layer>/<option>.md\` | 可切换的规则片段. config.json 的 \`layers\` 决定组顺序, \`selected\` 决定每组采用哪个选项; frontmatter 仅支持 \`targets\`. | 可以. |
-| \`agents/*.md\` | 子代理 (Subagent) 配置源. YAML frontmatter 保存 \`name\`, \`description\`, \`harnesses\` 下各助手的原生 metadata; Markdown 正文保存共享的子代理指令. | 可以. |
+| \`agents/*.md\` | 子代理 (Subagent) 配置源. YAML frontmatter 保存 \`name\`, \`description\`, 启用的目标列表 \`targets\` 和 \`harnesses\` 下各助手的原生 metadata; Markdown 正文保存共享的子代理指令. | 可以. |
 | \`.file-sync.json\` | 额外实际文件的路径登记、停止决定及待处理旧版修改. | 不可以; 使用应用管理, 在助手或外部编辑器修改实际文件. |
 | \`skills/<id>/SKILL.md\` 及同目录资源 | 可复用技能的说明, 脚本和参考资料. | 本地或无来源记录的 Skill 可以; GitHub 来源的 Skill 不直接修改. |
 | \`skills/index.json\` | 应用维护的 Skill 来源记录, 可读取对应 id 的 \`origin\` 判断来源. | 不可以, 不手改来源或哈希. |
@@ -85,16 +85,16 @@ const WORKSPACE_GUIDE = `${WORKSPACE_GUIDE_MARKER}
 ## 生成与部署关系
 
 - 规则文档: 根 Rules 按 \`priority\` 升序排列, 同优先级按路径排序, 再追加按配置顺序选中的 Layer 正文; 各片段按 \`targets\` 筛选后拼成 \`generated/<harness>/<instructions_file>\`.
-- 子代理配置: \`agents/*.md\` 按其 \`harnesses\` 键选择输出助手, 将共享指令和对应 metadata 转成该助手要求的 TOML 或 YAML frontmatter + Markdown 文件, 写入 \`generated/<harness>/<agents_dir>/\`. \`harnesses: {}\` 保留源文件但不输出 Agent.
+- 子代理配置: \`agents/*.md\` 按 \`targets\` 筛选输出助手, 读取 \`harnesses\` 中对应助手的 metadata (未启用但保留的助手配置不会输出, 缺省时视为 \`{}\`), 将共享指令和 metadata 转成该助手要求的 TOML 或 YAML frontmatter + Markdown 文件, 写入 \`generated/<harness>/<agents_dir>/\`. \`targets: []\` 保留源文件和已保存的 metadata 但不输出 Agent. (为兼容旧源文件, 省略 \`targets\` 时按 \`harnesses\` 键列表解释.)
 - 部署: \`instructions_file\` 和 \`agents_dir\` 是相对 \`config_path\` 的安全路径, 省略时分别为 \`AGENTS.md\` 和 \`agents\`. 子代理目录保留未受管内容, 仅清理此前生成而本次已移除的文件. 修改输出路径不会删除旧部署文件. 共享规则复制到 \`~/.agents/shared-rules/\`, Skills 按 id 复制到 \`~/.agents/skills/\`.
 - 额外文件: 通过 Sync 直接比较助手目录中的实际文件与 GitHub 并应用确认结果, 不参与 Generate / Setup. 旧保存副本迁移保留原始备份和未应用修改供审阅. Stop syncing 保留实际文件; Harness 或父目录缺失时保留待应用状态.
 
 ## 修改方式
 
 - 按上表的可编辑范围修改配置源, 先读 \`config.json\` 和现有同类文件, 保持现有格式及 UTF-8 without BOM, LF. 标为不可修改的文件也不手工创建, 删除或重命名. 需要定制 GitHub Skill 时, 使用新 id 建立本地 Skill, 保留原来源记录.
-- Rule / Layer 的 \`targets\` 必须显式列出目标 Harness 名称, 省略或空数组均不生效. 名称引用大小写须一致; 重命名时更新相关 \`targets\`, 子代理 \`harnesses\` 键和 Layer 选择.
-- GUI 显式创建 Harness 时, 首次保存会为全部已有根 Rule、Layer Option 和 Agent 添加关联; 不改变全局 Layer 选择, 不复制其他助手的 metadata. 普通保存、加载、升级和同步不重新开启已关闭关联. 删除 Harness 清理关联, 无目标的 Agent 保留正文.
-- 配置版本独立于应用版本. Layer 格式 v1 和 v3 在完整校验后自动升级到 v${CONFIG_VERSION}, 保留当前字段含义并备份原始配置; 待确认同步上传先恢复, 再升级. 历史 Profile v2 和未来格式不会自动转换, 不通过手改版本号绕过校验.
+- Rule / Layer / Agent 的 \`targets\` 必须显式列出目标 Harness 名称, 省略 Rule / Layer 的 \`targets\` 或空数组均不生效. 名称引用大小写须一致; 重命名时更新相关 \`targets\`, 子代理 \`harnesses\` 键和 Layer 选择.
+- GUI 显式创建 Harness 时, 首次保存会为全部已有根 Rule、Layer Option 和 Agent 添加关联; 不改变全局 Layer 选择, 不复制其他助手的 metadata. 普通保存、加载、升级和同步不重新开启已关闭关联. 删除 Harness 清理关联, 无目标的 Agent 保留正文和已保存的 metadata.
+- 配置版本独立于应用版本. Layer 格式 v1, v3 和 v4 在完整校验后自动升级到 v${CONFIG_VERSION}, 保留当前字段含义并备份原始配置; 待确认同步上传先恢复, 再升级. 历史 Profile v2 和未来格式不会自动转换, 不通过手改版本号绕过校验.
 - 配置源修改不会立即改变助手已部署的配置. 完成后说明改了哪些源文件及影响, 由用户通过 Harness Align 的 Generate / Setup 生成和部署; 不要求当前 Agent 操作 GUI. 此目录没有 CLI 或 npm 项目.
 
 详细格式与约束见 [Harness Align 项目 README](https://github.com/SnowyLake/HarnessAlign#readme), 必要时查阅仓库 \`src/engine/\` 源码.
@@ -617,6 +617,7 @@ function assertAgentInput(agent: Agent, harnesses: HarnessConfig[]): void
     {
         throw new HalignError(`${agent.path}: description must be a non-empty string, got ${valueText(agent.description)}`);
     }
+    validateTargets(agent.targets, agent.path, harnesses);
     validateAgentHarnesses(agent.harnesses, agent.path, harnesses);
 }
 
@@ -1074,19 +1075,28 @@ export async function saveAgent(rootPath: string, agent: Agent, guard?: SourceGu
     const path = managedRelative(agent.path, agent.path);
     const next: Agent = { ...agent, path, body: normalizedBody(agent.body) };
     assertAgentInput(next, config.harnesses);
-    if (Object.keys(next.harnesses).length === 0 && source.upgradedFrom !== undefined)
+    const sameTargets = next.targets.length === Object.keys(next.harnesses).length
+        && next.targets.every((target) => Object.hasOwn(next.harnesses, target));
+    if (source.upgradedFrom !== undefined)
     {
-        throw new HalignError(`${path}: empty harnesses requires configuration version ${CONFIG_VERSION}, got ${source.upgradedFrom}; ` +
-                              "upgrade .harness-align/config.json first and resume any pending GitHub sync before disabling all harnesses");
+        if (source.upgradedFrom !== 4 && (next.targets.length === 0 || Object.keys(next.harnesses).length === 0))
+        {
+            throw new HalignError(`${path}: empty harnesses requires configuration version ${CONFIG_VERSION}, got ${source.upgradedFrom}; ` +
+                                  "upgrade .harness-align/config.json first and resume any pending GitHub sync before disabling all harnesses");
+        }
+        if (!sameTargets)
+        {
+            throw new HalignError(`${path}: preserving disabled harness metadata requires configuration version ${CONFIG_VERSION}, got ${source.upgradedFrom}; ` +
+                                  "upgrade .harness-align/config.json first and resume any pending GitHub sync before separating targets from harnesses");
+        }
     }
     const agents = await loadAgents(root, config.harnesses);
     const collision = agents.find((candidate) => candidate.name.toLowerCase() === next.name.toLowerCase() && pathKey(join(root, candidate.path)) !== pathKey(join(root, path)) && candidate.path !== guard?.path);
     if (collision) throw new HalignError(`${path}: name must be unique without case sensitivity, got ${valueText(next.name)} already used by ${collision.path}`);
-    await writeEditedSource(root, path, serializeFrontmatter({
-        name: next.name,
-        description: next.description,
-        harnesses: next.harnesses,
-    }, next.body, path), guard);
+    const frontmatter = source.upgradedFrom === undefined
+        ? { name: next.name, description: next.description, targets: next.targets, harnesses: next.harnesses }
+        : { name: next.name, description: next.description, harnesses: next.harnesses };
+    await writeEditedSource(root, path, serializeFrontmatter(frontmatter, next.body, path), guard);
 }
 
 /** Delete a `.harness-align` source file after containment and reparse checks. */
@@ -1298,11 +1308,15 @@ function harnessReferenceWrites(workspace: Workspace, config: Config, name: Harn
     }
     for (const agent of workspace.agents)
     {
+        const targets = changeTargets(agent.targets);
         const harnesses = { ...agent.harnesses };
-        if (action === "add") harnesses[name] = {};
+        if (action === "add")
+        {
+            if (!Object.hasOwn(harnesses, name)) harnesses[name] = {};
+        }
         else delete harnesses[name];
-        assertAgentInput({ ...agent, harnesses }, config.harnesses);
-        writes.push({ path: agent.path, content: serializeFrontmatter({ name: agent.name, description: agent.description, harnesses }, agent.body, agent.path) });
+        assertAgentInput({ ...agent, targets, harnesses }, config.harnesses);
+        writes.push({ path: agent.path, content: serializeFrontmatter({ name: agent.name, description: agent.description, targets, harnesses }, agent.body, agent.path) });
     }
     return writes.map((write) => ({ ...write, expectedRevision: workspace.sourceRevisions[write.path]! }));
 }
@@ -1341,7 +1355,7 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
         {
             harnesses[name === from ? harness.name : name] = metadata;
         }
-        return { ...agent, harnesses };
+        return { ...agent, targets: replaceHarnessName(agent.targets, from, harness.name), harnesses };
     });
     const writes: Array<{ path: string; content: Buffer }> = [{
         path: ".harness-align/config.json",
@@ -1364,7 +1378,7 @@ export async function updateHarness(rootPath: string, from: string, harness: Har
         {
             writes.push({
                 path: agent.path,
-                content: serializeFrontmatter({ name: agent.name, description: agent.description, harnesses: agent.harnesses }, agent.body, agent.path),
+                content: serializeFrontmatter({ name: agent.name, description: agent.description, targets: agent.targets, harnesses: agent.harnesses }, agent.body, agent.path),
             });
         }
     }

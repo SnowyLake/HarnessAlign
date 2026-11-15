@@ -253,7 +253,7 @@ export function validateConfig(value: unknown): Config
         {
             throw new HalignError(`${path}: version ${value.version} is newer than supported version ${CONFIG_VERSION}; update Harness Align before opening this configuration`);
         }
-        throw new HalignError(`${path}: version must be integer ${CONFIG_VERSION}, got ${valueText(value.version)}; source reading also supports Layer format versions 1 and 3`);
+        throw new HalignError(`${path}: version must be integer ${CONFIG_VERSION}, got ${valueText(value.version)}; source reading also supports Layer format versions 1, 3, and 4`);
     }
     const knownFields = new Set(["version", "name", "layers", "harnesses", "skill_sources"]);
     const unknownFields = Object.keys(value).filter((field) => !knownFields.has(field));
@@ -388,7 +388,7 @@ export function validateConfig(value: unknown): Config
 }
 
 /** Parse supported source formats without writing, preserving omitted fields during upgrades. */
-export function parseConfigSource(content: string | Uint8Array): { config: Config; upgradedText?: string; upgradedFrom?: 1 | 3 }
+export function parseConfigSource(content: string | Uint8Array): { config: Config; upgradedText?: string; upgradedFrom?: 1 | 3 | 4 }
 {
     let parsed: unknown;
     try
@@ -400,14 +400,14 @@ export function parseConfigSource(content: string | Uint8Array): { config: Confi
         if (error instanceof HalignError) throw error;
         throw new HalignError(`.harness-align/config.json: invalid JSON or UTF-8: ${errorText(error)}`);
     }
-    if (isRecord(parsed) && (parsed.version === 1 || parsed.version === 3))
+    if (isRecord(parsed) && (parsed.version === 1 || parsed.version === 3 || parsed.version === 4))
     {
-        if (Array.isArray(parsed.harnesses)) for (const [index, harness] of parsed.harnesses.entries())
+        if ((parsed.version === 1 || parsed.version === 3) && Array.isArray(parsed.harnesses)) for (const [index, harness] of parsed.harnesses.entries())
         {
             if (!isRecord(harness)) continue;
             for (const field of ["instructions_file", "agents_dir"]) if (Object.hasOwn(harness, field))
             {
-                throw new HalignError(`.harness-align/config.json: harnesses[${index}]: ${field} requires configuration version ${CONFIG_VERSION}, got ${parsed.version}`);
+                throw new HalignError(`.harness-align/config.json: harnesses[${index}]: ${field} requires configuration version 4 or later, got ${parsed.version}`);
             }
         }
         const document = { ...parsed, version: CONFIG_VERSION };
@@ -417,7 +417,7 @@ export function parseConfigSource(content: string | Uint8Array): { config: Confi
 }
 
 /** Read and validate configuration source while identifying whether persistence needs an upgrade. */
-export async function loadConfigSource(root: string): Promise<{ config: Config; upgradedText?: string; upgradedFrom?: 1 | 3 }>
+export async function loadConfigSource(root: string): Promise<{ config: Config; upgradedText?: string; upgradedFrom?: 1 | 3 | 4 }>
 {
     const path = join(root, ".harness-align", "config.json");
     await ensureRegularSource(root, path);
@@ -599,7 +599,7 @@ export async function loadAgents(root: string, configuredHarnesses: HarnessConfi
         const [metadata, body] = await parseFrontmatter(root, sourcePath);
         const unknown = Object.keys(metadata).filter((field) => !AGENT_FIELDS.has(field));
         if (unknown.length > 0) throw new HalignError(`${path}: unknown agent field ${valueText(firstSorted(unknown))}`);
-        for (const field of AGENT_FIELDS)
+        for (const field of ["name", "description", "harnesses"])
         {
             if (!Object.hasOwn(metadata, field)) throw new HalignError(`${path}: ${field} is required`);
         }
@@ -614,7 +614,8 @@ export async function loadAgents(root: string, configuredHarnesses: HarnessConfi
         names.set(foldedName, name);
         const description = validateString(path, "description", metadata.description);
         const harnesses = validateAgentHarnesses(metadata.harnesses, path, configuredHarnesses);
-        agents.push({ path, name, description, harnesses, body: normalizedBody(body) });
+        const targets = Object.hasOwn(metadata, "targets") ? validateTargets(metadata.targets, path, configuredHarnesses) : Object.keys(harnesses);
+        agents.push({ path, name, description, targets, harnesses, body: normalizedBody(body) });
     }
     return agents;
 }

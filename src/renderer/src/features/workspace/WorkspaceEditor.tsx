@@ -657,7 +657,8 @@ function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessCha
                             items={workspace.config.harnesses.map((harness) =>
                             {
                                 const metadataField = `meta-${harness.name}`;
-                                const metadataText = editor.draft?.current[metadataField]?.[0] ?? formatAgentMetadata(existing?.harnesses[harness.name] ?? {});
+                                const metadataText = editor.draft?.current[metadataField]?.[0]
+                                    ?? formatAgentMetadata(existing && Object.hasOwn(existing.harnesses, harness.name) ? existing.harnesses[harness.name]! : {});
                                 const isOpenCode = harness.name.toLowerCase() === "opencode";
                                 const metadata = isOpenCode ? tryParseAgentMetadata(metadataText) : undefined;
                                 return {
@@ -667,7 +668,7 @@ function AgentForm({ workspace, selection, metadataHarness, onMetadataHarnessCha
                                     children: (<Space orientation="vertical" size="middle" className="full-width">
                                         <Space size="middle">
                                             <Checkbox.Group name="enabledHarnesses" options={[{ label: `Enable for ${harness.name}`, value: harness.name }]}
-                                                defaultValue={draftValues(editor.draft, "enabledHarnesses", existing ? Object.keys(existing.harnesses) : workspace.config.harnesses.map((item) => item.name)) ?? []} />
+                                                defaultValue={draftValues(editor.draft, "enabledHarnesses", existing ? existing.targets : workspace.config.harnesses.map((item) => item.name)) ?? []} />
                                             {isOpenCode ? (
                                                 <Checkbox
                                                     checked={metadata?.name !== null}

@@ -57,7 +57,7 @@
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "name": "AGENTS",
   "layers": [
     {
@@ -103,7 +103,7 @@
 
 | 字段 | 约束与用途 |
 | --- | --- |
-| `name` | 匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`, 忽略大小写后唯一. 用于 Rule `targets`, Agent `harnesses` 键和生成目录名 |
+| `name` | 匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`, 忽略大小写后唯一. 用于 Rule / Layer / Agent `targets`, Agent `harnesses` 键和生成目录名 |
 | `config_path` | 相对于 `%USERPROFILE%` 的部署目录. 使用 `/`, 不允许绝对路径或 `..` |
 | `instructions_file` | 可选, 默认 `AGENTS.md`. 相对 `config_path` 的规则输出文件路径, 可以包含嵌套目录 |
 | `agents_dir` | 可选, 默认 `agents`. 相对 `config_path` 的 Subagent 输出目录, 可以包含嵌套目录 |
@@ -161,19 +161,19 @@ Devin 预设只针对本机 Devin CLI, 不覆盖云端 Devin. 其自定义子代
 
 `config.version` 表示整套用户配置源的格式与解释规则, 与应用的 SemVer 独立. 应用更新但配置协议不变时, 配置版本不变. 配置源结构, 必填要求或已有字段含义发生不兼容变化时才递增; 新写出的可选字段也要检查旧应用能否正确读取和无损保存. 同步存档, 生成 manifest 和恢复记录分别管理自身版本, 不跟随配置版本改号.
 
-当前应用新建和保存配置都使用 v4, 兼容读取现行 Layer 格式的 v1 和 v3. 访问工作区时先完成中断操作的恢复, 完整验证配置源, 再自动持久升级. 读取函数和内存预览本身不写文件. 已是 v4 时保持配置的原始字节, 不重复备份或改写.
+当前应用新建和保存配置都使用 v5, 兼容读取现行 Layer 格式的 v1, v3 和 v4. 访问工作区时先完成中断操作的恢复, 完整验证配置源, 再自动持久升级. 读取函数和内存预览本身不写文件. 已是 v5 时保持配置的原始字节, 不重复备份或改写.
 
-v1 和 v3 不接受 `instructions_file` 或 `agents_dir`; 在旧版本文件中写入这两个字段会在校验时被拒绝, 需要配置版本为 v4. 升级只更新原始配置对象中的 `version`, 保留其他字段, 省略状态, Layer 顺序和源文件内容. 缺失或空 `targets` 继续表示不对任何 Harness 生效, 不推测开发期曾使用的默认行为. 格式升级可能调整 `config.json` 的缩进与换行, 原始字节保存在 `.harness-align/.config-backup-v<原版本>-<sha256>.json`, 例如 v1 或 v3 备份. 备份保留在本机, 不参与生成, 部署或 GitHub 同步. 写回复用 `.edit-recovery.json` 的中断恢复和外部修改保护.
+v1 和 v3 不接受 `instructions_file` 或 `agents_dir`; 在 v1 / v3 文件中写入这两个字段会在校验时被拒绝, 需要配置版本为 v4 及以上. 升级只更新原始配置对象中的 `version`, 保留其他字段, 省略状态, Layer 顺序和源文件内容. 缺失或空 Rule / Layer `targets` 继续表示不对任何 Harness 生效, 不推测开发期曾使用的默认行为; 省略 `targets` 的旧版 Subagent 源文件读取时默认按 `harnesses` 键列表解释并保持原文件不变. 格式升级可能调整 `config.json` 的缩进与换行, 原始字节保存在 `.harness-align/.config-backup-v<原版本>-<sha256>.json`, 例如 v1, v3 或 v4 备份. 备份保留在本机, 不参与生成, 部署或 GitHub 同步. 写回复用 `.edit-recovery.json` 的中断恢复和外部修改保护.
 
 存在待确认 GitHub 上传, 或本机同步状态无法安全读取时, 自动持久升级会延迟, Console 显示原因. 待确认上传先按原始内容恢复, 再升级; 处理方法见[失败与中断恢复](github-sync.md#失败与中断恢复). 升级成功会在 Console 显示结果和原始配置备份的文件名, 不自动 Generate, Setup 或上传远端.
 
-延迟期间仍按当前模型读取配置. 主动保存配置或级联更新 Harness 等操作会使用 v4, 同样保留原始配置备份; 这些主动修改在后续同步中按真实本地变化审阅.
+延迟期间仍按当前模型读取配置. 主动保存配置或级联更新 Harness 等操作会使用 v5, 同样保留原始配置备份; 这些主动修改在后续同步中按真实本地变化审阅.
 
-v4 还允许 Agent 使用 `harnesses: {}` 表示全部停用. 磁盘配置仍为 v1 / v3 时, 单独保存这一新状态会被拒绝, 需先升级配置并处理待确认同步.
+v5 新增 Subagent 的独立启用列表 `targets`, 停用 Harness 时会在 `harnesses` 中保留其 metadata 而不被清空. 磁盘配置仍为 v1 / v3 / v4 且升级被延迟时, 单独保存停用但保留 metadata 的状态 (以及 v1 / v3 下的空 Agent map) 会被拒绝, 需先升级配置并处理待确认同步.
 
 历史 Profile 格式 v2 不支持自动转换, 该编号不会复用. 当前应用无法识别的格式, 非法版本和未来版本都会报错并保留源文件, 不以默认配置覆盖. 不通过手改版本号绕过校验.
 
-旧应用可能无法读取 v4. 需要回退时, 先关闭当前应用并另存当前配置源, 再将对应升级备份复制为 `config.json`, 使用支持该备份原始格式的应用. 这份备份只恢复升级前的配置文件, 不撤销升级后的其他编辑; 若已有 `harnesses: {}` 的 Agent, 还需将其恢复为旧应用支持的非空关联. 再次用当前应用打开仍会升级到 v4.
+旧应用可能无法读取 v5. 需要回退时, 先关闭当前应用并另存当前配置源, 再将对应升级备份复制为 `config.json`, 使用支持该备份原始格式的应用. 这份备份只恢复升级前的配置文件, 不撤销升级后的其他编辑; 若已有包含 `targets` 字段的 Agent, 需视回退目标版本清理 `targets` 并恢复旧应用支持的 `harnesses` 状态. 再次用当前应用打开仍会升级到 v5.
 
 ## Rules 与 Layer
 
@@ -201,9 +201,9 @@ Shared 规则不参与上述组合, 它们会单独部署到用户共享规则�
 
 ## Subagent
 
-Subagent 源文件包含公共 `name`, `description`, `harnesses` 和 Markdown 正文. 各 Harness 共用正文, metadata 分别填写.
+Subagent 源文件包含公共 `name`, `description`, `targets`, `harnesses` 和 Markdown 正文. 各 Harness 共用正文, metadata 分别填写.
 
-`harnesses` 的键表示启用该 Agent 的 Harness, 值为空对象 `{}` 时仍为启用, 仅使用公共名称、描述和正文. `harnesses: {}` 表示没有启用目标, 保留源文件但不生成输出. 删除最后一个关联 Harness 不会删除 Agent 源文件.
+`targets` 是显式启用该 Agent 的 Harness 白名单. `harnesses` 保存各 Harness 的 metadata 块 (值为空对象 `{}` 时仍可生成, 仅使用公共名称、描述和正文). 取消启用某个 Harness 只将其移出 `targets`, 已填写的 metadata 会继续保留在 `harnesses` 中以便随时重新启用; `targets: []` 表示没有启用目标, 保留源文件和已有 metadata 但不生成输出. 读取省略 `targets` 的旧版源文件时, 默认按 `harnesses` 的键列表作为启用目标. 删除 Harness 会同时清理 `targets` 与 `harnesses` 中的对应项, 删除最后一个关联 Harness 不会删除 Agent 源文件.
 
 每个 Harness 块中的 metadata 没有字段白名单, 会按该 Harness 的格式输出. 同名 metadata 可以覆盖输出中的公共 `name` 或 `description`. 将 `name` 设为 `null` 会从该 Harness 的生成结果中省略 `name`; 省略该键则继承公共名称. OpenCode 的 Agent 编辑页提供 Generate name field 开关, 默认开启; 关闭后写入 `name: null`. TOML Harness 的正文使用 `instructions_field`, 它是 TOML 键, 不是全局规则文件路径 `instructions_file`. Subagent 文件的位置由 `agents_dir` 和 `agent_extension` 决定. 不要在 metadata 中重复声明 `instructions_field`, 它也不能命名为 `name` 或 `description`.
 

@@ -220,29 +220,34 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             const existing = selection.kind === "agent" ? workspace.agents.find((agent) => agent.path === selection.path) : undefined;
             if (selection.kind === "agent" && !existing) throw new Error(`Agent ${selection.path} no longer exists`);
             const harnesses: Record<string, Record<string, unknown>> = {};
-            const enabledHarnesses = snapshot.enabledHarnesses ?? (existing ? Object.keys(existing.harnesses) : workspace.config.harnesses.map((harness) => harness.name));
+            const enabledHarnesses = snapshot.enabledHarnesses ?? (existing ? existing.targets : workspace.config.harnesses.map((harness) => harness.name));
+            const targets = workspace.config.harnesses.map((harness) => harness.name).filter((name) => enabledHarnesses.includes(name));
             for (const harness of workspace.config.harnesses)
             {
-                if (!enabledHarnesses.includes(harness.name)) continue;
                 const metadata = snapshot[`meta-${harness.name}`]?.[0];
+                let parsed: Record<string, unknown>;
                 if (metadata === undefined)
                 {
-                    harnesses[harness.name] = existing?.harnesses[harness.name] ?? {};
-                    continue;
+                    parsed = existing && Object.hasOwn(existing.harnesses, harness.name) ? existing.harnesses[harness.name]! : {};
                 }
-                try
+                else
                 {
-                    harnesses[harness.name] = parseAgentMetadata(metadata);
+                    try
+                    {
+                        parsed = parseAgentMetadata(metadata);
+                    }
+                    catch (error)
+                    {
+                        throw new Error(`${harness.name} metadata: ${errorMessage(error)}`);
+                    }
                 }
-                catch (error)
-                {
-                    throw new Error(`${harness.name} metadata: ${errorMessage(error)}`);
-                }
+                if (targets.includes(harness.name) || Object.keys(parsed).length > 0) harnesses[harness.name] = parsed;
             }
             const path = uniqueAgentPath(existing?.path, snapshotText(snapshot, "name", existing?.name), workspace.agents.map((agent) => agent.path));
             const agent = {
                 name: ruleDisplayName(path),
                 description: snapshotText(snapshot, "description", existing?.description).trim(),
+                targets,
                 harnesses,
                 body: snapshotText(snapshot, "body", existing?.body),
             };
@@ -385,7 +390,11 @@ function harnessCascadeRevisions(before: Workspace, after: Workspace, mode: Harn
     }
     if (JSON.stringify(after.layerOptions) !== JSON.stringify(layerOptions)) return undefined;
 
-    const agents = before.agents.map((agent) => ({ ...agent, harnesses: changeAgentHarnesses(agent.harnesses, mode, name) }));
+    const agents = before.agents.map((agent) => ({
+        ...agent,
+        targets: changeHarnessTargets(agent.targets, mode, name),
+        harnesses: changeAgentHarnesses(agent.harnesses, mode, name),
+    }));
     if (JSON.stringify(after.agents) !== JSON.stringify(agents)) return undefined;
     if (JSON.stringify(after.sharedRules) !== JSON.stringify(before.sharedRules)) return undefined;
 

@@ -65,9 +65,8 @@ export async function buildOutputs(rootPath: string, selection?: readonly LayerS
         outputs.set(`${harness.name}/${instructionsFile}`, renderAgentsMarkdown(rules, selectedLayers, harness.name, config.name));
         for (const agent of orderedAgents)
         {
-            if (!Object.hasOwn(agent.harnesses, harness.name)) continue;
-            const metadata = agent.harnesses[harness.name];
-            if (!metadata) continue;
+            if (!agent.targets.includes(harness.name)) continue;
+            const metadata = Object.hasOwn(agent.harnesses, harness.name) ? agent.harnesses[harness.name]! : {};
             const destinationPath = `${harness.name}/${agentsDir}/${agent.name}.${harness.agentExtension}`;
             outputs.set(destinationPath, renderAgent(agent, harness, metadata));
         }

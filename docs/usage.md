@@ -39,7 +39,7 @@
 
 应用更新默认使用 Windows 系统代理. 启动时如果设置了 `HTTP_PROXY` 或 `HTTPS_PROXY`, 更新请求优先使用该代理, 并遵守 `NO_PROXY`.
 
-应用版本与配置格式版本分别管理. 当前配置格式是 v4, 现行 Layer 格式 v1 和 v3 会在完整校验后自动升级并保留原始配置备份. 待确认 GitHub 上传先恢复, 再升级; 升级或延迟原因显示在 Console, 不自动生成或部署. 兼容范围和回退方法见[配置版本与自动升级](configuration.md#配置版本与自动升级).
+应用版本与配置格式版本分别管理. 当前配置格式是 v5, 现行 Layer 格式 v1, v3 和 v4 会在完整校验后自动升级并保留原始配置备份. 待确认 GitHub 上传先恢复, 再升级; 升级或延迟原因显示在 Console, 不自动生成或部署. 兼容范围和回退方法见[配置版本与自动升级](configuration.md#配置版本与自动升级).
 
 ## 编辑和保存
 
@@ -132,9 +132,9 @@ Add layer 创建空 Group, 添加 Option 后才能启用. 关闭 Group 开关会
 
 ### Agents 与 Skills
 
-在 Agents 页编辑 Subagent 的共享正文, 按 Harness 切换各自的 metadata, 用 Enable 选择需要生成该 Agent 的助手. OpenCode 标签页在 Enable 同行右侧提供相同样式的 Generate name field 勾选项, 默认勾选; 取消勾选后生成的 frontmatter 不包含 `name`. 切换 Agent 时会保持当前 Harness 标签页. 字段和文件格式见[配置参考](configuration.md).
+在 Agents 页编辑 Subagent 的共享正文, 按 Harness 切换各自的 YAML metadata, 用 Enable 选择需要生成该 Agent 的助手. 取消勾选 Enable 只将该助手移出 `targets`, 保留其已填写的 YAML metadata 供随时重新开启. OpenCode 标签页在 Enable 同行右侧提供相同样式的 Generate name field 勾选项, 默认勾选; 取消勾选后生成的 frontmatter 不包含 `name`. 切换 Agent 时会保持当前 Harness 标签页. 字段和文件格式见[配置参考](configuration.md).
 
-可以关闭全部 Harness 的 Enable 并保存, 以停用 Agent 而不删除正文. 配置仍为 v1 / v3 且自动升级被延迟时, 需先处理待确认同步并升级至 v4, 才能保存全部停用状态.
+可以关闭全部 Harness 的 Enable 并保存, 以停用 Agent 而不删除正文或已保存的 metadata. 若磁盘配置仍为 v1 / v3 / v4 且自动升级被延迟, 需先处理待确认同步并升级至 v5, 才能保存保留 metadata 的停用状态.
 
 Skills 页左侧在 Installed 和 Discover 间切换, 仅列出 Skill 名称; Discover 中已安装项的名称置灰, 仍可点击预览. 右侧显示所选项的 `SKILL.md`, Discover 在文件名旁提供来源仓库链接, 右上角提供当前项的安装按钮. GitHub 来源只读, 本地导入或来源不明的 Skill 可编辑并保存. Import 不列出当前项目已安装的同名 GitHub Skill. 具体操作见[Skills 管理](skills.md).
 
