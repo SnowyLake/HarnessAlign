@@ -5,6 +5,7 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
+import { yaml } from "@codemirror/lang-yaml";
 import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { EditorState, type Extension } from "@codemirror/state";
@@ -23,7 +24,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { MarkdownPreview } from "./MarkdownPreview";
 
 /** Language packs the workspace editors actually need. */
-export type SourceLanguage = "markdown" | "json" | "plain";
+export type SourceLanguage = "markdown" | "json" | "yaml" | "plain";
 
 /** Props for a CodeMirror field that participates in an uncontrolled form. */
 export interface SourceEditorProps
@@ -130,6 +131,7 @@ function languageExtension(language: SourceLanguage): Extension
 {
     if (language === "markdown") return markdown();
     if (language === "json") return json();
+    if (language === "yaml") return yaml();
     return [];
 }
 

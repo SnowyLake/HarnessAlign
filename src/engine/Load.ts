@@ -19,6 +19,7 @@ import {
     type Harness,
     type HarnessConfig,
     HARNESS_FIELDS,
+    harnessOutputPaths,
     type LayerConfig,
     LAYER_FIELDS,
     type LayerOption,
@@ -162,6 +163,24 @@ function validateHarnessConfig(value: unknown, path: string, index: number): Har
     if (!IDENTIFIER_NAME.test(name)) throw new HalignError(`${context}: name must match ${IDENTIFIER_NAME.source}, got ${valueText(name)}`);
     assertWindowsSafeName(name, `${context}: name`);
     const configPath = relativeConfigPath(value.config_path, context, "config_path");
+    const outputPaths = {
+        ...(Object.hasOwn(value, "instructions_file") ? { instructionsFile: relativeConfigPath(value.instructions_file, context, "instructions_file") } : {}),
+        ...(Object.hasOwn(value, "agents_dir") ? { agentsDir: relativeConfigPath(value.agents_dir, context, "agents_dir") } : {}),
+    };
+    const { instructionsFile, agentsDir } = harnessOutputPaths(outputPaths);
+    const instructionPath = instructionsFile.toLowerCase();
+    const agentPath = agentsDir.toLowerCase();
+    if (instructionPath === agentPath || instructionPath.startsWith(`${agentPath}/`) || agentPath.startsWith(`${instructionPath}/`))
+    {
+        throw new HalignError(`${context}: instructions_file ${valueText(instructionsFile)} and agents_dir ${valueText(agentsDir)} must not overlap`);
+    }
+    for (const [field, path] of [["instructions_file", instructionsFile], ["agents_dir", agentsDir]] as const)
+    {
+        if (path.split("/").some((part) => part.toLowerCase().startsWith(".harness-align-")))
+        {
+            throw new HalignError(`${context}: ${field} must not use reserved deployment staging names, got ${valueText(path)}`);
+        }
+    }
     const agentFormat = validateString(context, "agent_format", value.agent_format);
     if (agentFormat !== "toml" && agentFormat !== "yaml")
     {
@@ -188,8 +207,8 @@ function validateHarnessConfig(value: unknown, path: string, index: number): Har
         throw new HalignError(`${context}: instructions_field is only supported when agent_format is toml`);
     }
     return instructionsField === undefined
-        ? { name, configPath, agentFormat, agentExtension }
-        : { name, configPath, agentFormat, agentExtension, instructionsField };
+        ? { name, configPath, ...outputPaths, agentFormat, agentExtension }
+        : { name, configPath, ...outputPaths, agentFormat, agentExtension, instructionsField };
 }
 
 /** Validate one skill source object from `config.json`. */
@@ -234,7 +253,7 @@ export function validateConfig(value: unknown): Config
         {
             throw new HalignError(`${path}: version ${value.version} is newer than supported version ${CONFIG_VERSION}; update Harness Align before opening this configuration`);
         }
-        throw new HalignError(`${path}: version must be integer ${CONFIG_VERSION}, got ${valueText(value.version)}; source reading also supports Layer format version 1`);
+        throw new HalignError(`${path}: version must be integer ${CONFIG_VERSION}, got ${valueText(value.version)}; source reading also supports Layer format versions 1, 3, and 4`);
     }
     const knownFields = new Set(["version", "name", "layers", "harnesses", "skill_sources"]);
     const unknownFields = Object.keys(value).filter((field) => !knownFields.has(field));
@@ -327,6 +346,18 @@ export function validateConfig(value: unknown): Config
         {
             throw new HalignError(`${path}: harness config_path must not use the managed config directory, got ${valueText(harness.configPath)}`);
         }
+        const { instructionsFile, agentsDir } = harnessOutputPaths(harness);
+        for (const [field, output] of [["instructions_file", instructionsFile], ["agents_dir", agentsDir]] as const)
+        {
+            const scope = `${harness.configPath}/${output}`.toLowerCase();
+            for (const reserved of [".agents/shared-rules", ".agents/skills", ".agents/.harness-align.lock.json", ".harness-align"])
+            {
+                if (scope === reserved || scope.startsWith(`${reserved}/`) || reserved.startsWith(`${scope}/`))
+                {
+                    throw new HalignError(`${path}: harness ${valueText(harness.name)}: ${field} ${valueText(output)} must not overlap managed path ${valueText(reserved)}`);
+                }
+            }
+        }
     }
     for (let leftIndex = 0; leftIndex < harnesses.length; leftIndex += 1)
     {
@@ -356,8 +387,8 @@ export function validateConfig(value: unknown): Config
     return { version: CONFIG_VERSION, name, layers, harnesses, skillSources };
 }
 
-/** Parse supported source formats without writing, preserving omitted fields during the v1 upgrade. */
-export function parseConfigSource(content: string | Uint8Array): { config: Config; upgradedText?: string }
+/** Parse supported source formats without writing, preserving omitted fields during upgrades. */
+export function parseConfigSource(content: string | Uint8Array): { config: Config; upgradedText?: string; upgradedFrom?: 1 | 3 | 4 }
 {
     let parsed: unknown;
     try
@@ -369,16 +400,24 @@ export function parseConfigSource(content: string | Uint8Array): { config: Confi
         if (error instanceof HalignError) throw error;
         throw new HalignError(`.harness-align/config.json: invalid JSON or UTF-8: ${errorText(error)}`);
     }
-    if (isRecord(parsed) && parsed.version === 1)
+    if (isRecord(parsed) && (parsed.version === 1 || parsed.version === 3 || parsed.version === 4))
     {
+        if ((parsed.version === 1 || parsed.version === 3) && Array.isArray(parsed.harnesses)) for (const [index, harness] of parsed.harnesses.entries())
+        {
+            if (!isRecord(harness)) continue;
+            for (const field of ["instructions_file", "agents_dir"]) if (Object.hasOwn(harness, field))
+            {
+                throw new HalignError(`.harness-align/config.json: harnesses[${index}]: ${field} requires configuration version 4 or later, got ${parsed.version}`);
+            }
+        }
         const document = { ...parsed, version: CONFIG_VERSION };
-        return { config: validateConfig(document), upgradedText: `${JSON.stringify(document, null, 2)}\n` };
+        return { config: validateConfig(document), upgradedText: `${JSON.stringify(document, null, 2)}\n`, upgradedFrom: parsed.version };
     }
     return { config: validateConfig(parsed) };
 }
 
 /** Read and validate configuration source while identifying whether persistence needs an upgrade. */
-export async function loadConfigSource(root: string): Promise<{ config: Config; upgradedText?: string }>
+export async function loadConfigSource(root: string): Promise<{ config: Config; upgradedText?: string; upgradedFrom?: 1 | 3 | 4 }>
 {
     const path = join(root, ".harness-align", "config.json");
     await ensureRegularSource(root, path);
@@ -560,7 +599,7 @@ export async function loadAgents(root: string, configuredHarnesses: HarnessConfi
         const [metadata, body] = await parseFrontmatter(root, sourcePath);
         const unknown = Object.keys(metadata).filter((field) => !AGENT_FIELDS.has(field));
         if (unknown.length > 0) throw new HalignError(`${path}: unknown agent field ${valueText(firstSorted(unknown))}`);
-        for (const field of AGENT_FIELDS)
+        for (const field of ["name", "description", "harnesses"])
         {
             if (!Object.hasOwn(metadata, field)) throw new HalignError(`${path}: ${field} is required`);
         }
@@ -575,7 +614,8 @@ export async function loadAgents(root: string, configuredHarnesses: HarnessConfi
         names.set(foldedName, name);
         const description = validateString(path, "description", metadata.description);
         const harnesses = validateAgentHarnesses(metadata.harnesses, path, configuredHarnesses);
-        agents.push({ path, name, description, harnesses, body: normalizedBody(body) });
+        const targets = Object.hasOwn(metadata, "targets") ? validateTargets(metadata.targets, path, configuredHarnesses) : Object.keys(harnesses);
+        agents.push({ path, name, description, targets, harnesses, body: normalizedBody(body) });
     }
     return agents;
 }
@@ -603,10 +643,6 @@ export function validateAgentHarnesses(value: unknown, path: string, configuredH
             throw new HalignError(`${path}: ${harness.name}.${harness.instructionsField} is reserved for the Markdown body`);
         }
         rendered[harness.name] = rawValues;
-    }
-    if (Object.keys(rendered).length === 0)
-    {
-        throw new HalignError(`${path}: at least one configured harness block is required`);
     }
     return rendered;
 }
@@ -641,7 +677,7 @@ export interface HarnessFileSource
     content: string;
 }
 
-/** Reject absolute, escaping, reserved, and managed-output paths inside a harness folder. */
+/** Reject absolute, escaping, and reserved path segments inside a harness folder. */
 export function assertHarnessFilePath(relativePath: string): void
 {
     if (!relativePath || relativePath.includes("\\") || posix.isAbsolute(relativePath) || /^[A-Za-z]:/u.test(relativePath))
@@ -654,18 +690,22 @@ export function assertHarnessFilePath(relativePath: string): void
         throw new HalignError(`harness file: path must be relative to the harness folder, got ${valueText(relativePath)}`);
     }
     for (const part of parts) assertWindowsSafeName(part, `harness file ${relativePath}`);
-    const folded = parts.map((part) => part.toLowerCase());
-    if (folded[0] === "agents" || folded[0] === "agents.md")
-    {
-        throw new HalignError(`harness file ${relativePath}: collides with managed AGENTS.md or agents/`);
-    }
 }
 
-/** Reject an additional file that would replace shared rules, skills, or the ownership lock. */
-export function assertHarnessFileScope(configPath: string, relativePath: string): void
+/** Reject additional files that overlap configured outputs, shared rules, skills, or the ownership lock. */
+export function assertHarnessFileScope(harness: Pick<HarnessConfig, "configPath" | "instructionsFile" | "agentsDir">, relativePath: string): void
 {
     assertHarnessFilePath(relativePath);
-    const scope = `${configPath}/${relativePath}`.toLowerCase();
+    const { instructionsFile, agentsDir } = harnessOutputPaths(harness);
+    const folded = relativePath.toLowerCase();
+    for (const output of [instructionsFile, agentsDir].map((path) => path.toLowerCase()))
+    {
+        if (folded === output || folded.startsWith(`${output}/`) || output.startsWith(`${folded}/`))
+        {
+            throw new HalignError(`harness file ${relativePath}: collides with managed ${instructionsFile} or ${agentsDir}/`);
+        }
+    }
+    const scope = `${harness.configPath}/${relativePath}`.toLowerCase();
     const reserved = scope === ".agents/shared-rules" || scope.startsWith(".agents/shared-rules/")
         || scope === ".agents/skills" || scope.startsWith(".agents/skills/")
         || scope === ".agents/.harness-align.lock.json" || scope.startsWith(".agents/.harness-align.lock.json/");
@@ -721,7 +761,7 @@ export async function assertHarnessFileParent(userProfile: string | undefined, c
 }
 
 /** Load direct-file declarations and legacy migration inputs without reading actual user files. */
-export async function loadHarnessFiles(root: string, harnesses: readonly { name: string; configPath: string }[]): Promise<HarnessFileSource[]>
+export async function loadHarnessFiles(root: string, harnesses: readonly Pick<HarnessConfig, "name" | "configPath" | "instructionsFile" | "agentsDir">[]): Promise<HarnessFileSource[]>
 {
     const snapshot = await readSyncSnapshot(root);
     const files: HarnessFileSource[] = [];
@@ -736,7 +776,7 @@ export async function loadHarnessFiles(root: string, harnesses: readonly { name:
         const harness = harnesses.find((item) => item.name === name);
         if (!harness) throw new HalignError(`${key}: harness is not configured, got ${valueText(name)}`);
         const path = parts.join("/");
-        assertHarnessFileScope(harness.configPath, path);
+        assertHarnessFileScope(harness, path);
         harnessFileSourceRelative(harness.name, path);
         const encoded = snapshot.files[key] ?? snapshot.legacyFiles?.[key];
         if (encoded !== undefined) assertHarnessFileBytes(Buffer.from(encoded, "base64"), key);

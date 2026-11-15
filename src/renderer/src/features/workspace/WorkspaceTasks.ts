@@ -4,10 +4,10 @@
  */
 
 import { showError, showSuccess, writeLog } from "@/components/common/Feedback";
-import { fileName, hasLayerChanges, isSkillUpdateAvailable, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
-import { selectionKey, useAppStore, type FormSnapshot, type Selection } from "@/stores/AppStore";
+import { fileName, hasLayerChanges, isSkillUpdateAvailable, parseAgentMetadata, ruleDisplayName, uniqueAgentPath, uniqueRulePath } from "@/lib/Utils";
+import { selectionKey, useAppStore, type EditorDraft, type FormSnapshot, type Selection } from "@/stores/AppStore";
 import { syncPreviewHasWork, type SyncPreview } from "@shared/models/Sync";
-import type { AgentFormat, Config, HarnessConfig, RuleInput, Workspace } from "@shared/models/Workspace";
+import type { AgentFormat, Config, HarnessConfig, LayerOption, Metadata, RuleInput, Workspace } from "@shared/models/Workspace";
 
 /** Result of persisting one editor snapshot through the existing workspace API. */
 export interface EditorSaveResult
@@ -58,6 +58,7 @@ function editorSavePriority(selection: Selection): number
             return 50;
         case "harness":
         case "harness-new":
+            // Harness membership cascades rewrite rule, layer option, and agent sources, so they must run last.
             return 60;
         case "generated":
         case "generated-file":
@@ -115,6 +116,8 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             const harness: HarnessConfig = {
                 name: snapshotText(snapshot, "name", existing?.name).trim(),
                 configPath: snapshotText(snapshot, "configPath", existing?.configPath).trim(),
+                instructionsFile: snapshotText(snapshot, "instructionsFile", existing?.instructionsFile ?? "AGENTS.md").trim(),
+                agentsDir: snapshotText(snapshot, "agentsDir", existing?.agentsDir ?? "agents").trim(),
                 agentFormat,
                 agentExtension: existing?.agentFormat === agentFormat ? existing.agentExtension : agentFileFormat,
                 ...(agentFormat === "toml" ? { instructionsField: snapshotText(snapshot, "instructionsField", existing?.instructionsField).trim() } : {}),
@@ -217,17 +220,34 @@ export async function persistEditorSnapshot(workspace: Workspace, selection: Sel
             const existing = selection.kind === "agent" ? workspace.agents.find((agent) => agent.path === selection.path) : undefined;
             if (selection.kind === "agent" && !existing) throw new Error(`Agent ${selection.path} no longer exists`);
             const harnesses: Record<string, Record<string, unknown>> = {};
-            const enabledHarnesses = snapshot.enabledHarnesses ?? (existing ? Object.keys(existing.harnesses) : workspace.config.harnesses.map((harness) => harness.name));
+            const enabledHarnesses = snapshot.enabledHarnesses ?? (existing ? existing.targets : workspace.config.harnesses.map((harness) => harness.name));
+            const targets = workspace.config.harnesses.map((harness) => harness.name).filter((name) => enabledHarnesses.includes(name));
             for (const harness of workspace.config.harnesses)
             {
-                if (!enabledHarnesses.includes(harness.name)) continue;
-                const metadata = snapshotText(snapshot, `meta-${harness.name}`, JSON.stringify(existing?.harnesses[harness.name] ?? {}));
-                harnesses[harness.name] = JSON.parse(metadata) as Record<string, unknown>;
+                const metadata = snapshot[`meta-${harness.name}`]?.[0];
+                let parsed: Record<string, unknown>;
+                if (metadata === undefined)
+                {
+                    parsed = existing && Object.hasOwn(existing.harnesses, harness.name) ? existing.harnesses[harness.name]! : {};
+                }
+                else
+                {
+                    try
+                    {
+                        parsed = parseAgentMetadata(metadata);
+                    }
+                    catch (error)
+                    {
+                        throw new Error(`${harness.name} metadata: ${errorMessage(error)}`);
+                    }
+                }
+                if (targets.includes(harness.name) || Object.keys(parsed).length > 0) harnesses[harness.name] = parsed;
             }
             const path = uniqueAgentPath(existing?.path, snapshotText(snapshot, "name", existing?.name), workspace.agents.map((agent) => agent.path));
             const agent = {
                 name: ruleDisplayName(path),
                 description: snapshotText(snapshot, "description", existing?.description).trim(),
+                targets,
                 harnesses,
                 body: snapshotText(snapshot, "body", existing?.body),
             };
@@ -326,6 +346,145 @@ export async function refreshWorkspace(next?: Selection): Promise<void>
     const workspace = await window.appApi.workspace.load();
     useAppStore.getState().setWorkspace(workspace);
     if (next) useAppStore.getState().setSelection(next);
+}
+
+/** Explicit harness membership change whose cascade rewrites config, rule, layer option, and agent sources. */
+type HarnessCascadeMode = "add" | "remove";
+
+/** Insert or drop one harness name in a target allowlist without reordering the other targets. */
+function changeHarnessTargets(targets: readonly string[], mode: HarnessCascadeMode, name: string): string[]
+{
+    if (mode === "remove") return targets.filter((target) => target !== name);
+    return targets.includes(name) ? [...targets] : [...targets, name];
+}
+
+/** Add an empty metadata block for the new harness or drop the removed harness entry, keeping key order. */
+function changeAgentHarnesses(harnesses: Record<string, Metadata>, mode: HarnessCascadeMode, name: string): Record<string, Metadata>
+{
+    const next = { ...harnesses };
+    if (mode === "add") next[name] = {};
+    else delete next[name];
+    return next;
+}
+
+/** Return rebased source revisions when `after` is exactly `before` plus this cascade, or `undefined` when the sources diverged. */
+function harnessCascadeRevisions(before: Workspace, after: Workspace, mode: HarnessCascadeMode, name: string): Record<string, string> | undefined
+{
+    const harnesses = before.config.harnesses;
+    const harnessesMatch = mode === "add"
+        ? after.config.harnesses.length === harnesses.length + 1
+            && after.config.harnesses[harnesses.length]?.name === name
+            && JSON.stringify(after.config.harnesses.slice(0, harnesses.length)) === JSON.stringify(harnesses)
+        : JSON.stringify(after.config.harnesses) === JSON.stringify(harnesses.filter((harness) => harness.name !== name));
+    if (!harnessesMatch) return undefined;
+    if (JSON.stringify({ ...before.config, harnesses: [] }) !== JSON.stringify({ ...after.config, harnesses: [] })) return undefined;
+
+    const rootRules = before.rootRules.map((rule) => ({ ...rule, targets: changeHarnessTargets(rule.targets, mode, name) }));
+    if (JSON.stringify(after.rootRules) !== JSON.stringify(rootRules)) return undefined;
+
+    const layerOptions: Record<string, LayerOption[]> = {};
+    for (const [layer, options] of Object.entries(before.layerOptions))
+    {
+        // Layer writes canonicalize whitespace-only bodies to empty strings.
+        layerOptions[layer] = options.map((option) => ({ ...option, targets: changeHarnessTargets(option.targets, mode, name), body: option.body.trim() ? option.body : "" }));
+    }
+    if (JSON.stringify(after.layerOptions) !== JSON.stringify(layerOptions)) return undefined;
+
+    const agents = before.agents.map((agent) => ({
+        ...agent,
+        targets: changeHarnessTargets(agent.targets, mode, name),
+        harnesses: changeAgentHarnesses(agent.harnesses, mode, name),
+    }));
+    if (JSON.stringify(after.agents) !== JSON.stringify(agents)) return undefined;
+    if (JSON.stringify(after.sharedRules) !== JSON.stringify(before.sharedRules)) return undefined;
+
+    const rewritten = new Set([
+        ".harness-align/config.json",
+        ...before.rootRules.map((rule) => rule.path),
+        ...Object.values(before.layerOptions).flat().map((option) => option.path),
+        ...before.agents.map((agent) => agent.path),
+    ]);
+    const removedPrefix = `.harness-align/harness-files/${name}/`;
+    const revisions: Record<string, string> = {};
+    for (const [path, revision] of Object.entries(before.sourceRevisions))
+    {
+        if (mode === "remove" && path.startsWith(removedPrefix)) continue;
+        if (!rewritten.has(path))
+        {
+            revisions[path] = revision;
+            continue;
+        }
+        const rebased = after.sourceRevisions[path];
+        if (rebased === undefined) return undefined;
+        revisions[path] = rebased;
+    }
+    return JSON.stringify(revisions) === JSON.stringify(after.sourceRevisions) ? revisions : undefined;
+}
+
+/** Apply the membership change to one draft snapshot, keeping absent fields absent and keys sorted. */
+function cascadeDraftSnapshot(snapshot: FormSnapshot, selection: Selection, mode: HarnessCascadeMode, name: string): FormSnapshot
+{
+    const next: FormSnapshot = { ...snapshot };
+    if (selection.kind === "rule" || selection.kind === "layer-option" || selection.kind === "rule-new" || selection.kind === "layer-option-new")
+    {
+        const targets = next.targets;
+        if (targets || mode === "add") next.targets = changeHarnessTargets(targets ?? [], mode, name);
+    }
+    else if (selection.kind === "agent" || selection.kind === "agent-new")
+    {
+        const metadata = `meta-${name}`;
+        if (mode === "add") next[metadata] = [""];
+        else delete next[metadata];
+        const enabled = next.enabledHarnesses;
+        if (enabled) next.enabledHarnesses = changeHarnessTargets(enabled, mode, name);
+    }
+    return Object.fromEntries(Object.entries(next).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+/** Rebase one retained draft onto the reloaded sources, or return `undefined` when its opened revision no longer matches. */
+function rebaseHarnessDraft(draft: EditorDraft, before: Workspace, revisions: Record<string, string>, mode: HarnessCascadeMode, name: string): EditorDraft | undefined
+{
+    const selection = draft.selection;
+    let path: string;
+    if (selection.kind === "config") path = ".harness-align/config.json";
+    else if (selection.kind === "rule" && before.rootRules.some((rule) => rule.path === selection.path)) path = selection.path;
+    else if (selection.kind === "layer-option" && Object.values(before.layerOptions).flat().some((option) => option.path === selection.path)) path = selection.path;
+    else if (selection.kind === "agent" && before.agents.some((agent) => agent.path === selection.path)) path = selection.path;
+    else return undefined;
+
+    const opened = draft.sourceRevisions;
+    if (opened === undefined || opened[path] !== before.sourceRevisions[path]) return undefined;
+    const sourceRevisions = { ...opened, [path]: revisions[path]! };
+    if (selection.kind === "config") return { ...draft, sourceRevisions };
+    return {
+        ...draft,
+        sourceRevisions,
+        baseline: cascadeDraftSnapshot(draft.baseline, selection, mode, name),
+        current: cascadeDraftSnapshot(draft.current, selection, mode, name),
+    };
+}
+
+/** Reload after an explicit harness add/remove and rebase drafts whose opened sources still match `before`. */
+export async function refreshAfterHarnessCascade(before: Workspace, mode: HarnessCascadeMode, name: string, next?: Selection): Promise<void>
+{
+    const after = await window.appApi.workspace.load();
+    const revisions = harnessCascadeRevisions(before, after, mode, name);
+    const removed = mode === "remove" && !after.config.harnesses.some((harness) => harness.name === name);
+    const state = useAppStore.getState();
+    for (const [key, draft] of Object.entries(state.editorDrafts))
+    {
+        const selection = draft.selection;
+        const isNewSource = (selection.kind === "rule-new" && selection.scope === "root") || selection.kind === "layer-option-new" || selection.kind === "agent-new";
+        if (removed && isNewSource)
+        {
+            state.setEditorDraft(key, { ...draft, baseline: cascadeDraftSnapshot(draft.baseline, selection, mode, name), current: cascadeDraftSnapshot(draft.current, selection, mode, name) });
+            continue;
+        }
+        const rebased = revisions ? rebaseHarnessDraft(draft, before, revisions, mode, name) : undefined;
+        if (rebased) state.setEditorDraft(key, rebased);
+    }
+    state.setWorkspace(after);
+    if (next) state.setSelection(next);
 }
 
 /** Read local files successfully before discarding all renderer workspace drafts. */

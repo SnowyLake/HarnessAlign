@@ -1,10 +1,11 @@
 /**
  * Canonical generate lifecycle: build an in-memory map, preflight, write files, then commit the manifest.
  * `buildOutputs` is read-only. Keep the old manifest if a stale delete fails.
+ * Only manifest-owned shape blockers are removed before writes; unrelated stale files follow them.
  */
 
 import { promises as fs } from "node:fs";
-import { join, posix, resolve } from "node:path";
+import { dirname, join, posix, resolve, sep } from "node:path";
 import { assertContained, atomicWrite, display, ensureRegularSource, lstatIfExists, pathKey, readUtf8, reparseError } from "./FsSafe.js";
 import { loadAgents, loadConfig, loadLayerOptions, loadRules } from "./Load.js";
 import {
@@ -16,6 +17,7 @@ import {
     codePointCompare,
     errorText,
     HalignError,
+    harnessOutputPaths,
     isRecord,
     valueText,
 } from "./Model.js";
@@ -59,13 +61,13 @@ export async function buildOutputs(rootPath: string, selection?: readonly LayerS
     const outputs: OutputMap = new Map();
     for (const harness of config.harnesses)
     {
-        outputs.set(`${harness.name}/AGENTS.md`, renderAgentsMarkdown(rules, selectedLayers, harness.name, config.name));
+        const { instructionsFile, agentsDir } = harnessOutputPaths(harness);
+        outputs.set(`${harness.name}/${instructionsFile}`, renderAgentsMarkdown(rules, selectedLayers, harness.name, config.name));
         for (const agent of orderedAgents)
         {
-            if (!Object.hasOwn(agent.harnesses, harness.name)) continue;
-            const metadata = agent.harnesses[harness.name];
-            if (!metadata) continue;
-            const destinationPath = `${harness.name}/agents/${agent.name}.${harness.agentExtension}`;
+            if (!agent.targets.includes(harness.name)) continue;
+            const metadata = Object.hasOwn(agent.harnesses, harness.name) ? agent.harnesses[harness.name]! : {};
+            const destinationPath = `${harness.name}/${agentsDir}/${agent.name}.${harness.agentExtension}`;
             outputs.set(destinationPath, renderAgent(agent, harness, metadata));
         }
     }
@@ -104,8 +106,33 @@ export function safeOutputRelative(value: unknown): string
     return value;
 }
 
-/** Resolve a generated relative path and reject reparse points along it. */
-async function destination(root: string, outputRelative: string): Promise<string>
+/** Manifest evidence and the strictly bounded removals needed to change output shapes. */
+interface OutputTransitions
+{
+    staleFiles: ReadonlySet<string>;
+    staleDirectories: ReadonlySet<string>;
+    files: Map<string, string>;
+    directories: Map<string, string>;
+}
+
+/** Authorize a collapsing directory only when every entry has stale manifest evidence. */
+async function inspectCollapsingDirectory(root: string, path: string, transitions: OutputTransitions): Promise<void>
+{
+    const stats = await lstatIfExists(path);
+    if (!stats) return;
+    if (stats.isSymbolicLink()) throw reparseError(root, path, true);
+    const identity = pathKey(path);
+    if (stats.isFile() && transitions.staleFiles.has(identity)) transitions.files.set(identity, path);
+    else if (stats.isDirectory() && transitions.staleDirectories.has(identity))
+    {
+        transitions.directories.set(identity, path);
+        for (const child of (await fs.readdir(path)).sort(codePointCompare)) await inspectCollapsingDirectory(root, join(path, child), transitions);
+    }
+    else throw new HalignError(`${display(root, path)}: cannot replace an output directory containing a path not managed by the previous manifest`);
+}
+
+/** Resolve an output safely, optionally collecting manifest-owned shape blockers. */
+async function destination(root: string, outputRelative: string, transitions?: OutputTransitions): Promise<string>
 {
     safeOutputRelative(outputRelative);
     const generated = await outputRoot(root);
@@ -117,12 +144,22 @@ async function destination(root: string, outputRelative: string): Promise<string
     {
         current = join(current, part);
         const stats = await lstatIfExists(current);
-        if (stats?.isSymbolicLink()) throw reparseError(root, current, true);
-        if (stats && !stats.isDirectory()) throw new HalignError(`${display(root, current)}: expected an output directory`);
+        if (!stats) return path;
+        if (stats.isSymbolicLink()) throw reparseError(root, current, true);
+        if (stats.isFile() && transitions?.staleFiles.has(pathKey(current)))
+        {
+            transitions.files.set(pathKey(current), current);
+            return path;
+        }
+        if (!stats.isDirectory()) throw new HalignError(`${display(root, current)}: expected an output directory`);
     }
     const stats = await lstatIfExists(path);
     if (stats?.isSymbolicLink()) throw reparseError(root, path, true);
-    if (stats && !stats.isFile()) throw new HalignError(`${display(root, path)}: managed output must be a file`);
+    if (stats && !stats.isFile())
+    {
+        if (!stats.isDirectory() || !transitions?.staleDirectories.has(pathKey(path))) throw new HalignError(`${display(root, path)}: managed output must be a file`);
+        await inspectCollapsingDirectory(root, path, transitions);
+    }
     return path;
 }
 
@@ -166,17 +203,64 @@ async function loadManifest(root: string): Promise<string[]>
 }
 
 /** Collect generated paths that will be written or deleted, after containment checks. */
-async function preflightOutputChanges(root: string, expected: OutputMap): Promise<{ stalePaths: string[]; resolved: Map<string, string> }>
+async function preflightOutputChanges(root: string, expected: OutputMap): Promise<{
+    stalePaths: string[]; resolved: Map<string, string>; earlyFiles: string[]; earlyDirectories: string[]; cleanupDirectories: string[];
+}>
 {
     const oldFiles = await loadManifest(root);
     const generated = await outputRoot(root);
-    const currentFiles = new Set([...expected.keys()].map((path) => pathKey(join(generated, path))));
-    const stale = oldFiles.filter((path) => !currentFiles.has(pathKey(join(generated, path))));
-    const resolved = new Map<string, string>();
-    for (const path of expected.keys()) resolved.set(path, await destination(root, path));
+    const generatedKey = pathKey(generated);
+    /** Resolve manifest-relative paths before using them to authorize any removal. */
+    const resolveOutput = (path: string): string =>
+    {
+        safeOutputRelative(path);
+        const absolute = resolve(generated, ...path.split("/"));
+        assertContained(generated, absolute, ".harness-align/generated");
+        return absolute;
+    };
+    const resolved = new Map([...expected.keys()].map((path) => [path, resolveOutput(path)]));
+    const currentFiles = new Set([...resolved.values()].map(pathKey));
+    const outputFiles = [...resolved].filter(([path]) => path !== ".manifest.json").map(([, path]) => path);
+    const outputKeys = new Set(outputFiles.map(pathKey));
+    const stale = oldFiles.map(resolveOutput).filter((path) => !currentFiles.has(pathKey(path)));
+    const outputDirectories = new Set<string>();
+    const staleDirectories = new Set<string>();
+    for (const [paths, directories] of [[outputFiles, outputDirectories], [stale, staleDirectories]] as const)
+    {
+        for (const path of paths) for (let parent = dirname(path); pathKey(parent) !== generatedKey; parent = dirname(parent)) directories.add(pathKey(parent));
+    }
+    const transitions: OutputTransitions = { staleFiles: new Set(stale.map(pathKey)), staleDirectories, files: new Map(), directories: new Map() };
+    for (const path of expected.keys()) await destination(root, path, path === ".manifest.json" ? undefined : transitions);
     const stalePaths: string[] = [];
-    for (const path of stale) stalePaths.push(await destination(root, path));
-    return { stalePaths, resolved };
+    for (const path of stale)
+    {
+        if (outputDirectories.has(pathKey(path))) continue;
+        let outputAncestor = false;
+        for (let parent = dirname(path); pathKey(parent) !== generatedKey; parent = dirname(parent))
+        {
+            if (outputKeys.has(pathKey(parent))) { outputAncestor = true; break; }
+        }
+        if (!outputAncestor) stalePaths.push(await destination(root, display(generated, path)));
+    }
+    const cleanupDirectories = new Map<string, string>();
+    for (const path of stalePaths) for (let parent = dirname(path); pathKey(parent) !== generatedKey; parent = dirname(parent))
+    {
+        if (!outputDirectories.has(pathKey(parent))) cleanupDirectories.set(pathKey(parent), parent);
+    }
+    return { stalePaths, resolved, earlyFiles: [...transitions.files.values()].sort(codePointCompare),
+        cleanupDirectories: [...cleanupDirectories.values()].sort((left, right) => right.split(sep).length - left.split(sep).length || codePointCompare(left, right)),
+        earlyDirectories: [...transitions.directories.values()].sort((left, right) => right.split(sep).length - left.split(sep).length || codePointCompare(left, right)) };
+}
+
+/** Recheck managed file paths immediately before deleting them without following links. */
+async function removeOutputFiles(root: string, paths: readonly string[]): Promise<void>
+{
+    const generated = await outputRoot(root);
+    for (const path of paths)
+    {
+        await destination(root, display(generated, path));
+        if (await lstatIfExists(path)) await fs.unlink(path);
+    }
 }
 
 /** Write generated files and replace the manifest after a successful preflight. */
@@ -184,17 +268,33 @@ export async function generate(rootPath: string, selection?: readonly LayerSelec
 {
     const expected = await buildOutputs(rootPath, selection);
     const root = resolve(rootPath);
-    const { stalePaths, resolved } = await preflightOutputChanges(root, expected);
+    const { stalePaths, resolved, earlyFiles, earlyDirectories, cleanupDirectories } = await preflightOutputChanges(root, expected);
     const generated = await outputRoot(root);
     await fs.mkdir(generated, { recursive: true });
+    await removeOutputFiles(root, earlyFiles);
+    for (const path of earlyDirectories)
+    {
+        await ensureRegularSource(root, path);
+        const stats = await lstatIfExists(path);
+        if (!stats) continue;
+        if (stats.isSymbolicLink()) throw reparseError(root, path, true);
+        if (!stats.isDirectory()) throw new HalignError(`${display(root, path)}: expected an empty managed output directory`);
+        await fs.rmdir(path);
+    }
     for (const [path, content] of expected)
     {
         if (path !== ".manifest.json") await atomicWrite(resolved.get(path)!, content);
     }
-    for (const path of stalePaths)
+    await removeOutputFiles(root, stalePaths);
+    // Remove retired empty parents before the new manifest discards their ownership evidence.
+    for (const path of cleanupDirectories)
     {
+        await ensureRegularSource(root, path);
         const stats = await lstatIfExists(path);
-        if (stats) await fs.unlink(path);
+        if (!stats) continue;
+        if (stats.isSymbolicLink()) throw reparseError(root, path, true);
+        if (!stats.isDirectory()) throw new HalignError(`${display(root, path)}: expected a retired output directory`);
+        if ((await fs.readdir(path)).length === 0) await fs.rmdir(path);
     }
     await atomicWrite(resolved.get(".manifest.json")!, expected.get(".manifest.json")!);
     return expected;

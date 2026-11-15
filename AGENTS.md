@@ -37,7 +37,7 @@
 
 - 支持 Node 24 与 npm 11. 当前 `engines` 范围是 Node `>=24 <25`, npm `>=11 <12`. 只使用 npm, 不引入其他包管理器.
 - 引擎仅使用 `yaml` 和 `smol-toml`, 不依赖 Electron, React, Ant Design, CodeMirror, Zod 或 `fflate`.
-- Renderer 的通用界面框架固定为 Ant Design 6 与 `@ant-design/icons`. 标准控件和主题优先使用官方组件与 Design Token, CodeMirror 仅用于 Markdown 和 JSON 源码编辑. 不引入第二套通用 UI 组件或主题系统.
+- Renderer 的通用界面框架固定为 Ant Design 6 与 `@ant-design/icons`. 标准控件和主题优先使用官方组件与 Design Token, CodeMirror 仅用于 Markdown, YAML 和 JSON 源码编辑. 不引入第二套通用 UI 组件或主题系统.
 - `fflate` 只允许 Electron Main 导入, 并且必须加入 `electron.vite.config.ts` 的 main `exclude`.
 - `electron-updater` 只允许 Electron Main 导入, 并且必须加入 `electron.vite.config.ts` 的 main `exclude`. 安装版用它检查固定的 GitHub Release, 不把更新地址或安装包路径交给 Renderer.
 - `src/shared/` 只保存可同时被 Main, Preload 和 Renderer 导入的契约. 不得导入 Electron, Node 副作用, DOM 或 React.
@@ -58,8 +58,8 @@
 
 生产路径始终是同一套引擎:
 
-1. `Load.ts` 读取并验证 `.harness-align/config.json`, 根 Rule, Layer, Agent, shared-rules 和额外文件登记 (兼容旧 `harness-files`). Skills 元数据由 `Skills.ts` 加载. 额外文件与 Skills 都不进入 `AGENTS.md` 渲染.
-2. `Render.ts` 按 Harness 渲染 `AGENTS.md` 与 TOML / YAML Subagent. `buildOutputs` 是只读的内存 `OutputMap`.
+1. `Load.ts` 读取并验证 `.harness-align/config.json`, 根 Rule, Layer, Agent, shared-rules 和额外文件登记 (兼容旧 `harness-files`). Skills 元数据由 `Skills.ts` 加载. 额外文件与 Skills 都不进入规则渲染.
+2. `Render.ts` 按 Harness 渲染规则指令文件与 TOML / YAML Subagent, 输出路径由 Harness 的 `instructions_file` 和 `agents_dir` 决定. `buildOutputs` 是只读的内存 `OutputMap`.
 3. `generate` 预检后原子写入 `.harness-align/generated/`, 删除旧 manifest 记录且本次不再生成的文件, 最后提交新 manifest.
 4. `setup` 先 `generate`, 再把结果部署到已存在的用户 Harness 根目录, 以及 `%USERPROFILE%\.agents\shared-rules` 与项目 Skills.
 
@@ -113,24 +113,26 @@
 
 ## 生成与写回
 
-- `.harness-align/config.json` 当前格式为 `3`, 与应用版本独立; 格式覆盖配置源的结构和解释规则, 不兼容变化只递增, 不重置或复用历史编号. 引擎和 Shared 各自维护 `CONFIG_VERSION`, 必须保持一致; 其他持久化格式分别管理版本. 配置定义输出标题, 有序 Layer 选择, Harness 对象列表和可选 `skill_sources`. Harness 列表允许为空. 新建配置时仅保留默认候选中配置目录已存在且路径各级均为非链接目录的 Harness; 不重新筛选已有或迁移配置. 每个 Harness 声明 `name`, `config_path`, `agent_format`, `agent_extension`; TOML Harness 还必须声明 `instructions_field`. `config_path` 不能占用 `.agents/shared-rules`, `.agents/skills` 或 `.harness-align`.
-- 读取兼容当前 Layer v1, 纯内存转换为当前模型; 新建及写回只接受 v3. 历史 Profile v2 和未知格式拒绝自动转换, 不推测开发期缺失 `targets` 的旧语义. 不通过强制写入当前版本掩盖非法 payload.
-- `upgradeWorkspaceConfig` 在完整工作区校验后只升级原始配置对象的版本, 保留其他字段及省略状态; 写回前保留精确字节备份 `.config-backup-v1-<sha256>.json`, 并复用 `.edit-recovery.json` 和 revision 守卫. 备份不进入生成, 部署或同步. v3 保持原始字节, 升级不自动 Generate / Setup.
+- `.harness-align/config.json` 当前格式为 `5`, 与应用版本独立; 格式覆盖配置源的结构和解释规则, 不兼容变化只递增, 不重置或复用历史编号. 引擎和 Shared 各自维护 `CONFIG_VERSION`, 必须保持一致; 其他持久化格式分别管理版本. 配置定义输出标题, 有序 Layer 选择, Harness 对象列表和可选 `skill_sources`. Harness 列表允许为空. 新建配置时仅保留默认候选中配置目录已存在且路径各级均为非链接目录的 Harness; 不重新筛选已有或迁移配置. 每个 Harness 声明 `name`, `config_path`, `agent_format`, `agent_extension`, 可选 `instructions_file` (默认 `AGENTS.md`) 和 `agents_dir` (默认 `agents`); TOML Harness 还必须声明 `instructions_field`. 两个输出路径都相对 `config_path`, 使用规范 `/` 相对路径, 可以嵌套; 拒绝绝对路径, `..`, 反斜杠, 空段, Windows 保留名, `.harness-align-*` 暂存名, 忽略大小写后的同路径或祖先关系, 以及与 `.agents/shared-rules`, `.agents/skills`, `.agents/.harness-align.lock.json` 或 `.harness-align` 冲突的有效路径. `config_path` 不能占用上述托管路径.
+- 读取兼容当前 Layer v1, v3 和 v4, 纯内存转换为当前模型; v1 和 v3 不接受 `instructions_file` 或 `agents_dir`; 新建及写回只接受 v5. 兼容读取省略 `targets` 的旧 Subagent 源文件 (按 `harnesses` 键列表解释), 不修改源文件. 历史 Profile v2 和未知格式拒绝自动转换, 不推测开发期缺失 Rule / Layer `targets` 的旧语义. 不通过强制写入当前版本掩盖非法 payload.
+- `upgradeWorkspaceConfig` 在完整工作区校验后只升级原始配置对象的版本, 保留其他字段及省略状态; 写回前保留精确字节备份 `.config-backup-v<原版本>-<sha256>.json`, 并复用 `.edit-recovery.json` 和 revision 守卫. 备份不进入生成, 部署或同步. v5 保持原始字节, 升级不自动 Generate / Setup 或上传.
 - Main 将可信 `userData` 同步状态目录提供给 `WorkspaceService`, 不接受 Renderer 目录. 自动升级在恢复操作后执行; 有待确认上传或无法安全读取同步状态时延迟自动写回. `previewSync` 和 plan 只读取与比较, 不恢复 pending 或升级配置; 已确认操作通过 resume 显式恢复. 启动时的只读检查复用同一差异比较, 不保留可应用预览; 仅在已连接时解密凭据并访问 GitHub. 同步只转换候选副本, 保留 commit 对应的 raw remote, base, pending 和恢复记录; 合并排除版本转换单独产生的冲突, 预览仍显示并计数远端格式升级上传.
 - `skill_sources` 省略或 `[]` 表示无远端源; 校验后内存中的 `skillSources` 始终是数组; `configDocument` 仅在长度大于 `0` 时写出该键.
 - `.harness-align/rules/` 中的根 Rule 按 `(priority, repository_relative_path)` 排序, 再按 Harness `targets` 严格白名单过滤; `targets` 省略或为 `[]` 时不对任何 Harness 生效.
 - `.harness-align/layers/<layer>/<option>.md` 提供可选 Layer 内容; Layer Option 的 `targets` 使用相同的严格白名单语义. Layer 目录可以为空, 但加入 `config.json` 前必须至少存在一个选项. 生成时使用 `config.json` 中保存的选择, 或 GUI 中当前的 Layer 顺序与选项. Layer 允许空文件作为显式 no-op.
 - `Load.ts` 为兼容既有手写源文件, 将缺失的 Rule 或 Layer Option `targets` 规范化为 `[]`; `Edit.ts` 和 Shared DTO 的写入 payload 必须携带显式 `targets` 数组, 写回时保留空数组.
-- `.harness-align/rules/shared/` 是独立部署的共享规则, 不参与 `AGENTS.md` 渲染, 不出现在生成 manifest 中.
-- `.harness-align/skills/` 保存项目 Skills 与 `index.json` provenance; 不参与 `AGENTS.md` 渲染, 不出现在生成 manifest 中.
-- Additional files 的唯一本机正常内容是 Harness 目录下的实际文件. `.harness-align/.file-sync.json` v2 保存路径登记、stoppedFiles 和待解决迁移 legacyFiles. 不创建常态可编辑保存副本, 不进入 generated/ 或生成 manifest. 相对路径位于已配置的 Harness 根目录下, 只接受无 BOM UTF-8, 保留精确字节, 单文件不超过 8 MiB, 同步总量 32 MiB. 拒绝绝对路径, `..`, 反斜杠, 空段, Windows 保留名, 链接及与 `AGENTS.md`, `agents/`, shared-rules, skills 或 lock 冲突的路径.
+- `.harness-align/rules/shared/` 是独立部署的共享规则, 不参与规则渲染, 不出现在生成 manifest 中.
+- `.harness-align/skills/` 保存项目 Skills 与 `index.json` provenance; 不参与规则渲染, 不出现在生成 manifest 中.
+- Additional files 的唯一本机正常内容是 Harness 目录下的实际文件. `.harness-align/.file-sync.json` v2 保存路径登记、stoppedFiles 和待解决迁移 legacyFiles. 不创建常态可编辑保存副本, 不进入 generated/ 或生成 manifest. 相对路径位于已配置的 Harness 根目录下, 只接受无 BOM UTF-8, 保留精确字节, 单文件不超过 8 MiB, 同步总量 32 MiB. 拒绝绝对路径, `..`, 反斜杠, 空段, Windows 保留名, 链接及与各 Harness 有效 `instructions_file`, `agents_dir`, shared-rules, skills 或 lock 冲突的路径. Harness 输出路径修改会预先校验已登记文件, 冲突时保留原配置和源文件.
 - 旧 `harness-files/` 先完成源与部署恢复, 待确认 GitHub 上传阻止自动迁移和新增登记. 迁移保留 `.file-sync-migration-<hash>.json` 原始快照, 相同内容转登记, 不同或不可读取的旧内容保留为 legacyFiles 并在同步中显式选择. 迁移复用 snapshot journal, 不因无关源还原丢弃 legacyFiles. 本机 registry 允许编码后的有界恢复正文, 内容限额仍由快照校验.
 - Stop syncing 取消登记并传播停止记录, 保留实际文件; 停止优先于独立内容修改. 重新添加可清除已接收的停止记录. Harness 改名/删除级联更新登记和迁移记录, 与配置引用一起走 `.edit-recovery.json`. 旧物理目录恢复仍兼容.
-- `.harness-align/agents/` 中的 Subagent 共享 Markdown body. 各 Harness 块中的 metadata 没有字段白名单, 由对应格式的序列化器输出. Harness metadata 在公共 `name` 和 `description` 之后合并, 同名字段可以覆盖该 Harness 输出中的公共值. `name: null` 表示该 Harness 输出省略 `name`; 缺失 `name` 则继承公共名称.
-- 生成的 `AGENTS.md` 只允许配置的 `name` 产生一个一级标题.
+- `.harness-align/agents/` 中的 Subagent 共享 Markdown body, 使用 `targets` 作为启用的 Harness 白名单, 并在 `harnesses` 下保存各 Harness 的原生 metadata (停用 Harness 只移除出 `targets`, 保留 `harnesses` 中的 metadata; 读取省略 `targets` 的旧源文件时默认等于 `Object.keys(harnesses)`). 各 Harness 块中的 metadata 没有字段白名单, 由对应格式的序列化器输出. Harness metadata 在公共 `name` 和 `description` 之后合并, 同名字段可以覆盖该 Harness 输出中的公共值. `name: null` 表示该 Harness 输出省略 `name`; 缺失 `name` 则继承公共名称.
+- 生成的规则指令文件只允许配置的 `name` 产生一个一级标题.
 - Rule 中 fenced code 之外的一至五级 ATX 标题必须降一级, 六级标题保持不变.
 - TOML Harness 的 `instructions_field` 使用多行字符串保存共享正文, 不得将正文换行写成字面量 `\n`, 也不允许 metadata 重复声明该字段.
+- Generate 输出 `generated/<harness>/<instructions_file>` 和 `generated/<harness>/<agents_dir>/<name>.<extension>`. 改变 Harness 输出路径时按 manifest 正常 stale 删除旧生成文件; 已部署到助手目录的旧路径保留, 不自动迁移或删除.
 - 只删除旧 manifest 记录且本次不再生成的文件. 不删除 manifest 未管理的文件.
+- Generate 在完整预检后, 仅为文件/目录形态迁移提前删除旧 manifest 受管的阻塞文件及其必要空目录; 不相关 stale 仍在写入后清理. 提交新 manifest 前, 清理旧受管文件留下且已退出当前输出树的空父目录, 含未知内容的目录保留. 折叠目录前逐项验证归属并拒绝未知文件、未知空目录和链接, 只使用非递归空目录删除. 失败保留旧 manifest, 同一输出配置可在故障解除后重试, 不承诺生成缓存的多文件回滚.
 - 所有新文件写入与 stale 删除成功后, 才写入新的 manifest. 若 stale 删除失败, 保留旧 manifest.
 - 写回 `.harness-align` 源文件必须经 `src/engine/Edit.ts` 先校验再原子写入. 多文件更新不是单一磁盘事务.
 - Harness 级联更新, 本地 Skill 正文与 provenance, Layer 改名与删除先持久写入 `.edit-recovery.json`, 记录受影响的原始字节与移动路径. 初始化前恢复未提交操作, 后续外部修改必须保留现场并失败; 恢复记录不参与同步.
@@ -140,13 +142,14 @@
 - 上传快照保留本地和来源不明的 Skill 文件; GitHub Skill 只上传来源记录. 本地预览守卫和恢复备份仍使用完整快照. 新下载记录固定 commit, 旧记录按分支恢复时必须匹配原内容哈希. 下载内容先在内存补齐并完整校验, 再经 `Edit.ts` 应用, 失败时保留工作区和待恢复同步. GitHub Skill 文件视为可重建缓存, 不做本地修改保护, 上传始终省略其内容; 本机内容哈希不匹配时按来源重新下载并替换.
 - GitHub 同步使用单个 commit 更新专用源目录, 保留仓库其他路径, 分支引用更新必须 `force: false`. 上传前保留待确认提交, 上传结果不确定时先查询提交归属, 本地应用成功后才推进共同基线. 同步连接, 凭据和基线保存在 Electron `userData`.
 - 正常同步和本地还原只接受有效远端存档. 首次使用且缺少 `harness-align/` 时, 只能通过显式 `initialize` 模式建立存档, Main 必须校验操作类型, Renderer 显示独立 Initialize archive 操作. 既有无效存档不可初始化覆盖; 已有相同连接基线或确认发布的待恢复存档后来消失时拒绝同步与自动恢复, 保留恢复记录.
-- Harness 编辑统一走 `updateHarness`; 名称变化时级联更新 Rule 与 Layer Option `targets` 以及 Agent `harnesses` 键, 不保留独立 rename IPC.
+- Harness 编辑统一走 `updateHarness`; 名称变化时级联更新 Rule 与 Layer Option `targets` 以及 Agent `harnesses` 键, 不保留独立 rename IPC. 修改 `config_path`, `instructions_file` 或 `agents_dir` 时预先校验该 Harness 已登记的 Additional files.
+- 仅显式 `addHarness` 首次保存为所有已有根 Rule、完整 Layer catalog 的全部 Option 和已有 Agent 的 `targets` 追加该名称, 并为已有 Agent 的 `harnesses` 添加该名称的空 metadata; 不复制其他 Harness 的设置, 不改变全局 Layer 选择或顺序. 删除 Harness 移除这些关联 (`targets` 与 `harnesses` 键); Agent 允许 `targets: []` 和 `harnesses: {}` 作为保留正文或 metadata 的 disabled 状态. 关联与配置使用同一个可恢复写回批次并校验已加载源 revision. 普通保存、加载、升级、更新和同步不补开关联; 磁盘配置仍为 v1 / v3 / v4 时, 单独保存 `targets` 与 `harnesses` 键不一致的停用保留状态 (或 v1 / v3 下的空 Agent map) 须先拒绝并提示升级.
 
 ## 部署安全
 
 - `generate` 只更新 `%USERPROFILE%\.harness-align\generated`.
-- `setup` 只更新配置中声明且根目录已经存在的 Harness. 不因部署而创建缺失的 Harness 根目录. 桌面壳的 Setup 按钮遵守同一规则.
-- 对已启用 Harness, `setup` 替换其 `agents` 目录并更新根 `AGENTS.md`. 没有生成 Subagent 时仍把目标 `agents/` 替换为空目录.
+- `setup` 只更新配置中声明且根目录已经存在的 Harness. 不因部署而创建缺失的 Harness 根目录, 但允许创建自定义 `instructions_file` 或 `agents_dir` 所需的嵌套父目录. 桌面壳的 Setup 按钮遵守同一规则.
+- 对已启用 Harness, `setup` 更新其有效 `instructions_file` 和 `agents_dir`. 输出目录不再按整目录语义清空: 保留未出现在上次部署 baseline 的用户或工具文件, 只清理此前由应用生成且源中已删除的文件. 目标手改和同名非管理文件覆盖仍经现有预览明确确认. 没有生成 Subagent 时仍保留该输出目录. 该输出目录的 staging 和恢复记录使用完整物理树, 部署 baseline 只记录其中由应用生成的文件. 修改输出路径后旧部署路径保留, 不自动迁移或删除.
 - Setup 不检查、统计或写入 Additional files, 它们不参与 Setup revision 或 aligned 更新. Sync 只应用本次确认的文件, 不扫描或替换整个 Harness 根目录, 不创建缺失父目录. 旧部署日志仍可按其已确认意图恢复.
 - 部署恢复只接受当前同步源, 磁盘基线和恢复记录基线中的额外文件目标, 不接受 Harness 根目录下的任意路径. `config_path` 为 `.agents` 时, shared-rules, skills 和 lock 仍按原范围恢复, 不记成额外文件. 部署基线读取 `1`、`2`, 写入 `2`, aligned 与 ownership scopes 分开. 停止同步前先写兼容保护, 旧应用拒绝部署; ownership lock 保持 `1`. 已移除的额外文件不保留空 scope.
 - `setup` 用完整目录替换更新 `%USERPROFILE%\.agents\shared-rules`.

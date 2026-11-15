@@ -24,12 +24,13 @@ import {
     assertUpdateDraftsSaved, importSelectedHarnessFile, resolveWorkspaceItemFolder, setUpdateDraftState, setWorkspaceSyncDirectory, withWorkspace, withWorkspaceForUpdate, workspaceService,
 } from "../src/main/services/WorkspaceService.js";
 import {
-    defaultLayerOption, filterSetupChanges, harnessEffects, isSkillUpdateAvailable, matchesWorkspaceSource, moveLayerSelection,
-    selectableRemoteSkillIds, setupExternalLabel, uniqueAgentPath, uniqueRulePath,
+    defaultLayerOption, filterSetupChanges, formatAgentMetadata, harnessEffects, isSkillUpdateAvailable, matchesWorkspaceSource, moveLayerSelection,
+    parseAgentMetadata, selectableRemoteSkillIds, setupExternalLabel, uniqueAgentPath, uniqueRulePath,
 } from "../src/renderer/src/lib/Utils.js";
+import { HARNESS_PRESETS, harnessPresetConflict, harnessPresetSnapshot } from "../src/renderer/src/lib/HarnessPresets.js";
 import type { ProjectSkill, RemoteSkill, SetupChange, SkillUpdate, Workspace, WorkspaceItemTarget } from "../src/shared/models/Workspace.js";
 import { CONFIG_VERSION as SHARED_CONFIG_VERSION } from "../src/shared/models/Workspace.js";
-import { useAppStore, workspaceChangeCount, type FormSnapshot, type Selection } from "../src/renderer/src/stores/AppStore.js";
+import { selectionKey, useAppStore, workspaceChangeCount, type FormSnapshot, type Selection } from "../src/renderer/src/stores/AppStore.js";
 import { MarkdownPreview } from "../src/renderer/src/components/common/MarkdownPreview.js";
 import { SplitDiff } from "../src/renderer/src/components/common/SplitDiff.js";
 import { sourceDirectionLabel, syncDiffEnds } from "../src/renderer/src/lib/SyncDiff.js";
@@ -119,7 +120,7 @@ test("renderer CSP is strict in builds and permits Fast Refresh only in developm
 
 test("configuration formats share the current contract and read Layer v1 without changing bytes or meaning", async () =>
 {
-    assert.equal(CONFIG_VERSION, 3);
+    assert.equal(CONFIG_VERSION, 5);
     assert.equal(SHARED_CONFIG_VERSION, CONFIG_VERSION);
     await withProject(async (root) =>
     {
@@ -130,7 +131,7 @@ test("configuration formats share the current contract and read Layer v1 without
         await writeFile(join(root, ".harness-align/rules/base.md"), "---\npriority: 100\n---\n\n# Untargeted rule\n");
         await writeFile(join(root, ".harness-align/layers/soul/arona.md"), "# Untargeted layer\n");
         const loaded = await loadWorkspace(root);
-        assert.equal(loaded.config.version, 3);
+        assert.equal(loaded.config.version, CONFIG_VERSION);
         assert.equal(loaded.config.name, "AGENTS");
         assert.deepEqual(loaded.config.skillSources, []);
         assert.deepEqual(loaded.rootRules[0]!.targets, []);
@@ -142,7 +143,7 @@ test("configuration formats share the current contract and read Layer v1 without
         assert.equal(JSON.parse(outputs.get(".manifest.json")!.toString()).version, 1);
         assert.deepEqual(await readFile(path), original);
         const upgraded = JSON.parse(parseConfigSource(original).upgradedText!);
-        assert.deepEqual(upgraded, { ...legacy, version: 3 });
+        assert.deepEqual(upgraded, { ...legacy, version: CONFIG_VERSION });
     });
 });
 
@@ -158,7 +159,7 @@ test("configuration upgrade preserves exact backups and unrelated sources, and c
         const backup = await upgradeWorkspaceConfig(root);
         assert.ok(backup);
         assert.deepEqual(await readFile(backup), original);
-        assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { ...config, version: 3 });
+        assert.deepEqual(JSON.parse(await readFile(path, "utf8")), config);
         const after = await snapshot(join(root, ".harness-align"));
         for (const [name, bytes] of before) if (name !== "config.json") assert.deepEqual(after.get(name), bytes);
         assert.equal(after.has(".edit-recovery.json"), false);
@@ -179,16 +180,16 @@ test("configuration upgrade rejects invalid versions and incomplete sources befo
     await withProject(async (root) =>
     {
         const path = join(root, ".harness-align/config.json");
-        for (const version of [0, -1, 1.5, "1", null, 2, 4, 99])
+        for (const version of [0, -1, 1.5, "1", null, 2, 6, 99])
         {
             await writeFile(path, JSON.stringify({ ...config, version }));
             const before = await snapshot(join(root, ".harness-align"));
             await assert.rejects(upgradeWorkspaceConfig(root), version === 2 ? /legacy Profile format version 2/u
-                : typeof version === "number" && version > 3 ? /newer than supported version 3/u : /version must be integer 3/u);
+                : typeof version === "number" && version > CONFIG_VERSION ? /newer than supported version 5/u : /version must be integer 5/u);
             assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
         }
         const { version: omitted, ...missing } = config;
-        assert.equal(omitted, 3);
+        assert.equal(omitted, CONFIG_VERSION);
         assert.throws(() => parseConfigSource(JSON.stringify(missing)), /version is required/u);
         assert.throws(() => parseConfigSource(Buffer.from([0xff])), /invalid JSON or UTF-8/u);
         assert.throws(() => parseConfigSource(JSON.stringify({ version: 2, profiles: [] })), /legacy Profile format/u);
@@ -219,7 +220,7 @@ test("configuration upgrade rolls back a failed commit and preserves external ed
         });
         try
         {
-            await assert.rejects(upgradeWorkspaceConfig(root), external ? /changed before configuration upgrade/u : /injected commit failure/u);
+            await assert.rejects(upgradeWorkspaceConfig(root), external ? /changed before its source update/u : /injected commit failure/u);
             assert.deepEqual(await readFile(path), external ? changed : original);
             const backups = (await readdir(join(root, ".harness-align"))).filter((name) => name.startsWith(".config-backup-v1-"));
             assert.equal(backups.length, 1);
@@ -271,7 +272,7 @@ test("explicit config saves and cascaded updates retain the original legacy conf
         await writeFile(path, original);
         if (cascade) await updateHarness(root, "codex", { ...(await loadConfig(root)).harnesses[0]!, name: "Renamed" });
         else await saveConfig(root, { ...await loadConfig(root), name: "Saved title" });
-        assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+        assert.equal(JSON.parse(await readFile(path, "utf8")).version, CONFIG_VERSION);
         const backup = (await readdir(join(root, ".harness-align"))).find((name) => name.startsWith(".config-backup-v1-"));
         assert.ok(backup);
         assert.deepEqual(await readFile(join(root, ".harness-align", backup)), original);
@@ -294,13 +295,13 @@ test("workspace queue automatically upgrades supported sources and defers only p
             setWorkspaceSyncDirectory(state);
             clearLogs();
             await withWorkspace((home) => loadWorkspace(home));
-            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
-            const notice = readLogs().entries.find((entry) => entry.title === "Configuration upgraded: 1 -> 3")!;
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, CONFIG_VERSION);
+            const notice = readLogs().entries.find((entry) => entry.title === "Configuration upgraded: 1 -> 5")!;
             assert.ok(notice.details.includes(".config-backup-v1-"));
             assert.equal(notice.details.includes(root), false);
             const before = await snapshot(join(root, ".harness-align"));
             const invalid = Object.assign({}, await loadConfig(root), { version: 99 });
-            await assert.rejects(saveConfig(root, invalid), /newer than supported version 3/u);
+            await assert.rejects(saveConfig(root, invalid), /newer than supported version 5/u);
             assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
             await mkdir(state);
             await writeFile(join(state, "github-sync.json"), "invalid sync state");
@@ -316,7 +317,7 @@ test("workspace queue automatically upgrades supported sources and defers only p
             assert.ok(readLogs().entries.some((entry) => entry.title === "Configuration upgrade deferred" && entry.details.includes("could not be read")));
             await writeFile(join(state, "github-sync.json"), JSON.stringify({ version: 1, connection: null, base: null, pending: null }));
             await withWorkspace((home) => loadWorkspace(home));
-            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, CONFIG_VERSION);
         }
         finally
         {
@@ -326,6 +327,66 @@ test("workspace queue automatically upgrades supported sources and defers only p
             clearLogs();
         }
     });
+});
+
+test("Layer v3 upgrades preserve omitted output paths and exact backups while old formats reject new fields", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/config.json");
+        const legacy = { ...config, version: 3 };
+        const original = Buffer.from(`${JSON.stringify(legacy)}\r\n`);
+        await writeFile(path, original);
+        assert.equal((await loadConfig(root)).version, CONFIG_VERSION);
+        assert.deepEqual(await readFile(path), original);
+        const before = await readSyncSnapshot(root);
+        const upgraded = upgradeSyncConfig(before);
+        assert.deepEqual(JSON.parse(Buffer.from(upgraded.files["config.json"]!, "base64").toString()), config);
+        assert.equal(JSON.parse(Buffer.from(before.files["config.json"]!, "base64").toString()).version, 3);
+        const backup = await upgradeWorkspaceConfig(root);
+        assert.ok(backup);
+        assert.ok(backup.includes(".config-backup-v3-"));
+        assert.deepEqual(await readFile(backup), original);
+        assert.deepEqual(JSON.parse(await readFile(path, "utf8")), config);
+        for (const version of [1, 3]) for (const field of ["instructions_file", "agents_dir"])
+        {
+            assert.throws(() => parseConfigSource(JSON.stringify({ ...config, version, harnesses: [
+                { ...config.harnesses[0], [field]: field === "instructions_file" ? "CLAUDE.md" : "droids" },
+            ] })), /requires configuration version 4/u);
+        }
+        const v4Custom = { ...config, version: 4, harnesses: [{ ...config.harnesses[0], instructions_file: "CLAUDE.md", agents_dir: "droids" }] };
+        assert.equal(parseConfigSource(JSON.stringify(v4Custom)).upgradedFrom, 4);
+        assert.equal(parseConfigSource(JSON.stringify(v4Custom)).config.harnesses[0]!.instructionsFile, "CLAUDE.md");
+    });
+});
+
+test("Harness output paths reject escapes, overlapping scopes, and protected deployment targets", () =>
+{
+    for (const field of ["instructions_file", "agents_dir"])
+    {
+        for (const value of ["", ".", "..", "../escape", "/absolute", "C:/escape", "a\\b", "a//b", "a/./b", "CON", "name.", ".harness-align-stage-test/out"])
+        {
+            assert.throws(() => validateConfig({ ...config, harnesses: [{ ...config.harnesses[0], [field]: value }] }), HalignError);
+        }
+        for (const value of [null, 42]) assert.throws(() => validateConfig({ ...config, harnesses: [{ ...config.harnesses[0], [field]: value }] }), HalignError);
+        for (const value of ["shared-rules", "shared-rules/nested", "skills", ".harness-align.lock.json"])
+        {
+            assert.throws(() => validateConfig({ ...config, harnesses: [{ ...config.harnesses[0], config_path: ".agents", [field]: value }] }), /must not overlap managed path/u);
+        }
+    }
+    for (const [instructionsFile, agentsDir] of [["profiles", "profiles"], ["Profiles", "profiles"], ["profiles/CLAUDE.md", "profiles"], ["profiles", "profiles/agents"]])
+    {
+        assert.throws(() => validateConfig({ ...config, harnesses: [
+            { ...config.harnesses[0], instructions_file: instructionsFile, agents_dir: agentsDir },
+        ] }), /must not overlap/u);
+    }
+    const custom = validateConfig({ ...config, harnesses: [
+        { ...config.harnesses[0], instructions_file: "prompts/CLAUDE.md", agents_dir: "profiles/droids" },
+    ] });
+    assert.equal(custom.harnesses[0]!.instructionsFile, "prompts/CLAUDE.md");
+    assert.equal(custom.harnesses[0]!.agentsDir, "profiles/droids");
+    assert.equal(HARNESS_SCHEMA.safeParse({ ...custom.harnesses[0], instructionsFile: null }).success, false);
+    assert.deepEqual(HARNESS_SCHEMA.parse(custom.harnesses[0]), custom.harnesses[0]);
 });
 
 test("deployment warning labels cover known reasons and preserve access to unknown details", () =>
@@ -521,7 +582,7 @@ test("source search combines name, path, body terms and strict Harness filters w
     assert.equal(matchesWorkspaceSource(rule, "REVIEW security", "codex"), true);
     assert.equal(matchesWorkspaceSource(rule, "deep absent"), false);
     assert.equal(matchesWorkspaceSource({ ...rule, targets: [] }, "security", "codex"), false);
-    const agent = { path: ".harness-align/agents/check.md", name: "Inspector", description: "Review helper", body: "Read all callers", harnesses: { codex: {} } };
+    const agent = { path: ".harness-align/agents/check.md", name: "Inspector", description: "Review helper", body: "Read all callers", targets: ["codex"], harnesses: { codex: {} } };
     assert.equal(matchesWorkspaceSource(agent, "inspector callers", "codex"), true);
     assert.equal(matchesWorkspaceSource(agent, "", "cursor"), false);
     assert.equal(matchesWorkspaceSource(agent, "", "toString"), false);
@@ -862,7 +923,7 @@ test("Skills from one update check can be reviewed and applied individually with
 
 test("cascaded source edits persist rollback across interruptions and refuse subsequent external changes", async (t) =>
 {
-    await withProject(async (root) =>
+    for (const action of ["add", "remove"]) await withProject(async (root) =>
     {
         const before = await readSyncSnapshot(root);
         const originalRename = fs.rename;
@@ -874,7 +935,12 @@ test("cascaded source edits persist rollback across interruptions and refuse sub
             if (interrupted && target === join(root, ".harness-align", "config.json")) throw new Error("Unavailable config rollback");
             return originalRename(...args);
         });
-        try { await assert.rejects(removeHarness(root, "codex"), /recovery preserved.*Unavailable config rollback/u); }
+        try
+        {
+            await assert.rejects(action === "add"
+                ? addHarness(root, { name: "NewTool", configPath: ".new-tool", agentFormat: "yaml", agentExtension: "md" })
+                : removeHarness(root, "codex"), /recovery preserved.*Unavailable config rollback/u);
+        }
         finally { blocked.mock.restore(); }
         const recordPath = join(root, ".harness-align", ".edit-recovery.json");
         assert.equal(Object.hasOwn((await readSyncSnapshot(root)).files, ".edit-recovery.json"), false);
@@ -1145,7 +1211,7 @@ test("new source paths colliding with manually created deployment files always r
         await setup(root, undefined, home);
         const targets = [".codex/agents/worker.toml", ".agents/shared-rules/worker.md", ".agents/skills/demo/worker.md"];
         for (const path of targets) await writeFile(join(home, path), "Hand-written target");
-        await saveAgent(root, { path: ".harness-align/agents/worker.md", name: "worker", description: "Worker", harnesses: { codex: {} }, body: "Generated worker" });
+        await saveAgent(root, { path: ".harness-align/agents/worker.md", name: "worker", description: "Worker", targets: ["codex"], harnesses: { codex: {} }, body: "Generated worker" });
         await saveSharedRule(root, ".harness-align/rules/shared/worker.md", "Generated shared");
         await writeFile(join(root, ".harness-align", "skills", "demo", "worker.md"), "Generated Skill asset");
         const preview = await previewSetup(root, undefined, home);
@@ -1162,7 +1228,7 @@ test("new source paths colliding with manually created deployment files always r
     });
 });
 
-test("deployment baselines mark external edits and extra deletions and require explicit approval", async () =>
+test("deployment baselines protect external edits and preserve unowned agent files without adopting them", async () =>
 {
     await withProject(async (root) =>
     {
@@ -1177,18 +1243,20 @@ test("deployment baselines mark external edits and extra deletions and require e
         await writeFile(join(home, ".codex", "agents", "extra.md"), "Extra manual agent");
         const preview = await previewSetup(root, undefined, home);
         assert.match(preview.changes.find((change) => change.path === "~/.codex/AGENTS.md")?.external ?? "", /Changed since last deployment/u);
-        assert.match(preview.changes.find((change) => change.path.endsWith("/extra.md"))?.external ?? "", /Extra path/u);
+        assert.equal(preview.changes.find((change) => change.path.endsWith("/extra.md"))?.status, "unchanged");
         await assert.rejects(setup(root, undefined, home, preview.revision), /explicit overwrite approval/u);
         assert.equal(await readFile(target, "utf8"), "Manual instructions");
         assert.deepEqual(await readFile(baselinePath), baseline);
         await setup(root, undefined, home, preview.revision, true);
+        assert.equal(await readFile(join(home, ".codex/agents/extra.md"), "utf8"), "Extra manual agent");
+        assert.equal(Object.hasOwn(JSON.parse(await readFile(baselinePath, "utf8")).scopes[".codex/agents"], "extra.md"), false);
         assert.equal((await previewSetup(root, undefined, home)).changes.some((change) => change.external), false);
         assert.equal(Object.hasOwn((await readSyncSnapshot(root)).files, ".deployment.json"), false);
         await unlink(join(root, ".harness-align", "agents", "explorer.md"));
         const removal = await previewSetup(root, undefined, home);
         assert.equal(removal.changes.find((change) => change.path.endsWith("/explorer.toml"))?.external, undefined);
         await setup(root, undefined, home, removal.revision);
-        assert.deepEqual(await readdir(join(home, ".codex", "agents")), []);
+        assert.deepEqual(await readdir(join(home, ".codex", "agents")), ["extra.md"]);
     });
 });
 
@@ -1208,8 +1276,8 @@ test("deployment previews classify changes without writes and refuse changed sou
             await writeFile(join(userProfile, ".codex", "AGENTS.md"), "Previous instructions");
             await writeFile(join(userProfile, ".codex", "unrelated.json"), "Keep");
             const preview = await previewSetup(root, undefined, userProfile);
-            assert.deepEqual(new Set(preview.changes.map((change) => change.status)), new Set(["added", "modified", "deleted", "unchanged", "skipped"]));
-            assert.ok(preview.changes.some((change) => change.path === "~/.codex/agents/extra.md" && change.status === "deleted"));
+            assert.deepEqual(new Set(preview.changes.map((change) => change.status)), new Set(["added", "modified", "unchanged", "skipped"]));
+            assert.ok(preview.changes.some((change) => change.path === "~/.codex/agents/extra.md" && change.status === "unchanged"));
             await assert.rejects(readFile(join(root, ".harness-align", "generated", ".manifest.json")), /ENOENT/u);
             const rulePath = join(root, ".harness-align", "rules", "base.md");
             const original = await readFile(rulePath);
@@ -1225,7 +1293,7 @@ test("deployment previews classify changes without writes and refuse changed sou
             const fresh = await previewSetup(root, undefined, userProfile);
             await setup(root, undefined, userProfile, fresh.revision, true);
             assert.equal(await readFile(join(userProfile, ".codex", "unrelated.json"), "utf8"), "Keep");
-            await assert.rejects(readFile(join(agents, "extra.md")), /ENOENT/u);
+            assert.equal(await readFile(join(agents, "extra.md"), "utf8"), "Manual extra");
             assert.ok((await previewSetup(root, undefined, userProfile)).changes.every((change) => change.status === "unchanged" || change.status === "skipped"));
         }
         finally { await rm(userProfile, { recursive: true, force: true }); }
@@ -1437,6 +1505,377 @@ test("opened source guards reject external edits, deletion, creation races, and 
             assert.deepEqual(useAppStore.getState().editorDrafts[`rule:${rule.path}`]?.current.body, ["Draft"]);
         }
         finally { useAppStore.setState(previous); }
+    });
+});
+
+test("Harness presets expose eight user-level configurations and independent blank or preset form snapshots", () =>
+{
+    assert.deepEqual(HARNESS_PRESETS.map(({ config: item }) =>
+        [item.name, item.configPath, item.instructionsFile, item.agentsDir, item.agentFormat, item.agentExtension, item.instructionsField]), [
+        ["Codex", ".codex", "AGENTS.md", "agents", "toml", "toml", "developer_instructions"],
+        ["ClaudeCode", ".claude", "CLAUDE.md", "agents", "yaml", "md", undefined],
+        ["Antigravity", ".gemini/config", "AGENTS.md", "agents", "yaml", "md", undefined],
+        ["Cursor", ".cursor", "AGENTS.md", "agents", "yaml", "md", undefined],
+        ["GrokBuild", ".grok", "AGENTS.md", "agents", "yaml", "md", undefined],
+        ["CopilotCLI", ".copilot", "copilot-instructions.md", "agents", "yaml", "md", undefined],
+        ["DevinCLI", "AppData/Roaming/devin", "AGENTS.md", "agents", "yaml", "md", undefined],
+        ["Factory", ".factory", "AGENTS.md", "droids", "yaml", "md", undefined],
+    ]);
+    const blank = harnessPresetSnapshot("custom");
+    assert.deepEqual(blank, { agentFileFormat: ["md"], agentsDir: ["agents"], configPath: [""], instructionsFile: ["AGENTS.md"], name: [""], preset: ["custom"] });
+    for (const preset of HARNESS_PRESETS)
+    {
+        assert.deepEqual(HARNESS_SCHEMA.parse(preset.config), preset.config);
+        const current = harnessPresetSnapshot(preset.config.name);
+        assert.deepEqual(Object.keys(current), Object.keys(current).sort((left, right) => left.localeCompare(right)));
+        assert.equal(current.name?.[0], preset.config.name);
+        assert.equal(current.agentFileFormat?.[0], preset.config.agentExtension);
+        assert.equal(current.instructionsField?.[0], preset.config.instructionsField);
+        current.name![0] = "Modified draft";
+        assert.equal(harnessPresetSnapshot(preset.config.name).name?.[0], preset.config.name);
+    }
+    assert.match(HARNESS_PRESETS.find((item) => item.config.name === "Cursor")!.notice!, /User Rules/u);
+    assert.match(HARNESS_PRESETS.find((item) => item.config.name === "DevinCLI")!.notice!, /%APPDATA%/u);
+    assert.throws(() => harnessPresetSnapshot("gemini"), /Unknown Harness preset/u);
+    assert.throws(() => harnessPresetSnapshot("__proto__"), /Unknown Harness preset/u);
+});
+
+test("Harness preset conflicts use case-insensitive names and directory segment boundaries", () =>
+{
+    const preset = HARNESS_PRESETS.find((item) => item.config.name === "Antigravity")!.config;
+    assert.equal(harnessPresetConflict(preset, []), undefined);
+    assert.equal(harnessPresetConflict(preset, [{ ...preset, name: "ANTIGRAVITY", configPath: ".other" }]), "Already configured");
+    assert.equal(harnessPresetConflict(preset, [{ ...preset, name: "other", configPath: ".GEMINI/CONFIG" }]), "Already configured");
+    for (const configPath of [".gemini", ".GEMINI/CONFIG/nested"])
+    {
+        assert.equal(harnessPresetConflict(preset, [{ ...preset, name: "other", configPath }]), "Overlaps an existing config path");
+    }
+    assert.equal(harnessPresetConflict(preset, [{ ...preset, name: "other", configPath: ".gemini/config-other" }]), undefined);
+    assert.equal(harnessPresetConflict(preset, [{ ...preset, name: "other", configPath: ".gemini/other" }]), undefined);
+});
+
+test("Renderer saves retained preset and custom drafts through existing validation without persisting preset identities", async () =>
+{
+    const { persistEditorSnapshot, saveWorkspaceChanges } = await loadRendererTasks();
+    await withProject(async (root) =>
+    {
+        const originalAgent = (await loadWorkspace(root)).agents[0]!;
+        for (const harness of config.harnesses) await removeHarness(root, harness.name);
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        /** Load the same temporary workspace as a desktop DTO without starting Electron. */
+        const load = async (): Promise<Workspace> => ({
+            ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing", changes: [] },
+            deploymentStatus: { state: "pending", changes: [] }, harnessRoots: [],
+        });
+        try
+        {
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                addHarness: (harness: Parameters<typeof addHarness>[1]) => addHarness(root, harness),
+                load,
+            } } } });
+            const before = await snapshot(join(root, ".harness-align"));
+            for (const preset of HARNESS_PRESETS) harnessPresetSnapshot(preset.config.name);
+            assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+            for (const preset of HARNESS_PRESETS)
+            {
+                initial.resetWorkspace(await load());
+                const selection = { kind: "harness-new" as const };
+                const current = harnessPresetSnapshot(preset.config.name);
+                initial.setSelection(selection);
+                initial.setEditorDraft("harness-new", { selection, baseline: harnessPresetSnapshot("custom"), current });
+                await saveWorkspaceChanges();
+                assert.deepEqual((await loadConfig(root)).harnesses.find((item) => item.name === preset.config.name), preset.config);
+                assert.equal(useAppStore.getState().editorDrafts["harness-new"], undefined);
+                assert.deepEqual(useAppStore.getState().selection, { kind: "harness", name: preset.config.name });
+            }
+            const workspace = await load();
+            assert.deepEqual(workspace.rootRules[0]!.targets, HARNESS_PRESETS.map((item) => item.config.name));
+            assert.deepEqual(workspace.agents[0]!.harnesses, Object.fromEntries(HARNESS_PRESETS.map((item) => [item.config.name, {}])));
+            assert.equal(workspace.agents[0]!.body, originalAgent.body);
+            const outputs = await buildOutputs(root);
+            assert.equal(outputs.size, HARNESS_PRESETS.length * 2 + 1);
+            for (const { config: item } of HARNESS_PRESETS)
+            {
+                assert.match(output(outputs, `${item.name}/${item.instructionsFile}`), /base/u);
+                const agent = output(outputs, `${item.name}/${item.agentsDir}/explorer.${item.agentExtension}`);
+                if (item.agentFormat === "toml") assert.equal(parseToml(agent).developer_instructions, originalAgent.body);
+                else assert.match(agent, /^---\nname: explorer\n/u);
+            }
+            const raw = JSON.parse(await readFile(join(root, ".harness-align/config.json"), "utf8"));
+            assert.equal(raw.harnesses.some((item: Record<string, unknown>) => Object.hasOwn(item, "preset")), false);
+            initial.resetWorkspace(await load());
+            const custom = { ...harnessPresetSnapshot("custom"), name: ["local-tool"], configPath: [".local-tool"], agentsDir: ["helpers"] };
+            await persistEditorSnapshot(useAppStore.getState().workspace!, { kind: "harness-new" }, custom);
+            assert.equal((await loadConfig(root)).harnesses.find((item) => item.name === "local-tool")?.agentsDir, "helpers");
+            const saved = await readFile(join(root, ".harness-align/config.json"));
+            await assert.rejects(persistEditorSnapshot(await load(), { kind: "harness-new" }, harnessPresetSnapshot("Codex")), /unique without case sensitivity/u);
+            assert.deepEqual(await readFile(join(root, ".harness-align/config.json")), saved);
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
+    });
+});
+
+test("Renderer Harness saves retain custom output paths and reject empty paths without changing sources", async () =>
+{
+    const { persistEditorSnapshot } = await loadRendererTasks();
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        try
+        {
+            const workspace = { ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] },
+                deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [] };
+            initial.resetWorkspace(workspace);
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                updateHarness: (name: string, harness: Parameters<typeof updateHarness>[2]) => updateHarness(root, name, harness),
+            } } } });
+            const selection = { kind: "harness" as const, name: "codex" };
+            await persistEditorSnapshot(workspace, selection, { instructionsFile: [" prompts/CLAUDE.md "], agentsDir: [" profiles/droids "] });
+            const saved = await loadWorkspace(root);
+            assert.equal(saved.config.harnesses[0]!.instructionsFile, "prompts/CLAUDE.md");
+            assert.equal(saved.config.harnesses[0]!.agentsDir, "profiles/droids");
+            const before = await readFile(join(root, ".harness-align/config.json"));
+            await assert.rejects(persistEditorSnapshot({ ...workspace, ...saved }, selection, { instructionsFile: [""] }), /instructions_file/u);
+            assert.deepEqual(await readFile(join(root, ".harness-align/config.json")), before);
+            await persistEditorSnapshot({ ...workspace, ...saved }, selection, { name: ["codex"] });
+            assert.equal((await loadConfig(root)).harnesses[0]!.agentsDir, "profiles/droids");
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
+    });
+});
+
+test("Renderer harness add and removal rebase existing drafts without losing user edits or restoring disabled memberships", async () =>
+{
+    const { persistEditorSnapshot, refreshAfterHarnessCascade } = await loadRendererTasks();
+    for (const mode of ["add", "remove"] as const) await withProject(async (root) =>
+    {
+        await saveSharedRule(root, ".harness-align/rules/shared/common.md", "Shared original");
+        await saveAgent(root, { path: ".harness-align/agents/fallback.md", name: "fallback", description: "Fallback", body: "Original fallback", targets: ["cursor"], harnesses: { cursor: {} } });
+        await mkdir(join(root, ".harness-align/layers/noop"));
+        await writeFile(join(root, ".harness-align/layers/noop/newline.md"), "\n");
+        await writeFile(join(root, ".harness-align/layers/noop/whitespace.md"), "---\ntargets: [codex]\n---\n\n \t\r\n");
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        /** Load temporary engine sources as the desktop workspace DTO. */
+        const load = async (): Promise<Workspace> => ({
+            ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing", changes: [] },
+            deploymentStatus: { state: "pending", changes: [] }, harnessRoots: [],
+        });
+        try
+        {
+            const before = await load();
+            initial.resetWorkspace(before);
+            const rule = before.rootRules[0]!;
+            const option = before.layerOptions.soul![0]!;
+            const agent = before.agents.find((item) => item.name === "explorer")!;
+            const fallback = before.agents.find((item) => item.name === "fallback")!;
+            /** Retain one opened form snapshot with its exact source guard. */
+            const retain = (selection: Selection, baseline: FormSnapshot, current: FormSnapshot): void =>
+            {
+                initial.setEditorDraft(selectionKey(selection), { selection, baseline, current, sourceRevisions: before.sourceRevisions });
+            };
+            retain({ kind: "rule", path: rule.path }, { body: [rule.body], targets: rule.targets }, { body: ["Draft rule"], targets: ["codex", "cursor"] });
+            retain({ kind: "layer-option", path: option.path }, { body: [option.body], targets: option.targets }, { body: ["Draft option"], targets: [] });
+            retain({ kind: "agent", path: agent.path }, { body: [agent.body], enabledHarnesses: Object.keys(agent.harnesses), "meta-cursor": [formatAgentMetadata(agent.harnesses.cursor ?? {})] },
+                { body: ["Draft agent"], enabledHarnesses: ["codex", "cursor"], "meta-codex": ["model: draft-codex"], "meta-cursor": ["model: draft-cursor"] });
+            retain({ kind: "agent", path: fallback.path }, { body: [fallback.body] }, { body: ["Draft fallback"] });
+            retain({ kind: "config" }, { name: [before.config.name] }, { name: ["Draft title"] });
+            retain({ kind: "rule", path: before.sharedRules[0]!.path }, { body: ["Shared original"] }, { body: ["Shared draft"] });
+            retain({ kind: "rule-new", scope: "root" }, {}, { name: ["unsaved"], body: ["Unsaved new rule"], targets: ["codex", "cursor"] });
+            retain({ kind: "layer-option-new", layer: "soul" }, {}, { name: ["unsaved"], body: ["Unsaved new option"], targets: ["codex", "cursor"] });
+            retain({ kind: "agent-new" }, {}, {
+                name: ["unsaved"], description: ["Unsaved agent"], body: ["Unsaved new agent"], enabledHarnesses: ["codex", "cursor"], "meta-codex": [""], "meta-cursor": [""],
+            });
+            const drafts = useAppStore.getState().editorDrafts;
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                load,
+                saveRule: (input: Parameters<typeof saveRule>[1], guard: Parameters<typeof saveRule>[2]) => saveRule(root, input, guard),
+                saveLayerOption: (input: Parameters<typeof saveLayerOption>[1], guard: Parameters<typeof saveLayerOption>[2]) => saveLayerOption(root, input, guard),
+                saveAgent: (input: Parameters<typeof saveAgent>[1], guard: Parameters<typeof saveAgent>[2]) => saveAgent(root, input, guard),
+                saveConfig: (input: Parameters<typeof saveConfig>[1], guard: Parameters<typeof saveConfig>[2]) => saveConfig(root, input, guard),
+            } } } });
+            const name = mode === "add" ? "NewTool" : "codex";
+            if (mode === "add") await addHarness(root, { name, configPath: ".new-tool", agentFormat: "yaml", agentExtension: "md" });
+            else await removeHarness(root, name);
+            await refreshAfterHarnessCascade(before, mode, name, { kind: "harness", name: mode === "add" ? name : "cursor" });
+            const state = useAppStore.getState();
+            const after = state.workspace!;
+            assert.ok(before.layerOptions.noop!.every((option) => option.body.length > 0 && !option.body.trim()));
+            assert.ok(after.layerOptions.noop!.every((option) => option.body === ""));
+            const expectedTargets = mode === "add" ? ["codex", "cursor", name] : ["cursor"];
+            const ruleDraft = state.editorDrafts[`rule:${rule.path}`]!;
+            assert.deepEqual(ruleDraft.current.targets, expectedTargets);
+            assert.deepEqual(ruleDraft.baseline.targets, mode === "add" ? [...rule.targets, name] : rule.targets.filter((item) => item !== name));
+            assert.deepEqual(ruleDraft.current.body, ["Draft rule"]);
+            assert.equal(ruleDraft.sourceRevisions?.[".harness-align/config.json"], before.sourceRevisions[".harness-align/config.json"]);
+            assert.deepEqual(state.editorDrafts[`layer-option:${option.path}`]!.current.targets, mode === "add" ? [name] : []);
+            const agentDraft = state.editorDrafts[`agent:${agent.path}`]!;
+            assert.deepEqual(agentDraft.current.enabledHarnesses, expectedTargets);
+            assert.deepEqual(agentDraft.current["meta-cursor"], ["model: draft-cursor"]);
+            assert.deepEqual(agentDraft.current[`meta-${name}`], mode === "add" ? [""] : undefined);
+            assert.equal(Object.hasOwn(state.editorDrafts[`agent:${fallback.path}`]!.current, "enabledHarnesses"), false);
+            assert.deepEqual(state.editorDrafts.config!.current, { name: ["Draft title"] });
+            assert.deepEqual(state.editorDrafts[`rule:${before.sharedRules[0]!.path}`], drafts[`rule:${before.sharedRules[0]!.path}`]);
+            for (const key of ["rule-new:root", "layer-option-new:soul", "agent-new"])
+            {
+                const draft = state.editorDrafts[key]!;
+                assert.deepEqual(draft.sourceRevisions, drafts[key]!.sourceRevisions);
+                assert.deepEqual(draft.current.body, drafts[key]!.current.body);
+                if (mode === "add") assert.deepEqual(draft, drafts[key]);
+                else if (key === "agent-new")
+                {
+                    assert.deepEqual(draft.current.enabledHarnesses, ["cursor"]);
+                    assert.equal(draft.current["meta-codex"], undefined);
+                }
+                else assert.deepEqual(draft.current.targets, ["cursor"]);
+            }
+            for (const key of [`rule:${rule.path}`, `layer-option:${option.path}`, `agent:${agent.path}`, `agent:${fallback.path}`, "config"])
+            {
+                const draft = state.editorDrafts[key]!;
+                const path = draft.selection.kind === "config" ? ".harness-align/config.json" : "path" in draft.selection ? draft.selection.path : "";
+                assert.equal(draft.sourceRevisions?.[path], after.sourceRevisions[path]);
+                await persistEditorSnapshot(after, draft.selection, draft.current);
+            }
+            const saved = await loadWorkspace(root);
+            assert.equal(saved.rootRules[0]!.body, "Draft rule\n");
+            assert.deepEqual(saved.rootRules[0]!.targets, expectedTargets);
+            assert.equal(saved.layerOptions.soul![0]!.body, "Draft option\n");
+            assert.equal(saved.agents.find((item) => item.name === "explorer")!.body, "Draft agent\n");
+            assert.deepEqual(saved.agents.find((item) => item.name === "explorer")!.targets, expectedTargets);
+            assert.deepEqual(saved.agents.find((item) => item.name === "explorer")!.harnesses.cursor, { model: "draft-cursor" });
+            assert.deepEqual(saved.agents.find((item) => item.name === "explorer")!.harnesses.opencode, agent.harnesses.opencode);
+            assert.equal(saved.agents.find((item) => item.name === "fallback")!.body, "Draft fallback\n");
+            assert.equal(saved.config.name, "Draft title");
+            assert.equal(Object.hasOwn(saved.agents[0]!.harnesses, name), mode === "add");
+            for (const key of ["rule-new:root", "layer-option-new:soul", "agent-new"])
+            {
+                const draft = state.editorDrafts[key]!;
+                await persistEditorSnapshot(after, draft.selection, draft.current);
+            }
+            const created = await loadWorkspace(root);
+            assert.deepEqual(created.rootRules.find((item) => item.body === "Unsaved new rule\n")!.targets, mode === "add" ? ["codex", "cursor"] : ["cursor"]);
+            assert.deepEqual(created.layerOptions.soul!.find((item) => item.name === "unsaved")!.targets, mode === "add" ? ["codex", "cursor"] : ["cursor"]);
+            assert.deepEqual(created.agents.find((item) => item.name === "unsaved")!.targets, mode === "add" ? ["codex", "cursor"] : ["cursor"]);
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
+    });
+});
+
+test("Renderer agent metadata edits format empty blocks as blank and validate YAML mappings", async () =>
+{
+    assert.equal(formatAgentMetadata({}), "");
+    assert.equal(formatAgentMetadata({ model: "sonnet", nested: { retries: 2 } }), "model: sonnet\nnested:\n  retries: 2");
+    assert.deepEqual(parseAgentMetadata(""), {});
+    assert.deepEqual(parseAgentMetadata("  \n# comment only\n"), {});
+    assert.deepEqual(parseAgentMetadata("model: sonnet\nname: null\n"), { model: "sonnet", name: null });
+    for (const invalid of ["a: [unfinished", "null", "scalar", "- list", "---\na: 1\n---\nb: 2"])
+    {
+        assert.throws(() => parseAgentMetadata(invalid));
+    }
+    const { persistEditorSnapshot } = await loadRendererTasks();
+    await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        try
+        {
+            const workspace = {
+                ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing" as const, changes: [] },
+                deploymentStatus: { state: "pending" as const, changes: [] }, harnessRoots: [],
+            };
+            initial.resetWorkspace(workspace);
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                saveAgent: (agent: Parameters<typeof saveAgent>[1], guard: Parameters<typeof saveAgent>[2]) => saveAgent(root, agent, guard),
+            } } } });
+            const agent = workspace.agents[0]!;
+            const before = await readFile(join(root, agent.path));
+            await assert.rejects(persistEditorSnapshot(workspace, { kind: "agent", path: agent.path }, {
+                name: [agent.name], description: [agent.description], body: [agent.body],
+                enabledHarnesses: ["codex", "cursor"], "meta-codex": ["- not-a-mapping"], "meta-cursor": [""],
+            }), /codex metadata:/u);
+            assert.deepEqual(await readFile(join(root, agent.path)), before);
+            await persistEditorSnapshot(workspace, { kind: "agent", path: agent.path }, {
+                name: [agent.name], description: [agent.description], body: [agent.body],
+                enabledHarnesses: ["codex", "cursor", "opencode"],
+                "meta-codex": ["model: gpt-5\nreasoning: high"],
+                "meta-cursor": [""],
+                "meta-opencode": ["name: null\nmode: subagent"],
+            });
+            const saved = (await loadWorkspace(root)).agents.find((item) => item.path === agent.path)!;
+            assert.deepEqual(saved.harnesses, {
+                codex: { model: "gpt-5", reasoning: "high" },
+                cursor: {},
+                opencode: { name: null, mode: "subagent" },
+            });
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
+    });
+});
+
+test("Renderer harness cascade keeps stale and externally changed drafts guarded without losing their content", async () =>
+{
+    const { persistEditorSnapshot, refreshAfterHarnessCascade } = await loadRendererTasks();
+    for (const external of [false, true]) await withProject(async (root) =>
+    {
+        const initial = useAppStore.getState();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        /** Reload the temporary sources without opening an Electron window. */
+        const load = async (): Promise<Workspace> => ({
+            ...await loadWorkspace(root), generatedFiles: [], generationStatus: { state: "missing", changes: [] },
+            deploymentStatus: { state: "pending", changes: [] }, harnessRoots: [],
+        });
+        try
+        {
+            const before = await load();
+            initial.resetWorkspace(before);
+            const rule = before.rootRules[0]!;
+            const selection: Selection = { kind: "rule", path: rule.path };
+            const revisions = external ? before.sourceRevisions : { ...before.sourceRevisions, [rule.path]: "older-source-revision" };
+            initial.setEditorDraft(selectionKey(selection), {
+                selection, baseline: { body: [rule.body], targets: rule.targets }, current: { body: ["Preserved draft"], targets: [] }, sourceRevisions: revisions,
+            });
+            const original = useAppStore.getState().editorDrafts[selectionKey(selection)]!;
+            if (external) await saveRule(root, { ...rule, body: "External edit" });
+            Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+                load,
+                saveRule: (input: Parameters<typeof saveRule>[1], guard: Parameters<typeof saveRule>[2]) => saveRule(root, input, guard),
+            } } } });
+            await addHarness(root, { name: "NewTool", configPath: ".new-tool", agentFormat: "yaml", agentExtension: "md" });
+            await refreshAfterHarnessCascade(before, "add", "NewTool");
+            const state = useAppStore.getState();
+            assert.deepEqual(state.editorDrafts[selectionKey(selection)], original);
+            await assert.rejects(persistEditorSnapshot(state.workspace!, selection, original.current), /content changed since it was opened/u);
+            assert.equal((await loadWorkspace(root)).rootRules[0]!.body, external ? "External edit\n" : rule.body);
+            assert.deepEqual(state.editorDrafts[selectionKey(selection)]!.current.body, ["Preserved draft"]);
+        }
+        finally
+        {
+            useAppStore.setState(initial, true);
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else Reflect.deleteProperty(globalThis, "window");
+        }
     });
 });
 
@@ -1797,13 +2236,13 @@ function createSyncRemote()
 
 test("GitHub sync upgrades legacy candidates without mutating raw baselines or conflicting with remote config edits", async (t) =>
 {
-    await withProject(async (root) =>
+    for (const legacyVersion of [1, 3]) await withProject(async (root) =>
     {
         const path = join(root, ".harness-align/config.json");
-        await writeFile(path, JSON.stringify({ ...config, version: 1 }));
+        await writeFile(path, JSON.stringify({ ...config, version: legacyVersion }));
         const legacy = await readSyncSnapshot(root);
         const unchanged = structuredClone(legacy);
-        assert.equal(JSON.parse(Buffer.from(upgradeSyncConfig(legacy).files["config.json"]!, "base64").toString()).version, 3);
+        assert.equal(JSON.parse(Buffer.from(upgradeSyncConfig(legacy).files["config.json"]!, "base64").toString()).version, CONFIG_VERSION);
         assert.deepEqual(legacy, unchanged);
         const remote = createSyncRemote();
         remote.publish(legacy);
@@ -1815,7 +2254,8 @@ test("GitHub sync upgrades legacy candidates without mutating raw baselines or c
         {
             await connectSync(state, input, "encrypted");
             const first = await previewSync(root, state, input.token);
-            assert.match(first.notice, /remote configuration uses format 1/u);
+            assert.ok(first.notice.includes(`remote configuration uses format ${legacyVersion}`));
+            assert.ok(first.notice.includes(`upgrades it to format ${CONFIG_VERSION}`));
             assert.ok(first.changes.some((change) => change.key === "config.json" && change.direction === "upload"));
             const saved = JSON.parse(await readFile(statePath, "utf8"));
             saved.base = { connectionKey: "test/sync@main", head: first.head, snapshot: legacy, syncedAt: new Date().toISOString() };
@@ -1826,7 +2266,7 @@ test("GitHub sync upgrades legacy candidates without mutating raw baselines or c
             assert.deepEqual(JSON.parse(await readFile(statePath, "utf8")).base.snapshot, legacy);
             assert.equal(remote.controls.patchCount, 0);
             const changed = structuredClone(legacy);
-            changed.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 1, name: "Remote title" })).toString("base64");
+            changed.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: legacyVersion, name: "Remote title" })).toString("base64");
             remote.publish(changed);
             const preview = await previewSync(root, state, input.token);
             assert.ok(preview.changes.some((change) => change.key === "config.json" && change.direction === "download"));
@@ -1835,8 +2275,8 @@ test("GitHub sync upgrades legacy candidates without mutating raw baselines or c
             assert.equal(preview.downloadCount, 1);
             await applySync(root, state, input.token, { previewId: preview.id, mode: "merge", choices: {} });
             assert.equal((await loadConfig(root)).name, "Remote title");
-            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
-            assert.equal(JSON.parse(Buffer.from(JSON.parse(await readFile(statePath, "utf8")).base.snapshot.files["config.json"], "base64").toString()).version, 3);
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, CONFIG_VERSION);
+            assert.equal(JSON.parse(Buffer.from(JSON.parse(await readFile(statePath, "utf8")).base.snapshot.files["config.json"], "base64").toString()).version, CONFIG_VERSION);
             assert.equal((await getSyncStatus(state, root)).localState, "current");
             assert.equal(remote.controls.patchCount, 1);
         }
@@ -1844,7 +2284,7 @@ test("GitHub sync upgrades legacy candidates without mutating raw baselines or c
     });
 });
 
-test("GitHub remote adoption and config restoration persist format 3 and retain the raw local backup", async (t) =>
+test("GitHub remote adoption and config restoration persist format 5 and retain the raw local backup", async (t) =>
 {
     await withProject(async (root) =>
     {
@@ -1861,7 +2301,7 @@ test("GitHub remote adoption and config restoration persist format 3 and retain 
             const first = await previewSync(root, state, input.token);
             await applySync(root, state, input.token, { previewId: first.id, mode: "remote", choices: {} });
             assert.equal((await loadConfig(root)).name, "Legacy remote");
-            assert.equal(JSON.parse(await readFile(join(root, ".harness-align/config.json"), "utf8")).version, 3);
+            assert.equal(JSON.parse(await readFile(join(root, ".harness-align/config.json"), "utf8")).version, CONFIG_VERSION);
             await saveConfig(root, { ...await loadConfig(root), name: "Local title" });
             remote.publish(source);
             const preview = await previewSync(root, state, input.token);
@@ -1870,7 +2310,7 @@ test("GitHub remote adoption and config restoration persist format 3 and retain 
             const patches = remote.controls.patchCount;
             await discardSync(root, state, input.token, { previewId: preview.id, key: "config.json" });
             assert.equal((await loadConfig(root)).name, "Legacy remote");
-            assert.equal(JSON.parse(await readFile(join(root, ".harness-align/config.json"), "utf8")).version, 3);
+            assert.equal(JSON.parse(await readFile(join(root, ".harness-align/config.json"), "utf8")).version, CONFIG_VERSION);
             assert.deepEqual(JSON.parse(await readFile(join(root, ".harness-align/.sync-backup.json"), "utf8")), before);
             assert.equal(remote.controls.patchCount, patches);
         }
@@ -1906,7 +2346,7 @@ test("workspace defers config persistence until raw legacy pending-upload recove
             setWorkspaceSyncDirectory(state);
             clearLogs();
             const loaded = await withWorkspace((home) => loadWorkspace(home));
-            assert.equal(loaded.config.version, 3);
+            assert.equal(loaded.config.version, CONFIG_VERSION);
             assert.deepEqual(await readFile(path), original);
             assert.ok(readLogs().entries.some((entry) => entry.title === "Configuration upgrade deferred"));
             const pending = await withWorkspace((home) => previewSync(home, state, input.token));
@@ -1917,7 +2357,7 @@ test("workspace defers config persistence until raw legacy pending-upload recove
             const recovered = await withWorkspace((home) => previewSync(home, state, input.token));
             assert.equal((await getSyncStatus(state)).hasPendingUpload, false);
             assert.equal((await loadConfig(root)).name, "Published legacy title");
-            assert.equal(JSON.parse(await readFile(path, "utf8")).version, 3);
+            assert.equal(JSON.parse(await readFile(path, "utf8")).version, CONFIG_VERSION);
             assert.equal(remote.controls.patchCount, 0);
             const baseline = JSON.parse(await readFile(join(state, "github-sync.json"), "utf8")).base.snapshot;
             assert.deepEqual(baseline, accepted);
@@ -1955,11 +2395,11 @@ test("GitHub sync rejects unsupported config versions retained in a baseline bef
             await applySync(root, state, input.token, { previewId: first.id, mode: "remote", choices: {} });
             const path = join(state, "github-sync.json");
             const saved = JSON.parse(await readFile(path, "utf8"));
-            saved.base.snapshot.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: 4, future_field: true })).toString("base64");
+            saved.base.snapshot.files["config.json"] = Buffer.from(JSON.stringify({ ...config, version: CONFIG_VERSION + 1, future_field: true })).toString("base64");
             await writeFile(path, JSON.stringify(saved));
             await connectSync(state, input, "encrypted");
             const before = await snapshot(join(root, ".harness-align"));
-            await assert.rejects(previewSync(root, state, input.token), /newer than supported version 3/u);
+            await assert.rejects(previewSync(root, state, input.token), /newer than supported version 5/u);
             assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
             assert.equal(remote.controls.patchCount, 1);
         }
@@ -2938,7 +3378,9 @@ test("sync preserves legacy skill provenance and rejects unavailable or unsafe r
 /** Load actual Renderer workflows with Node 24 type stripping, sharing the compiled Store and stubbing only UI feedback. */
 async function loadRendererTasks(): Promise<{
     persistEditorSnapshot(workspace: Workspace, selection: Selection, snapshot: FormSnapshot): Promise<unknown>;
+    saveWorkspaceChanges(): Promise<void>;
     persistLayerRename(from: string, to: string): Promise<void>;
+    refreshAfterHarnessCascade(before: Workspace, mode: "add" | "remove", name: string, next?: Selection): Promise<void>;
     checkWorkspaceSkillUpdates(isAutomatic?: boolean): Promise<void>;
     checkWorkspaceSync(isAutomatic?: boolean): Promise<void>;
     noteSyncPreview(preview: import("../src/shared/models/Sync.js").SyncPreview | undefined): void;
@@ -3070,7 +3512,7 @@ test("mixed-case names survive editing and generation while folded duplicates re
         await addLayer(root, "CustomLayer");
         await addLayerOption(root, "CustomLayer", "DefaultOption");
         await saveLayerOption(root, { path: ".harness-align/layers/CustomLayer/DefaultOption.md", targets: ["codex"], body: "Mixed case layer." });
-        await saveAgent(root, { path: ".harness-align/agents/MixedAgent.md", name: "MixedAgent", description: "Mixed case agent.", body: "Read evidence.", harnesses: { codex: {} } });
+        await saveAgent(root, { path: ".harness-align/agents/MixedAgent.md", name: "MixedAgent", description: "Mixed case agent.", body: "Read evidence.", targets: ["codex"], harnesses: { codex: {} } });
         const current = await loadConfig(root);
         await updateHarness(root, "codex", { ...current.harnesses[0]!, name: "Codex" });
         const outputs = await generate(root, [{ name: "CustomLayer", option: "DefaultOption" }]);
@@ -3324,6 +3766,211 @@ test("generate, stale ownership, and preflight keep valid output safe", async ()
     });
 });
 
+test("generation changes managed outputs between files and nested instruction or agent paths", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        const generated = join(root, ".harness-align/generated");
+        for (const [instructionsFile, agentsDir] of [
+            ["prompts", "agents"], ["prompts/CLAUDE.md", "agents"], ["prompts", "agents"], ["RULES.md", "prompts"], ["prompts", "agents"],
+        ] as const)
+        {
+            await updateHarness(root, harness.name, { ...harness, instructionsFile, agentsDir });
+            const expected = await generate(root);
+            const actual = await snapshot(generated);
+            actual.delete("unmanaged.txt");
+            assert.deepEqual(actual, expected);
+            assert.equal((await inspectGenerated(root)).state, "current");
+            await writeFile(join(generated, "unmanaged.txt"), "Keep");
+        }
+        assert.equal(await readFile(join(generated, "unmanaged.txt"), "utf8"), "Keep");
+    });
+});
+
+test("generation prunes retired empty parents before later reusing instruction and agent paths as files", async () =>
+{
+    for (const agents of [false, true]) await withProject(async (root) =>
+    {
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        const generated = join(root, ".harness-align/generated");
+        await updateHarness(root, harness.name, { ...harness, ...(agents ? { agentsDir: "prompts/nested" } : { instructionsFile: "prompts/nested/CLAUDE.md" }) });
+        await generate(root);
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "OTHER.md" });
+        await generate(root);
+        await assert.rejects(fs.lstat(join(generated, "codex/prompts")), { code: "ENOENT" });
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts" });
+        assert.deepEqual(await generate(root), await snapshot(generated));
+        assert.equal((await inspectGenerated(root)).state, "current");
+    });
+});
+
+test("generation preserves unknown children while pruning retired empty parents", async () =>
+{
+    for (const kind of ["file", "directory", "link"]) await withProject(async (root) =>
+    {
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts/nested/CLAUDE.md" });
+        await generate(root);
+        const generated = join(root, ".harness-align/generated");
+        const unknown = join(generated, "codex/prompts/foreign");
+        const outside = join(root, "foreign-content");
+        await mkdir(outside);
+        await writeFile(join(outside, "keep.txt"), "Keep outside");
+        if (kind === "file") await writeFile(unknown, "Keep unknown file");
+        else if (kind === "directory") await mkdir(unknown);
+        else await symlink(outside, unknown, process.platform === "win32" ? "junction" : "dir");
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "OTHER.md" });
+        await generate(root);
+        await assert.rejects(fs.lstat(join(generated, "codex/prompts/nested")), { code: "ENOENT" });
+        assert.equal((await fs.lstat(unknown)).isSymbolicLink(), kind === "link");
+        if (kind === "file") assert.equal(await readFile(unknown, "utf8"), "Keep unknown file");
+        if (kind === "directory") assert.deepEqual(await readdir(unknown), []);
+        assert.equal(await readFile(join(outside, "keep.txt"), "utf8"), "Keep outside");
+        const before = await snapshot(generated);
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts" });
+        await assert.rejects(generate(root), /managed output must be a file/u);
+        assert.deepEqual(await snapshot(generated), before);
+    });
+});
+
+test("generation retains the old manifest and retries interrupted retired-parent cleanup", async (t) =>
+{
+    for (const failure of ["directory", "manifest"]) await withProject(async (root) =>
+    {
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts/nested/CLAUDE.md" });
+        await generate(root);
+        const generated = join(root, ".harness-align/generated");
+        const manifest = join(generated, ".manifest.json");
+        const originalManifest = await readFile(manifest);
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "OTHER.md" });
+        const originalRmdir = fs.rmdir;
+        const originalRename = fs.rename;
+        const blocked = failure === "directory"
+            ? t.mock.method(fs, "rmdir", async (...args: Parameters<typeof fs.rmdir>) =>
+            {
+                if (String(args[0]) === join(generated, "codex/prompts")) throw new Error("Interrupted retired-parent cleanup");
+                return originalRmdir(...args);
+            })
+            : t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+            {
+                if (String(args[1]) === manifest) throw new Error("Interrupted manifest write");
+                return originalRename(...args);
+            });
+        try { await assert.rejects(generate(root), /Interrupted/u); }
+        finally { blocked.mock.restore(); }
+        assert.deepEqual(await readFile(manifest), originalManifest);
+        assert.deepEqual(await generate(root), await snapshot(generated));
+        await assert.rejects(fs.lstat(join(generated, "codex/prompts")), { code: "ENOENT" });
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts" });
+        assert.deepEqual(await generate(root), await snapshot(generated));
+    });
+});
+
+test("generation rejects unknown content and links inside a directory that must become a file", async () =>
+{
+    for (const kind of ["file", "directory", "link"]) await withProject(async (root) =>
+    {
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts/nested/CLAUDE.md" });
+        await generate(root);
+        const generated = join(root, ".harness-align/generated");
+        const unknown = join(generated, "codex/prompts/foreign");
+        const outside = join(root, "foreign-content");
+        await mkdir(outside);
+        await writeFile(join(outside, "keep.txt"), "Keep outside");
+        if (kind === "file") await writeFile(unknown, "Keep unknown file");
+        else if (kind === "directory") await mkdir(unknown);
+        else await symlink(outside, unknown, process.platform === "win32" ? "junction" : "dir");
+        const before = await snapshot(generated);
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts" });
+        await assert.rejects(generate(root), HalignError);
+        assert.deepEqual(await snapshot(generated), before);
+        assert.equal(await readFile(join(outside, "keep.txt"), "utf8"), "Keep outside");
+        assert.equal((await fs.lstat(unknown)).isSymbolicLink(), kind === "link");
+    });
+});
+
+test("generation validates every output before removing any managed file that blocks a new directory", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts" });
+        await generate(root);
+        const generated = join(root, ".harness-align/generated");
+        await unlink(join(generated, "cursor/AGENTS.md"));
+        await mkdir(join(generated, "cursor/AGENTS.md"));
+        const before = await snapshot(generated);
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts/CLAUDE.md" });
+        await assert.rejects(generate(root), HalignError);
+        assert.deepEqual(await snapshot(generated), before);
+        assert.equal((await fs.lstat(join(generated, "cursor/AGENTS.md"))).isDirectory(), true);
+    });
+});
+
+test("generation never treats a similar path prefix as ownership of an unknown blocking file", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts-old" });
+        await generate(root);
+        const generated = join(root, ".harness-align/generated");
+        await writeFile(join(generated, "codex/prompts"), "Unknown blocking file");
+        const before = await snapshot(generated);
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts/CLAUDE.md" });
+        await assert.rejects(generate(root), /expected an output directory/u);
+        assert.deepEqual(await snapshot(generated), before);
+    });
+});
+
+test("generation retries file-directory transitions after partial cleanup, output writes, and manifest failures", async (t) =>
+{
+    for (const reverse of [false, true]) for (const failure of ["output", "stale", "manifest", "early-file", ...(reverse ? ["directory"] : [])]) await withProject(async (root) =>
+    {
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        await writeAgent(root, "retired");
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: reverse ? "prompts/nested/CLAUDE.md" : "prompts" });
+        await generate(root);
+        const generated = join(root, ".harness-align/generated");
+        const manifest = join(generated, ".manifest.json");
+        const originalManifest = await readFile(manifest);
+        const instructionsFile = reverse ? "prompts" : "prompts/nested/CLAUDE.md";
+        await updateHarness(root, harness.name, { ...harness, instructionsFile });
+        await unlink(join(root, ".harness-align/agents/retired.md"));
+        const originalRename = fs.rename;
+        const originalUnlink = fs.unlink;
+        const originalRmdir = fs.rmdir;
+        const blocked = failure === "stale" || failure === "early-file"
+            ? t.mock.method(fs, "unlink", async (...args: Parameters<typeof fs.unlink>) =>
+            {
+                const target = failure === "stale" ? join(generated, "codex/agents/retired.toml")
+                    : join(generated, "codex", reverse ? "prompts/nested/CLAUDE.md" : "prompts");
+                if (String(args[0]) === target) throw new Error("Interrupted stale deletion");
+                return originalUnlink(...args);
+            })
+            : failure === "directory" ? t.mock.method(fs, "rmdir", async (...args: Parameters<typeof fs.rmdir>) =>
+            {
+                if (String(args[0]) === join(generated, "codex/prompts")) throw new Error("Interrupted directory removal");
+                return originalRmdir(...args);
+            })
+            : t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+            {
+                const target = failure === "manifest" ? manifest : join(generated, "codex", instructionsFile);
+                if (String(args[1]) === target) throw new Error(`Interrupted ${failure} write`);
+                return originalRename(...args);
+            });
+        try { await assert.rejects(generate(root), /Interrupted/u); }
+        finally { blocked.mock.restore(); }
+        assert.deepEqual(await readFile(manifest), originalManifest);
+        const expected = await generate(root);
+        assert.deepEqual(await snapshot(generated), expected);
+        assert.equal((await inspectGenerated(root)).state, "current");
+    });
+});
+
 test("manifest path, encoding, atomic failure, and reparse boundaries are rejected", async () =>
 {
     await withProject(async (root) =>
@@ -3368,8 +4015,12 @@ test("setup deploys generated harness content into existing roots and shared rul
 
         await setup(root, undefined, userProfile, undefined, true);
 
-        assert.deepEqual(await snapshot(join(userProfile, ".codex")), await snapshot(join(root, ".harness-align", "generated", "codex")));
-        assert.deepEqual(await snapshot(join(userProfile, ".config", "opencode")), await snapshot(join(root, ".harness-align", "generated", "opencode")));
+        const codex = await snapshot(join(root, ".harness-align", "generated", "codex"));
+        codex.set("agents/old.toml", Buffer.from("old codex agent\n"));
+        const opencode = await snapshot(join(root, ".harness-align", "generated", "opencode"));
+        opencode.set("agents/old.md", Buffer.from("old opencode agent\n"));
+        assert.deepEqual(await snapshot(join(userProfile, ".codex")), codex);
+        assert.deepEqual(await snapshot(join(userProfile, ".config", "opencode")), opencode);
         assert.deepEqual(await snapshot(join(userProfile, ".agents", "shared-rules")), await snapshot(join(root, ".harness-align", "rules", "shared")));
         await assert.rejects(readFile(join(userProfile, ".cursor", "AGENTS.md")));
     });
@@ -3381,7 +4032,8 @@ test("setup follows configurable harness names, formats, extensions, and deploym
     {
         const customConfig = {
             ...config,
-            harnesses: [{ name: "atlas", config_path: ".tools/atlas", agent_format: "yaml", agent_extension: "agent" }],
+            harnesses: [{ name: "atlas", config_path: ".tools/atlas", instructions_file: "prompts/CLAUDE.md", agents_dir: "profiles/droids",
+                agent_format: "yaml", agent_extension: "agent" }],
         };
         await writeFile(join(root, ".harness-align", "config.json"), JSON.stringify(customConfig), "utf8");
         await writeRule(root, "base.md", 100, "# Base\n\nbase", ["atlas"]);
@@ -3407,16 +4059,203 @@ test("setup follows configurable harness names, formats, extensions, and deploym
 
         const userProfile = join(root, "isolated-userprofile");
         const targetRoot = join(userProfile, ".tools", "atlas");
-        await mkdir(join(targetRoot, "agents"), { recursive: true });
+        await mkdir(targetRoot, { recursive: true });
 
-        await setup(root, undefined, userProfile);
+        const result = await setup(root, undefined, userProfile);
 
         assert.deepEqual(await snapshot(targetRoot), await snapshot(join(root, ".harness-align", "generated", "atlas")));
-        const generatedAgent = await readFile(join(targetRoot, "agents", "explorer.agent"), "utf8");
+        assert.deepEqual(result.targets[0]!.files, ["prompts/CLAUDE.md", "profiles/droids/explorer.agent"]);
+        assert.ok((await readFile(join(targetRoot, "prompts/CLAUDE.md"), "utf8")).includes("base"));
+        assert.equal(result.outputs.has("atlas/AGENTS.md"), false);
+        const generatedAgent = await readFile(join(targetRoot, "profiles/droids", "explorer.agent"), "utf8");
         const metadata = parseYaml(generatedAgent.split("---\n")[1] ?? "");
         assert.equal(metadata.arbitrary_flag, true);
         assert.deepEqual(metadata.nested, { retries: 3 });
         await assert.rejects(readFile(join(userProfile, ".codex", "AGENTS.md")));
+    });
+});
+
+test("custom output paths retain old deployments and unowned files while pruning only generated agents", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "custom-user");
+        const harnessRoot = join(home, ".codex");
+        await mkdir(harnessRoot, { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/paths.md", "Shared");
+        await setup(root, undefined, home);
+        const oldRules = await readFile(join(harnessRoot, "AGENTS.md"));
+        const oldAgent = await readFile(join(harnessRoot, "agents/explorer.toml"));
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts/CLAUDE.md", agentsDir: "profiles/droids" });
+        const custom = join(harnessRoot, "profiles/droids");
+        await mkdir(join(custom, "vendor/empty"), { recursive: true });
+        await writeFile(join(custom, "vendor/internal.md"), "Tool-owned agent");
+        await setup(root, undefined, home);
+        assert.deepEqual(await readFile(join(harnessRoot, "AGENTS.md")), oldRules);
+        assert.deepEqual(await readFile(join(harnessRoot, "agents/explorer.toml")), oldAgent);
+        assert.equal(await readFile(join(custom, "vendor/internal.md"), "utf8"), "Tool-owned agent");
+        assert.deepEqual(await readdir(join(custom, "vendor/empty")), []);
+        await assert.rejects(readFile(join(root, ".harness-align/generated/codex/AGENTS.md")), /ENOENT/u);
+        await assert.rejects(readFile(join(root, ".harness-align/generated/codex/agents/explorer.toml")), /ENOENT/u);
+        const baseline = JSON.parse(await readFile(join(root, ".harness-align/.deployment.json"), "utf8"));
+        assert.deepEqual(Object.keys(baseline.scopes[".codex/profiles/droids"]).sort(), [".", "explorer.toml"]);
+        await unlink(join(root, ".harness-align/agents/explorer.md"));
+        await setup(root, undefined, home);
+        await assert.rejects(readFile(join(custom, "explorer.toml")), /ENOENT/u);
+        assert.equal(await readFile(join(custom, "vendor/internal.md"), "utf8"), "Tool-owned agent");
+        assert.deepEqual(await readdir(join(custom, "vendor/empty")), []);
+        assert.equal((await previewSetup(root, undefined, home)).changes.some((change) => change.external), false);
+    });
+});
+
+test("case-only deployment scopes keep one ownership record and clean retired agents, including legacy aliases", { skip: process.platform !== "win32" }, async () =>
+{
+    for (const legacyAliases of [false, true]) await withProject(async (root) =>
+    {
+        const home = join(root, "case-user");
+        const agents = join(home, ".codex/agents");
+        await mkdir(agents, { recursive: true });
+        await writeFile(join(agents, "native.md"), "Unmanaged agent");
+        await saveSharedRule(root, ".harness-align/rules/shared/case.md", "Shared");
+        const original = (await loadWorkspace(root)).agents[0]!;
+        await unlink(join(root, original.path));
+        await setup(root, undefined, home);
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        await updateHarness(root, harness.name, { ...harness, configPath: ".Codex", agentsDir: "Agents" });
+        await saveAgent(root, { ...original, path: ".harness-align/agents/worker.md", name: "worker" });
+        await setup(root, undefined, home);
+        const path = join(root, ".harness-align/.deployment.json");
+        const baseline = JSON.parse(await readFile(path, "utf8"));
+        assert.equal(Object.keys(baseline.scopes).filter((key) => key.toLowerCase() === ".codex/agents").length, 1);
+        if (legacyAliases)
+        {
+            baseline.scopes[".codex/agents"] = { ".": "directory" };
+            await writeFile(path, JSON.stringify(baseline));
+        }
+        await updateHarness(root, harness.name, { ...harness, agentsDir: "agents" });
+        await unlink(join(root, ".harness-align/agents/worker.md"));
+        const preview = await previewSetup(root, undefined, home);
+        const removal = preview.changes.find((change) => change.path.endsWith("/worker.toml"))!;
+        assert.equal(removal.status, "deleted");
+        assert.equal(removal.external, undefined);
+        await setup(root, undefined, home, preview.revision);
+        await assert.rejects(readFile(join(agents, "worker.toml")), /ENOENT/u);
+        assert.equal(await readFile(join(agents, "native.md"), "utf8"), "Unmanaged agent");
+        const scopes = JSON.parse(await readFile(path, "utf8")).scopes;
+        assert.deepEqual(Object.keys(scopes).filter((key) => key.toLowerCase() === ".codex/agents"), [".codex/agents"]);
+        assert.deepEqual(scopes[".codex/agents"], { ".": "directory" });
+    });
+});
+
+test("conflicting legacy ownership aliases still require approval before replacing observed content", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "legacy-alias-user");
+        await mkdir(join(home, ".codex"), { recursive: true });
+        await saveSharedRule(root, ".harness-align/rules/shared/case.md", "Shared");
+        await setup(root, undefined, home);
+        const path = join(root, ".harness-align/.deployment.json");
+        const baseline = JSON.parse(await readFile(path, "utf8"));
+        baseline.scopes[".codex/Agents"] = { ".": "directory", "explorer.toml": "f".repeat(64) };
+        await writeFile(path, JSON.stringify(baseline));
+        await unlink(join(root, ".harness-align/agents/explorer.md"));
+        const preview = await previewSetup(root, undefined, home);
+        const removal = preview.changes.find((change) => change.path.endsWith("/explorer.toml"))!;
+        assert.equal(removal.status, "deleted");
+        assert.match(removal.external!, /Changed since last deployment/u);
+        await assert.rejects(setup(root, undefined, home, preview.revision), /explicit overwrite approval/u);
+        assert.ok((await readFile(join(home, ".codex/agents/explorer.toml"), "utf8")).includes("Read evidence."));
+        await setup(root, undefined, home, preview.revision, true);
+        await assert.rejects(readFile(join(home, ".codex/agents/explorer.toml")), /ENOENT/u);
+        assert.equal(Object.keys(JSON.parse(await readFile(path, "utf8")).scopes).filter((key) => key.toLowerCase() === ".codex/agents").length, 1);
+    });
+});
+
+test("deployment previews hash each agent target once and staging still rechecks subsequent edits", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "snapshot-user");
+        const agents = join(home, ".codex/agents");
+        await mkdir(agents, { recursive: true });
+        const target = join(agents, "native.md");
+        await writeFile(target, "Initial native agent");
+        await saveSharedRule(root, ".harness-align/rules/shared/snapshot.md", "Shared");
+        let reads = 0;
+        const originalRead = fs.readFile;
+        const tracked = t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) =>
+        {
+            if (String(args[0]) === target) reads += 1;
+            return originalRead(...args);
+        });
+        try { await previewSetup(root, undefined, home); }
+        finally { tracked.mock.restore(); }
+        assert.equal(reads, 1);
+        const originalCopy = fs.copyFile;
+        const changed = t.mock.method(fs, "copyFile", async (...args: Parameters<typeof fs.copyFile>) =>
+        {
+            await originalCopy(...args);
+            if (String(args[0]) === target) await writeFile(target, "Later external edit");
+        });
+        try { await assert.rejects(setup(root, undefined, home), /Setup preview expired.*recovery preserved/u); }
+        finally { changed.mock.restore(); }
+        assert.equal(await readFile(target, "utf8"), "Later external edit");
+        await assert.rejects(readFile(join(home, ".codex/AGENTS.md")), /ENOENT/u);
+        await assert.rejects(readFile(join(root, ".harness-align/.deployment.json")), /ENOENT/u);
+    });
+});
+
+test("custom nested outputs recover interrupted replacements without losing unowned agents", async (t) =>
+{
+    await withProject(async (root) =>
+    {
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts/CLAUDE.md", agentsDir: "profiles/droids" });
+        await saveSharedRule(root, ".harness-align/rules/shared/paths.md", "Shared");
+        const home = join(root, "recovery-user");
+        const harnessRoot = join(home, ".codex");
+        const rules = join(harnessRoot, "prompts/CLAUDE.md");
+        await mkdir(join(harnessRoot, "prompts"), { recursive: true });
+        await mkdir(join(harnessRoot, "profiles/droids/vendor"), { recursive: true });
+        await writeFile(rules, "Original rules");
+        await writeFile(join(harnessRoot, "profiles/droids/vendor/internal.md"), "Original tool-owned agent");
+        const before = await snapshot(harnessRoot);
+        const originalRename = fs.rename;
+        const blocked = t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) =>
+        {
+            const from = String(args[0]);
+            const to = String(args[1]);
+            if (from.includes(".harness-align-stage-") && to === join(home, ".agents/shared-rules")) throw new Error("Interrupted custom deployment");
+            if (from.includes(".harness-align-backup-") && to === rules) throw new Error("Unavailable custom restore");
+            return originalRename(...args);
+        });
+        try { await assert.rejects(setup(root, undefined, home, undefined, true), /recovery preserved.*Unavailable custom restore/u); }
+        finally { blocked.mock.restore(); }
+        assert.equal(await recoverDeployment(root, home), "restored");
+        assert.deepEqual(await snapshot(harnessRoot), before);
+        await assert.rejects(readFile(join(root, ".harness-align/.deployment-recovery.json")), /ENOENT/u);
+        await setup(root, undefined, home, undefined, true);
+        assert.equal(await readFile(join(harnessRoot, "profiles/droids/vendor/internal.md"), "utf8"), "Original tool-owned agent");
+    });
+});
+
+test("custom output paths reject linked parent directories before any generation or deployment", async () =>
+{
+    for (const field of ["instructionsFile", "agentsDir"] as const) await withProject(async (root) =>
+    {
+        const harness = (await loadConfig(root)).harnesses[0]!;
+        await updateHarness(root, harness.name, { ...harness, [field]: field === "instructionsFile" ? "linked/CLAUDE.md" : "linked/droids" });
+        const home = join(root, "linked-user");
+        const external = join(root, "external-custom-output");
+        await mkdir(join(home, ".codex"), { recursive: true });
+        await mkdir(external);
+        await writeFile(join(external, "keep.md"), "Keep");
+        await symlink(external, join(home, ".codex/linked"), "junction");
+        await assert.rejects(setup(root, undefined, home), /reparse points/u);
+        assert.deepEqual(await readdir(external), ["keep.md"]);
+        await assert.rejects(readFile(join(root, ".harness-align/generated/.manifest.json")), /ENOENT/u);
     });
 });
 
@@ -3570,6 +4409,138 @@ test("generate and setup reports list written files and destination directories"
     });
 });
 
+test("adding a harness initializes every existing membership once without changing global layer choices or shared files", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await saveRule(root, { path: ".harness-align/rules/untargeted.md", priority: 1, targets: [], body: "Initially untargeted rule." });
+        await addLayer(root, "inactive");
+        await addLayerOption(root, "inactive", "off");
+        await saveLayerOption(root, { path: ".harness-align/layers/inactive/off.md", targets: ["cursor"], body: "Inactive layer." });
+        await addLayerOption(root, "inactive", "empty");
+        await saveAgent(root, { path: ".harness-align/agents/standby.md", name: "standby", description: "Disabled agent", body: "Preserved instructions.", targets: [], harnesses: {} });
+        const sharedPath = join(root, ".harness-align/rules/shared/keep.md");
+        await mkdir(join(sharedPath, ".."), { recursive: true });
+        await writeFile(sharedPath, "Shared original\r\n");
+        const shared = await readFile(sharedPath);
+        const before = await loadWorkspace(root);
+        const harness: Parameters<typeof addHarness>[1] = {
+            name: "Atlas", configPath: ".atlas", agentFormat: "toml", agentExtension: "toml", instructionsField: "instructions",
+        };
+        await addHarness(root, harness);
+        const added = await loadWorkspace(root);
+        assert.deepEqual(added.config.layers, before.config.layers);
+        for (const rule of before.rootRules)
+        {
+            assert.deepEqual(added.rootRules.find((item) => item.path === rule.path), { ...rule, targets: [...rule.targets, harness.name] });
+        }
+        for (const option of Object.values(before.layerOptions).flat())
+        {
+            assert.deepEqual(added.layerOptions[option.layer]!.find((item) => item.name === option.name), { ...option, targets: [...option.targets, harness.name] });
+        }
+        for (const agent of before.agents)
+        {
+            assert.deepEqual(added.agents.find((item) => item.path === agent.path), {
+                ...agent,
+                targets: [...agent.targets, harness.name],
+                harnesses: { ...agent.harnesses, [harness.name]: {} },
+            });
+        }
+        assert.deepEqual(await readFile(sharedPath), shared);
+        await assert.rejects(readFile(join(root, ".harness-align/generated/.manifest.json")), /ENOENT/u);
+        await assert.rejects(readFile(join(root, ".harness-align/.deployment.json")), /ENOENT/u);
+        await assert.rejects(readdir(join(root, ".atlas")), /ENOENT/u);
+        const outputs = await buildOutputs(root);
+        assert.match(output(outputs, "Atlas/AGENTS.md"), /Initially untargeted rule/u);
+        assert.equal(output(outputs, "Atlas/AGENTS.md").includes("Inactive layer."), false);
+        assert.deepEqual(Object.keys(parseToml(output(outputs, "Atlas/agents/explorer.toml"))), ["name", "description", "instructions"]);
+        const rule = added.rootRules[0]!;
+        const option = added.layerOptions.soul!.find((item) => item.name === "arona")!;
+        const agent = added.agents.find((item) => item.name === "standby")!;
+        await saveRule(root, { ...rule, targets: rule.targets.filter((name) => name !== harness.name) });
+        await saveLayerOption(root, { ...option, targets: option.targets.filter((name) => name !== harness.name) });
+        await saveAgent(root, { ...agent, targets: [], harnesses: {} });
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "RULES.md" });
+        const updated = await loadWorkspace(root);
+        assert.equal(updated.rootRules.find((item) => item.path === rule.path)!.targets.includes(harness.name), false);
+        assert.equal(updated.layerOptions.soul!.find((item) => item.name === option.name)!.targets.includes(harness.name), false);
+        assert.deepEqual(updated.agents.find((item) => item.path === agent.path)!.targets, []);
+        assert.deepEqual(updated.agents.find((item) => item.path === agent.path)!.harnesses, {});
+        await removeHarness(root, harness.name);
+        await addHarness(root, harness);
+        const readded = await loadWorkspace(root);
+        assert.equal(readded.rootRules.every((item) => item.targets.includes(harness.name)), true);
+        assert.equal(Object.values(readded.layerOptions).flat().every((item) => item.targets.includes(harness.name)), true);
+        assert.equal(readded.agents.every((item) => item.targets.includes(harness.name) && Object.hasOwn(item.harnesses, harness.name)), true);
+        assert.deepEqual(readded.config.layers, before.config.layers);
+        assert.deepEqual(await readFile(sharedPath), shared);
+    });
+});
+
+test("removing the last harness retains disabled agent sources and empty memberships through reload and sync validation", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const before = await loadWorkspace(root);
+        for (const harness of before.config.harnesses) await removeHarness(root, harness.name);
+        const disabled = await loadWorkspace(root);
+        assert.deepEqual(disabled.config.harnesses, []);
+        assert.deepEqual(disabled.config.layers, before.config.layers);
+        assert.equal(disabled.rootRules.every((rule) => rule.targets.length === 0), true);
+        assert.equal(Object.values(disabled.layerOptions).flat().every((option) => option.targets.length === 0), true);
+        assert.deepEqual(disabled.agents, before.agents.map((agent) => ({ ...agent, targets: [], harnesses: {} })));
+        assert.match(await readFile(join(root, disabled.agents[0]!.path), "utf8"), /targets: \[\]/u);
+        assert.match(await readFile(join(root, disabled.agents[0]!.path), "utf8"), /harnesses: \{\}/u);
+        assert.deepEqual([...await buildOutputs(root)].map(([path]) => path), [".manifest.json"]);
+        await validateSyncSources(await readSyncSnapshot(root));
+        await saveAgent(root, { ...disabled.agents[0]!, body: "Edited while disabled." });
+        assert.equal((await loadWorkspace(root)).agents[0]!.body, "Edited while disabled.\n");
+        await addHarness(root, { name: "NewTool", configPath: ".new-tool", agentFormat: "yaml", agentExtension: "md" });
+        assert.deepEqual((await loadWorkspace(root)).agents[0]!.targets, ["NewTool"]);
+        assert.deepEqual((await loadWorkspace(root)).agents[0]!.harnesses, { NewTool: {} });
+        assert.match(output(await buildOutputs(root), "NewTool/agents/explorer.md"), /Edited while disabled/u);
+    });
+});
+
+test("saving a disabled agent waits for legacy configuration persistence rather than writing new semantics under an old version", async () =>
+{
+    for (const version of [1, 3]) await withProject(async (root) =>
+    {
+        const agent = (await loadWorkspace(root)).agents[0]!;
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(`${JSON.stringify({ ...config, version })}\r\n`);
+        await writeFile(path, original);
+        const before = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(saveAgent(root, { ...agent, targets: [], harnesses: {} }), /empty harnesses requires configuration version/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+        const backup = await upgradeWorkspaceConfig(root);
+        assert.ok(backup);
+        assert.deepEqual(await readFile(backup), original);
+        await saveAgent(root, { ...agent, targets: [], harnesses: {} });
+        assert.deepEqual((await loadWorkspace(root)).agents[0]!.targets, []);
+        assert.deepEqual((await loadWorkspace(root)).agents[0]!.harnesses, {});
+        assert.equal(JSON.parse(await readFile(path, "utf8")).version, CONFIG_VERSION);
+    });
+    await withProject(async (root) =>
+    {
+        const agent = (await loadWorkspace(root)).agents[0]!;
+        const path = join(root, ".harness-align/config.json");
+        const original = Buffer.from(`${JSON.stringify({ ...config, version: 4 })}\r\n`);
+        await writeFile(path, original);
+        const before = await snapshot(join(root, ".harness-align"));
+        await assert.rejects(saveAgent(root, { ...agent, targets: [] }), /requires configuration version 5/u);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+        const backup = await upgradeWorkspaceConfig(root);
+        assert.ok(backup);
+        assert.deepEqual(await readFile(backup), original);
+        await saveAgent(root, { ...agent, targets: [] });
+        const saved = (await loadWorkspace(root)).agents[0]!;
+        assert.deepEqual(saved.targets, []);
+        assert.deepEqual(saved.harnesses, agent.harnesses);
+        assert.equal(JSON.parse(await readFile(path, "utf8")).version, CONFIG_VERSION);
+    });
+});
+
 test("edit writes validated sources, cascades harness rename, and rejects path escape", async () =>
 {
     await withProject(async (root) =>
@@ -3659,6 +4630,7 @@ test("edit writes validated sources, cascades harness rename, and rejects path e
             path: ".harness-align/agents/explorer.md",
             name: "explorer",
             description: "Read only.",
+            targets: [...renamed.agents[0]!.targets, "nova"],
             harnesses: {
                 ...renamed.agents[0]!.harnesses,
                 nova: { model: "test-nova" },
@@ -4270,8 +5242,8 @@ test("first initialization detects only regular default harness directories in c
         }
         await ensureUserWorkspace(home);
         const detected = (await loadConfig(home)).harnesses;
-        assert.deepEqual(detected.map((harness) => harness.name), ["codex", "cursor", "grok", "opencode"]);
-        assert.deepEqual(detected[2], { name: "grok", configPath: ".grok", agentFormat: "yaml", agentExtension: "md" });
+        assert.deepEqual(detected.map((harness) => harness.name), ["Codex", "Cursor", "GrokBuild", "OpenCode"]);
+        assert.deepEqual(detected[2], { name: "GrokBuild", configPath: ".grok", agentFormat: "yaml", agentExtension: "md" });
         assert.equal(detected[0]?.instructionsField, "developer_instructions");
         await fs.rmdir(join(home, ".cursor"));
         await ensureUserWorkspace(home);
@@ -4282,7 +5254,7 @@ test("first initialization detects only regular default harness directories in c
         await fs.rmdir(join(home, ".config"));
         await writeFile(join(home, ".config"), "not a directory");
         await ensureUserWorkspace(home);
-        assert.deepEqual((await loadConfig(home)).harnesses.map((harness) => harness.name), ["codex", "grok"]);
+        assert.deepEqual((await loadConfig(home)).harnesses.map((harness) => harness.name), ["Codex", "GrokBuild"]);
     }
     finally
     {
@@ -4504,7 +5476,7 @@ test("workspace initialization uses USERPROFILE not the current working director
         await generate(await ensureUserWorkspace(home));
         const generated = JSON.parse(await readFile(join(home, ".harness-align", "config.json"), "utf8")) as { name: string };
         assert.equal(generated.name, "AGENTS");
-        assert.equal(await readFile(join(home, ".harness-align", "generated", "cursor", "AGENTS.md"), "utf8").then(() => true), true);
+        assert.equal(await readFile(join(home, ".harness-align", "generated", "Cursor", "AGENTS.md"), "utf8").then(() => true), true);
         await assert.rejects(readFile(join(cwd, ".harness-align", "generated", "cursor", "AGENTS.md")), /ENOENT/u);
     }
     finally
@@ -4525,7 +5497,7 @@ test("setup on a fresh user workspace deploys empty agents and skips missing har
         await ensureUserWorkspace(home);
         await fs.rmdir(join(home, ".codex"));
         const result = await setup(home, undefined, home);
-        const cursor = result.targets.find((target) => target.harness === "cursor");
+        const cursor = result.targets.find((target) => target.harness === "Cursor");
         assert.ok(cursor);
         assert.equal(cursor.skipped, false);
         assert.deepEqual(cursor.files, ["AGENTS.md"]);
@@ -4610,9 +5582,40 @@ test("config writes reject broken source references before changing the file", a
     });
 });
 
-test("harness removal restores every completed source write after a later failure", async (t) =>
+test("harness add and removal reject sources edited after loading before starting their write batch", async (t) =>
 {
-    await withProject(async (root) =>
+    for (const action of ["add", "remove"]) await withProject(async (root) =>
+    {
+        const path = join(root, ".harness-align/rules/base.md");
+        const changed = Buffer.from((await readFile(path, "utf8")).replace("# Base", "# External later edit"));
+        const before = await snapshot(join(root, ".harness-align"));
+        const originalStat = fs.lstat;
+        let changedBeforeBatch = false;
+        const mocked = t.mock.method(fs, "lstat", async (...args: Parameters<typeof fs.lstat>) =>
+        {
+            if (!changedBeforeBatch && String(args[0]) === join(root, ".harness-align/.edit-recovery.json"))
+            {
+                changedBeforeBatch = true;
+                await writeFile(path, changed);
+            }
+            return originalStat(...args);
+        });
+        try
+        {
+            await assert.rejects(action === "add"
+                ? addHarness(root, { name: "NewTool", configPath: ".new-tool", agentFormat: "yaml", agentExtension: "md" })
+                : removeHarness(root, "codex"), /base\.md: content changed before its source update/u);
+        }
+        finally { mocked.mock.restore(); }
+        before.set("rules/base.md", changed);
+        assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
+        await assert.rejects(readFile(join(root, ".harness-align/.edit-recovery.json")), /ENOENT/u);
+    });
+});
+
+test("harness add and removal restore every completed source write after a later failure", async (t) =>
+{
+    for (const action of ["add", "remove"]) await withProject(async (root) =>
     {
         const before = await snapshot(join(root, ".harness-align"));
         const originalRename = fs.rename;
@@ -4628,7 +5631,9 @@ test("harness removal restores every completed source write after a later failur
         });
         try
         {
-            await assert.rejects(removeHarness(root, "codex"), /Injected source write failure/u);
+            await assert.rejects(action === "add"
+                ? addHarness(root, { name: "NewTool", configPath: ".new-tool", agentFormat: "yaml", agentExtension: "md" })
+                : removeHarness(root, "codex"), /Injected source write failure/u);
             assert.equal(failed, true);
             assert.deepEqual(await snapshot(join(root, ".harness-align")), before);
             await loadWorkspace(root);
@@ -4828,7 +5833,7 @@ test("Zod upgrade preserves IPC transforms, strict records and sync validation",
     assert.deepEqual(SYNC_CONNECTION_SCHEMA.parse(connection), connection);
     assert.equal(SYNC_CONNECTION_SCHEMA.safeParse({ ...connection, token: "test token" }).success, false);
     assert.equal(SYNC_CONNECTION_SCHEMA.safeParse({ ...connection, token: "x".repeat(1025) }).success, false);
-    const metadata = { path: "agent.md", name: "agent", description: "Agent", body: "", harnesses: { codex: { name: null, enabled: false, limit: 0, tags: ["one"] } } };
+    const metadata = { path: "agent.md", name: "agent", description: "Agent", body: "", targets: ["codex"], harnesses: { codex: { name: null, enabled: false, limit: 0, tags: ["one"] } } };
     assert.deepEqual(AGENT_SCHEMA.parse(metadata), metadata);
 });
 
@@ -4993,14 +5998,26 @@ test("discovery times out once without retrying a different branch", async (t) =
     });
 });
 
-test("prototype-named harnesses and skills require explicit own metadata", async () =>
+test("prototype-named harnesses initialize own metadata and still require an explicit enabled block", async () =>
 {
     await withProject(async (root) =>
     {
         await addHarness(root, { name: "constructor", configPath: ".constructor", agentFormat: "yaml", agentExtension: "md" });
-        assert.equal((await buildOutputs(root)).has("constructor/agents/explorer.md"), false);
         const agent = (await loadWorkspace(root)).agents[0]!;
-        await saveAgent(root, { ...agent, harnesses: { ...agent.harnesses, constructor: { enabled: true } } });
+        assert.equal(Object.hasOwn(agent.harnesses, "constructor"), true);
+        assert.equal(agent.targets.includes("constructor"), true);
+        assert.deepEqual(agent.harnesses.constructor, {});
+        await saveAgent(root, {
+            ...agent,
+            targets: agent.targets.filter((target) => target !== "constructor"),
+            harnesses: { ...agent.harnesses, constructor: { enabled: true } },
+        });
+        assert.equal((await buildOutputs(root)).has("constructor/agents/explorer.md"), false);
+        await saveAgent(root, {
+            ...agent,
+            targets: [...agent.targets],
+            harnesses: { ...agent.harnesses, constructor: { enabled: true } },
+        });
         assert.match(output(await buildOutputs(root), "constructor/agents/explorer.md"), /enabled: true/u);
         const directory = join(root, ".harness-align", "skills", "constructor");
         await mkdir(directory, { recursive: true });
@@ -5689,6 +6706,42 @@ test("harness configuration edits validate additional files before writing or mo
         assert.deepEqual((await readSyncSnapshot(root)).filePaths, ["harness-files/codex/shared-rules/base.md"]);
         assert.equal((await loadWorkspace(root)).harnessFiles[0]?.path, "shared-rules/base.md");
         await assert.rejects(readFile(join(root, ".harness-align", ".edit-recovery.json")), /ENOENT/u);
+    });
+});
+
+test("custom output paths protect additional-file registrations during edits and sync validation", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const home = join(root, "custom-files-user");
+        await mkdir(join(home, ".codex/prompts"), { recursive: true });
+        await mkdir(join(home, ".codex/droids"), { recursive: true });
+        await addHarnessFile(root, "codex", "prompts/CLAUDE.md", false, home);
+        await addHarnessFile(root, "codex", "droids/internal.md", false, home);
+        const current = await loadConfig(root);
+        const harness = current.harnesses[0]!;
+        const before = await readSyncSnapshot(root);
+        for (const next of [{ ...harness, instructionsFile: "prompts/CLAUDE.md" }, { ...harness, agentsDir: "Droids" }])
+        {
+            await assert.rejects(updateHarness(root, harness.name, next), /collides with managed/u);
+            await assert.rejects(saveConfig(root, { ...current, harnesses: current.harnesses.map((item) => item.name === harness.name ? next : item) }), /collides with managed/u);
+            assert.deepEqual(await readSyncSnapshot(root), before);
+        }
+        const candidate = structuredClone(before);
+        const document = JSON.parse(Buffer.from(candidate.files["config.json"]!, "base64").toString());
+        document.harnesses[0].agents_dir = "droids";
+        candidate.files["config.json"] = Buffer.from(JSON.stringify(document)).toString("base64");
+        await assert.rejects(validateSyncSources(candidate), /collides with managed/u);
+        assert.deepEqual(await readSyncSnapshot(root), before);
+        await removeHarnessFile(root, "codex", "prompts/CLAUDE.md");
+        await removeHarnessFile(root, "codex", "droids/internal.md");
+        await updateHarness(root, harness.name, { ...harness, instructionsFile: "prompts/CLAUDE.md", agentsDir: "droids" });
+        for (const path of ["prompts/CLAUDE.md", "prompts/CLAUDE.md/child", "droids/extra.md"])
+        {
+            await assert.rejects(addHarnessFile(root, "codex", path, false, home), /collides with managed/u);
+        }
+        await addHarnessFile(root, "codex", "AGENTS.md", false, home);
+        assert.ok((await readSyncSnapshot(root)).filePaths?.includes("harness-files/codex/AGENTS.md"));
     });
 });
 
@@ -6407,5 +7460,141 @@ test("sync refuses unrecovered local state before preview, replanning or remote 
             assert.equal(await readFile(path, "utf8"), "unrecovered operation");
             await unlink(path);
         }
+    });
+});
+
+test("subagent targets separate enablement from retained per-harness metadata and upgrade cleanly from v4", async () =>
+{
+    await withProject(async (root) =>
+    {
+        const configPath = join(root, ".harness-align/config.json");
+        const legacyAgentPath = join(root, ".harness-align/agents/explorer.md");
+        const legacyAgentBytes = Buffer.from("---\nname: explorer\ndescription: Read only.\nharnesses:\n  codex:\n    model: o3\n---\n\nRead evidence.\n", "utf8");
+        await writeFile(configPath, JSON.stringify({ ...config, version: 4 }));
+        await writeFile(legacyAgentPath, legacyAgentBytes);
+
+        const loadedLegacy = await loadWorkspace(root);
+        assert.deepEqual(loadedLegacy.agents[0]!.targets, ["codex"]);
+        assert.deepEqual(loadedLegacy.agents[0]!.harnesses, { codex: { model: "o3" } });
+        const backup = await upgradeWorkspaceConfig(root);
+        assert.ok(backup?.includes(".config-backup-v4-"));
+        assert.deepEqual(await readFile(legacyAgentPath), legacyAgentBytes);
+
+        await saveAgent(root, {
+            ...loadedLegacy.agents[0]!,
+            targets: ["codex"],
+            harnesses: {
+                codex: { model: "o3" },
+                cursor: { mode: "subagent", readonly: true },
+            },
+        });
+        const disabledCursor = await loadWorkspace(root);
+        assert.deepEqual(disabledCursor.agents[0]!.targets, ["codex"]);
+        assert.deepEqual(disabledCursor.agents[0]!.harnesses.cursor, { mode: "subagent", readonly: true });
+        const outputsWithoutCursor = await buildOutputs(root);
+        assert.equal(outputsWithoutCursor.has("codex/agents/explorer.toml"), true);
+        assert.equal(outputsWithoutCursor.has("cursor/agents/explorer.md"), false);
+        assert.equal(matchesWorkspaceSource(disabledCursor.agents[0]!, "", "cursor"), false);
+        const asDto = (workspace: Awaited<ReturnType<typeof loadWorkspace>>): Workspace => ({
+            ...workspace,
+            generatedFiles: [],
+            generationStatus: { state: "missing", changes: [] },
+            deploymentStatus: { state: "pending", changes: [] },
+            harnessRoots: [],
+        });
+        assert.equal(harnessEffects(asDto(disabledCursor), "cursor", [{ name: "soul", option: "arona" }]).find((item) => item.kind === "Agent")?.active, false);
+
+        await updateHarness(root, "cursor", { name: "atlas", configPath: ".atlas", agentFormat: "yaml", agentExtension: "md" });
+        const renamed = await loadWorkspace(root);
+        assert.deepEqual(renamed.agents[0]!.targets, ["codex"]);
+        assert.deepEqual(renamed.agents[0]!.harnesses.atlas, { mode: "subagent", readonly: true });
+        assert.equal(renamed.agents[0]!.harnesses.cursor, undefined);
+
+        await addHarness(root, { name: "nova", configPath: ".nova", agentFormat: "yaml", agentExtension: "md" });
+        const added = await loadWorkspace(root);
+        assert.deepEqual(added.agents[0]!.targets, ["codex", "nova"]);
+        assert.deepEqual(added.agents[0]!.harnesses.atlas, { mode: "subagent", readonly: true });
+
+        const { persistEditorSnapshot } = await loadRendererTasks();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+            saveAgent: (input: Parameters<typeof saveAgent>[1], guard: Parameters<typeof saveAgent>[2]) => saveAgent(root, input, guard),
+        } } } });
+        try
+        {
+            await persistEditorSnapshot(asDto(added), { kind: "agent", path: ".harness-align/agents/explorer.md" }, {
+                name: ["explorer"],
+                description: ["Read only."],
+                enabledHarnesses: ["atlas"],
+                "meta-codex": ["model: o3"],
+                "meta-atlas": ["mode: subagent\nreadonly: true"],
+                "meta-nova": ["retries: 2"],
+                body: ["Read evidence."],
+            });
+        }
+        finally
+        {
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else delete (globalThis as { window?: unknown }).window;
+        }
+
+        const reenabled = await loadWorkspace(root);
+        assert.deepEqual(reenabled.agents[0]!.targets, ["atlas"]);
+        assert.deepEqual(reenabled.agents[0]!.harnesses, {
+            codex: { model: "o3" },
+            atlas: { mode: "subagent", readonly: true },
+            nova: { retries: 2 },
+        });
+        const outputsWithAtlas = await buildOutputs(root);
+        assert.equal(outputsWithAtlas.has("codex/agents/explorer.toml"), false);
+        assert.equal(outputsWithAtlas.has("nova/agents/explorer.md"), false);
+        assert.match(output(outputsWithAtlas, "atlas/agents/explorer.md"), /mode: subagent/u);
+    });
+});
+
+test("editor snapshot saves under deferred v4 config omit empty disabled harness metadata", async () =>
+{
+    await withProject(async (root) =>
+    {
+        await writeFile(join(root, ".harness-align/config.json"), JSON.stringify({ ...config, version: 4 }));
+        const legacyAgentPath = join(root, ".harness-align/agents/explorer.md");
+        await writeFile(legacyAgentPath, "---\nname: explorer\ndescription: Read only.\nharnesses:\n  codex:\n    model: o3\n---\n\nRead evidence.\n", "utf8");
+
+        const loaded = await loadWorkspace(root);
+        const { persistEditorSnapshot } = await loadRendererTasks();
+        const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+        Object.defineProperty(globalThis, "window", { configurable: true, value: { appApi: { workspace: {
+            saveAgent: (input: Parameters<typeof saveAgent>[1], guard: Parameters<typeof saveAgent>[2]) => saveAgent(root, input, guard),
+        } } } });
+        try
+        {
+            const dto: Workspace = {
+                ...loaded,
+                generatedFiles: [],
+                generationStatus: { state: "missing", changes: [] },
+                deploymentStatus: { state: "pending", changes: [] },
+                harnessRoots: [],
+            };
+            await persistEditorSnapshot(dto, { kind: "agent", path: ".harness-align/agents/explorer.md" }, {
+                name: ["explorer"],
+                description: ["Read only."],
+                enabledHarnesses: ["codex"],
+                "meta-codex": ["model: o3"],
+                "meta-cursor": [""],
+                "meta-opencode": [""],
+                body: ["Updated body under v4."],
+            });
+        }
+        finally
+        {
+            if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+            else delete (globalThis as { window?: unknown }).window;
+        }
+
+        const savedText = await readFile(legacyAgentPath, "utf8");
+        assert.doesNotMatch(savedText, /^targets:/mu);
+        assert.doesNotMatch(savedText, /cursor:|opencode:/u);
+        assert.deepEqual((await loadWorkspace(root)).agents[0]!.harnesses, { codex: { model: "o3" } });
+        assert.equal((await loadWorkspace(root)).agents[0]!.body, "Updated body under v4.\n");
     });
 });
